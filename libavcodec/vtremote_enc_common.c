@@ -7,11 +7,17 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <sys/types.h>
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <sys/socket.h>
 #include <netdb.h>
 #include <unistd.h>
 #include <sys/time.h>
+#endif
 
+#include "config.h"
 #include "config_components.h"
 #include "avcodec.h"
 #include "codec_internal.h"
@@ -29,6 +35,40 @@
 #include "vtremote_enc_common.h"
 #include "vtremote_proto.h"
 #include <lz4.h>
+
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+#define VTR_CLOSE_SOCKET closesocket
+#define VTR_SOCKOPT_ARG (const char *)
+static int vtremote_net_init(void)
+{
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa))
+        return AVERROR(WSAGetLastError());
+    return 0;
+}
+static void vtremote_net_close(void)
+{
+    WSACleanup();
+}
+static int vtremote_sock_errno(void)
+{
+    return WSAGetLastError();
+}
+#else
+#define VTR_CLOSE_SOCKET close
+#define VTR_SOCKOPT_ARG
+static int vtremote_net_init(void)
+{
+    return 0;
+}
+static void vtremote_net_close(void)
+{
+}
+static int vtremote_sock_errno(void)
+{
+    return errno;
+}
+#endif
 
 #define MIN_HVCC_LENGTH 23
 
@@ -111,10 +151,10 @@ static int set_socket_timeout(int fd, int timeout_ms)
     struct timeval tv;
     tv.tv_sec  = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
-    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0)
-        return AVERROR(errno);
-    if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) < 0)
-        return AVERROR(errno);
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, VTR_SOCKOPT_ARG &tv, sizeof(tv)) < 0)
+        return AVERROR(vtremote_sock_errno());
+    if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, VTR_SOCKOPT_ARG &tv, sizeof(tv)) < 0)
+        return AVERROR(vtremote_sock_errno());
     return 0;
 }
 
@@ -122,11 +162,16 @@ static int write_full(int fd, const uint8_t *buf, int size)
 {
     int sent = 0;
     while (sent < size) {
-        ssize_t r = send(fd, buf + sent, size - sent, 0);
+        int r = (int)send(fd, buf + sent, size - sent, 0);
         if (r < 0) {
-            if (errno == EINTR)
+            int err = vtremote_sock_errno();
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+            if (err == WSAEINTR)
                 continue;
-            return AVERROR(errno);
+#endif
+            if (err == EINTR)
+                continue;
+            return AVERROR(err);
         }
         if (r == 0)
             return AVERROR_EOF;
@@ -139,11 +184,22 @@ static int read_full(int fd, uint8_t *buf, int size)
 {
     int got = 0;
     while (got < size) {
-        ssize_t r = recv(fd, buf + got, size - got, 0);
+        int r = (int)recv(fd, buf + got, size - got, 0);
         if (r < 0) {
-            if (errno == EINTR)
+            int err = vtremote_sock_errno();
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+            if (err == WSAEINTR)
                 continue;
-            return AVERROR(errno);
+#endif
+            if (err == EINTR)
+                continue;
+            if (err == EAGAIN || err == EWOULDBLOCK
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+                || err == WSAEWOULDBLOCK
+#endif
+                )
+                return got == 0 ? AVERROR(EAGAIN) : AVERROR(EIO);
+            return AVERROR(err);
         }
         if (r == 0)
             return AVERROR_EOF;
@@ -184,12 +240,12 @@ static int connect_hostport(const char *hostport, int timeout_ms)
         set_socket_timeout(fd, timeout_ms);
         if (connect(fd, rp->ai_addr, rp->ai_addrlen) == 0)
             break;
-        close(fd);
+        VTR_CLOSE_SOCKET(fd);
         fd = -1;
     }
     freeaddrinfo(res);
     if (fd < 0)
-        return AVERROR(errno ? errno : EIO);
+        return AVERROR(vtremote_sock_errno() ? vtremote_sock_errno() : EIO);
     return fd;
 }
 
@@ -677,27 +733,27 @@ cfg_fail:
     av_freep(&opts);
     vtremote_wbuf_free(&cfg);
     if (ret < 0) {
-        close(fd);
+        VTR_CLOSE_SOCKET(fd);
         s->fd = -1;
         return ret;
     }
 
     ret = vtremote_read_msg(s, &hdr, &pl);
     if (ret < 0) {
-        close(fd);
+        VTR_CLOSE_SOCKET(fd);
         s->fd = -1;
         return ret;
     }
     if (hdr.type != VTREMOTE_MSG_CONFIGURE_ACK) {
         av_free(pl);
-        close(fd);
+        VTR_CLOSE_SOCKET(fd);
         s->fd = -1;
         return AVERROR_INVALIDDATA;
     }
     ret = vtremote_handle_configure_ack(avctx, pl, hdr.length);
     av_free(pl);
     if (ret < 0) {
-        close(fd);
+        VTR_CLOSE_SOCKET(fd);
         s->fd = -1;
         return ret;
     }
@@ -737,6 +793,7 @@ static int enqueue_packet(AVCodecContext *avctx, const uint8_t *payload, int pay
 int ff_vtremote_common_init(AVCodecContext *avctx)
 {
     VTRemoteEncContext *s = avctx->priv_data;
+    int ret;
     s->codec_id = avctx->codec_id;
     s->fd = -1;
     s->start_time_us = av_gettime_relative();
@@ -763,7 +820,14 @@ int ff_vtremote_common_init(AVCodecContext *avctx)
                s->codec_id, s->host, s->inflight, s->timeout_ms);
     }
 
-    return vtremote_handshake(avctx);
+    ret = vtremote_net_init();
+    if (ret < 0)
+        return ret;
+
+    ret = vtremote_handshake(avctx);
+    if (ret < 0)
+        vtremote_net_close();
+    return ret;
 }
 
 int ff_vtremote_common_close(AVCodecContext *avctx)
@@ -772,7 +836,8 @@ int ff_vtremote_common_close(AVCodecContext *avctx)
     if (vtremote_log_enabled(s, AV_LOG_VERBOSE))
         av_log(avctx, AV_LOG_VERBOSE, "VT remote close\n");
     if (s->fd >= 0)
-        close(s->fd);
+        VTR_CLOSE_SOCKET(s->fd);
+    vtremote_net_close();
     vtremote_wbuf_free(&s->frame_buf);
     if (s->pkt_queue) {
         for (int i = 0; i < s->pkt_q_size; i++)
