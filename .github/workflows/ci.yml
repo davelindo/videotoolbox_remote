@@ -3,6 +3,17 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      publish_nightly:
+        type: boolean
+        description: "Publish/overwrite the nightly release"
+        default: false
+  schedule:
+    - cron: "0 6 * * *"
+
+permissions:
+  contents: write
 
 jobs:
   swift-macos-arm64:
@@ -10,12 +21,37 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            vtremoted/.build
+            ~/Library/Caches/org.swift.swiftpm
+            ~/Library/org.swift.swiftpm
+          key: ${{ runner.os }}-swiftpm-${{ hashFiles('vtremoted/Package.swift', 'vtremoted/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-swiftpm-
       - name: Install dependencies
         run: brew install lz4 pkg-config
       - name: Build vtremoted
         run: |
           cd vtremoted
           swift build -c release
+      - name: Package vtremoted
+        run: |
+          mkdir -p dist/vtremoted
+          cp vtremoted/.build/release/vtremoted dist/vtremoted/
+          cp vtremoted/dist/README.md dist/vtremoted/README.md
+          cp vtremoted/dist/install_launchd.sh dist/vtremoted/install_launchd.sh
+          tar -C dist -czf vtremoted-macos-arm64.tar.gz vtremoted
+          shasum -a 256 vtremoted-macos-arm64.tar.gz > vtremoted-macos-arm64.tar.gz.sha256
+      - name: Upload vtremoted artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vtremoted-macos-arm64
+          path: |
+            vtremoted-macos-arm64.tar.gz
+            vtremoted-macos-arm64.tar.gz.sha256
 
   ffmpeg-build:
     name: FFmpeg (${{ matrix.label }})
@@ -39,11 +75,11 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y yasm nasm pkg-config liblz4-dev
+          sudo apt-get install -y yasm nasm pkg-config liblz4-dev ccache
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install lz4 pkg-config yasm nasm
+        run: brew install lz4 pkg-config yasm nasm ccache
 
       - name: Install dependencies (Windows/MSYS2)
         if: runner.os == 'Windows'
@@ -58,10 +94,29 @@ jobs:
             mingw-w64-x86_64-lz4
             mingw-w64-x86_64-nasm
             mingw-w64-x86_64-yasm
+            mingw-w64-x86_64-ccache
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ runner.os }}-${{ matrix.label }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ matrix.label }}-
 
       - name: Configure + build (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
+          export CCACHE_DIR="${GITHUB_WORKSPACE}/.ccache"
+          ccache -M 2G
+          ccache -z
+          if [ "${RUNNER_OS}" = "macOS" ]; then
+            export CC="ccache clang"
+            export CXX="ccache clang++"
+          else
+            export CC="ccache gcc"
+            export CXX="ccache g++"
+          fi
           cd ffmpeg
           ./configure \
             --enable-gpl \
@@ -72,11 +127,24 @@ jobs:
             --enable-decoder=hevc_videotoolbox_remote \
             --disable-debug
           make -j2
+          ccache -s
+      - name: Package ffmpeg (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp ffmpeg/ffmpeg ffmpeg/ffprobe ffmpeg/ffplay dist/
+          tar -C dist -czf ffmpeg-${{ matrix.label }}.tar.gz ffmpeg ffprobe ffplay
+          shasum -a 256 ffmpeg-${{ matrix.label }}.tar.gz > ffmpeg-${{ matrix.label }}.tar.gz.sha256
 
       - name: Configure + build (Windows/MSYS2)
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
+          export CCACHE_DIR="${GITHUB_WORKSPACE}/.ccache"
+          ccache -M 2G
+          ccache -z
+          export CC="ccache gcc"
+          export CXX="ccache g++"
           cd ffmpeg
           ./configure \
             --enable-gpl \
@@ -87,3 +155,56 @@ jobs:
             --enable-decoder=hevc_videotoolbox_remote \
             --disable-debug
           make -j2
+          ccache -s
+      - name: Package ffmpeg (Windows/MSYS2)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          mkdir -p dist
+          cp ffmpeg/ffmpeg.exe ffmpeg/ffprobe.exe ffmpeg/ffplay.exe dist/
+          tar -C dist -czf ffmpeg-${{ matrix.label }}.tar.gz ffmpeg.exe ffprobe.exe ffplay.exe
+          sha256sum ffmpeg-${{ matrix.label }}.tar.gz > ffmpeg-${{ matrix.label }}.tar.gz.sha256
+
+      - name: Upload ffmpeg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-${{ matrix.label }}
+          path: |
+            ffmpeg-${{ matrix.label }}.tar.gz
+            ffmpeg-${{ matrix.label }}.tar.gz.sha256
+
+  publish-assets:
+    name: Publish nightly / release assets
+    runs-on: ubuntu-latest
+    needs: [swift-macos-arm64, ffmpeg-build]
+    if: github.event_name != 'pull_request' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/'))
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release_assets
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release_flat
+          find release_assets -type f -maxdepth 3 -print -exec cp {} release_flat/ \;
+          cd release_flat
+          sha256sum *.tar.gz > SHA256SUMS.txt
+      - name: Publish nightly release
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly)
+        uses: ncipollo/release-action@v1
+        with:
+          tag: nightly
+          name: Nightly
+          prerelease: true
+          allowUpdates: true
+          artifacts: "release_flat/*"
+          artifactErrorsFailBuild: true
+          makeLatest: false
+          commit: ${{ github.sha }}
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: ncipollo/release-action@v1
+        with:
+          allowUpdates: true
+          artifacts: "release_flat/*"
+          artifactErrorsFailBuild: true
