@@ -38,10 +38,19 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# If running as root, default to system domain unless explicitly set otherwise.
+if [[ "$SYSTEM" -eq 0 && "${EUID:-$(id -u)}" -eq 0 ]]; then
+  SYSTEM=1
+fi
+
 if [[ "$SYSTEM" -eq 1 ]]; then
   PLIST_DIR="/Library/LaunchDaemons"
   DOMAIN="system"
-  SUDO="sudo"
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    SUDO=""
+  else
+    SUDO="sudo"
+  fi
 else
   PLIST_DIR="${HOME}/Library/LaunchAgents"
   DOMAIN="gui/${UID}"
@@ -49,7 +58,11 @@ else
 fi
 
 PLIST="${PLIST_DIR}/${LABEL}.plist"
-LOG_DIR="${HOME}/Library/Logs"
+if [[ "$SYSTEM" -eq 1 ]]; then
+  LOG_DIR="/Library/Logs"
+else
+  LOG_DIR="${HOME}/Library/Logs"
+fi
 STDOUT_LOG="${LOG_DIR}/vtremoted.log"
 STDERR_LOG="${LOG_DIR}/vtremoted.err.log"
 
