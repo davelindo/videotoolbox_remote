@@ -1,0 +1,21 @@
+# Agent scaffolding / internal docs
+AGENTS.md
+PRD.md
+
+# Local media and samples
+test.mov
+
+# SwiftPM / Xcode
+vtremoted/.build/
+vtremoted/.swiftpm/
+
+# Dist artifacts
+vtremoted/dist/vtremoted
+vtremoted/dist/*.tar.gz
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store

@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  swift-macos-arm64:
+    name: Swift (vtremoted) macOS arm64
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: brew install lz4 pkg-config
+      - name: Build vtremoted
+        run: |
+          cd vtremoted
+          swift build -c release
+
+  ffmpeg-build:
+    name: FFmpeg (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-x86_64
+          - os: windows-latest
+            label: windows-x86_64
+          - os: macos-13
+            label: macos-x86_64
+          - os: macos-14
+            label: macos-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yasm nasm pkg-config liblz4-dev
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install lz4 pkg-config yasm nasm
+
+      - name: Install dependencies (Windows/MSYS2)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-pkg-config
+            mingw-w64-x86_64-lz4
+            mingw-w64-x86_64-nasm
+            mingw-w64-x86_64-yasm
+
+      - name: Configure + build (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          cd ffmpeg
+          ./configure \
+            --enable-gpl \
+            --enable-liblz4 \
+            --enable-encoder=h264_videotoolbox_remote \
+            --enable-encoder=hevc_videotoolbox_remote \
+            --enable-decoder=h264_videotoolbox_remote \
+            --enable-decoder=hevc_videotoolbox_remote \
+            --disable-debug
+          make -j2
+
+      - name: Configure + build (Windows/MSYS2)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          cd ffmpeg
+          ./configure \
+            --enable-gpl \
+            --enable-liblz4 \
+            --enable-encoder=h264_videotoolbox_remote \
+            --enable-encoder=hevc_videotoolbox_remote \
+            --enable-decoder=h264_videotoolbox_remote \
+            --enable-decoder=hevc_videotoolbox_remote \
+            --disable-debug
+          make -j2

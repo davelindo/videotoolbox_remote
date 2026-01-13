@@ -1,0 +1,5 @@
+module CLZ4 [system] {
+    header "CLZ4.h"
+    link "lz4"
+    export *
+}

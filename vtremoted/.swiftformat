@@ -1,0 +1,4 @@
+--swiftversion 6
+--indent 4
+--commas inline
+--stripunusedargs closure-only
