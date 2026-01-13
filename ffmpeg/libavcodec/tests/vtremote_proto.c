@@ -133,6 +133,7 @@ static int test_build_configure(void)
         {"gop", "60"},
     };
     VTRemoteWBuf b;
+    vtremote_wbuf_init(&b);
     av_assert0(vtremote_payload_configure(&b, 1920, 1080, 1, 1, 30, 30, 1, opts, 2, NULL, 0) == 0);
     VTRemoteMsgHeader hdr = { VTREMOTE_PROTO_MAGIC, VTREMOTE_PROTO_VERSION, VTREMOTE_MSG_CONFIGURE, (uint32_t)b.size };
     uint8_t header[VTREMOTE_HEADER_SIZE];
@@ -170,6 +171,7 @@ static int test_frame_and_packet_parse(void)
     uint32_t heights[2] = {2,1};
     uint32_t sizes[2] = {4,2};
     VTRemoteWBuf b;
+    vtremote_wbuf_init(&b);
     av_assert0(vtremote_payload_frame(&b, 10, 2, 1, 2, planes, strides, heights, sizes) == 0);
     VTRemoteFrameView fview;
     av_assert0(vtremote_parse_frame(b.data, b.size, &fview) == 0);

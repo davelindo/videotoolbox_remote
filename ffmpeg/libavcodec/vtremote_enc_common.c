@@ -472,6 +472,7 @@ static int vtremote_handshake(AVCodecContext *avctx)
 
     /* HELLO */
     VTRemoteWBuf payload;
+    vtremote_wbuf_init(&payload);
     vtremote_payload_hello(&payload, s->token, codec_name_for_id(s->codec_id),
                           "ffmpeg-vtremote", FFMPEG_VERSION);
     int ret = vtremote_send_msg(s, VTREMOTE_MSG_HELLO, &payload);
@@ -719,6 +720,7 @@ static int vtremote_handshake(AVCodecContext *avctx)
         goto cfg_fail;
     }
     VTRemoteWBuf cfg;
+    vtremote_wbuf_init(&cfg);
     vtremote_payload_configure(&cfg,
                               avctx->width, avctx->height,
                               wire_pix_fmt,

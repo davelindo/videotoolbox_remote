@@ -244,7 +244,7 @@ int vtremote_payload_hello(VTRemoteWBuf *b,
                           const char *client_name,
                           const char *client_build_id)
 {
-    vtremote_wbuf_init(b);
+    vtremote_wbuf_reset(b);
     int ret = 0;
     ret |= vtremote_wbuf_put_str(b, token);
     ret |= vtremote_wbuf_put_str(b, requested_codec);
@@ -263,7 +263,7 @@ int vtremote_payload_configure(VTRemoteWBuf *b,
 {
     if (options_count < 0)
         return AVERROR(EINVAL);
-    vtremote_wbuf_init(b);
+    vtremote_wbuf_reset(b);
     int ret = 0;
     ret |= vtremote_wbuf_put_u32(b, width);
     ret |= vtremote_wbuf_put_u32(b, height);
@@ -302,7 +302,7 @@ int vtremote_payload_frame(VTRemoteWBuf *b,
 {
     if (!planes || !strides || !heights || !sizes)
         return AVERROR(EINVAL);
-    vtremote_wbuf_init(b);
+    vtremote_wbuf_reset(b);
     int ret = 0;
     ret |= vtremote_wbuf_put_u64(b, (uint64_t)pts);
     ret |= vtremote_wbuf_put_u64(b, (uint64_t)duration);
@@ -327,7 +327,7 @@ int vtremote_payload_packet(VTRemoteWBuf *b,
                            int64_t pts, int64_t dts, int64_t duration, uint32_t flags,
                            const uint8_t *data, uint32_t data_len)
 {
-    vtremote_wbuf_init(b);
+    vtremote_wbuf_reset(b);
     int ret = 0;
     ret |= vtremote_wbuf_put_u64(b, (uint64_t)pts);
     ret |= vtremote_wbuf_put_u64(b, (uint64_t)dts);

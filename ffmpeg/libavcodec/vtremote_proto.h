@@ -150,6 +150,7 @@ typedef struct VTRemoteKV {
 } VTRemoteKV;
 
 /* High-level payload writers (helpers for encoders). */
+/* Caller must initialize VTRemoteWBuf via vtremote_wbuf_init before first use. */
 int vtremote_payload_hello(VTRemoteWBuf *b,
                           const char *token,
                           const char *requested_codec,
