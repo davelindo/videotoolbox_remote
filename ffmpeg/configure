@@ -248,6 +248,7 @@ External library support:
   --enable-libkvazaar      enable HEVC encoding via libkvazaar [no]
   --enable-liblc3          enable LC3 de/encoding via liblc3 [no]
   --enable-liblcevc-dec    enable LCEVC decoding via liblcevc-dec [no]
+  --enable-liblz4          enable LZ4 compression via liblz4 [no]
   --enable-liblensfun      enable lensfun lens correction [no]
   --enable-libmodplug      enable ModPlug via libmodplug [no]
   --enable-libmp3lame      enable MP3 encoding via libmp3lame [no]
@@ -370,6 +371,7 @@ External library support:
   --disable-vaapi          disable Video Acceleration API (mainly Unix/Intel) code [autodetect]
   --disable-vdpau          disable Nvidia Video Decode and Presentation API for Unix code [autodetect]
   --disable-videotoolbox   disable VideoToolbox code [autodetect]
+  --enable-videotoolbox-remote enable VideoToolbox Remote codecs (h264/hevc) [no]
   --disable-vulkan         disable Vulkan code [autodetect]
   --enable-vulkan-static   statically link to libvulkan [no]
 
@@ -2024,6 +2026,7 @@ EXTERNAL_LIBRARY_LIST="
     libkvazaar
     liblc3
     liblcevc_dec
+    liblz4
     libmodplug
     libmp3lame
     libmysofa
@@ -2147,6 +2150,7 @@ FEATURE_LIST="
     static
     swscale_alpha
     unstable
+    videotoolbox_remote
 "
 
 # this list should be kept in linking order
@@ -3699,8 +3703,16 @@ pcm_mulaw_at_encoder_select="audio_frame_queue"
 chromaprint_muxer_deps="chromaprint"
 h264_videotoolbox_encoder_deps="pthreads"
 h264_videotoolbox_encoder_select="atsc_a53 videotoolbox_encoder"
+h264_videotoolbox_remote_decoder_deps="network liblz4"
+h264_videotoolbox_remote_decoder_select=""
+h264_videotoolbox_remote_encoder_deps="network liblz4"
+h264_videotoolbox_remote_encoder_select=""
 hevc_videotoolbox_encoder_deps="pthreads"
 hevc_videotoolbox_encoder_select="atsc_a53 videotoolbox_encoder"
+hevc_videotoolbox_remote_decoder_deps="network liblz4"
+hevc_videotoolbox_remote_decoder_select=""
+hevc_videotoolbox_remote_encoder_deps="network liblz4"
+hevc_videotoolbox_remote_encoder_select=""
 prores_videotoolbox_encoder_deps="pthreads"
 prores_videotoolbox_encoder_select="videotoolbox_encoder"
 libaom_av1_decoder_deps="libaom"
@@ -4665,6 +4677,13 @@ for opt do
         ;;
     esac
 done
+
+if enabled videotoolbox_remote; then
+    enable h264_videotoolbox_remote_encoder h264_videotoolbox_remote_decoder \
+           hevc_videotoolbox_remote_encoder hevc_videotoolbox_remote_decoder
+    enable network
+    enable liblz4
+fi
 
 for e in $env; do
     eval "export $e"
@@ -7228,6 +7247,7 @@ enabled libkvazaar        && require_pkg_config libkvazaar "kvazaar >= 2.0.0" kv
 enabled liblc3            && require_pkg_config liblc3 "lc3 >= 1.1.0" lc3.h lc3_hr_setup_encoder
 enabled liblensfun        && require_pkg_config liblensfun lensfun lensfun.h lf_db_create
 enabled liblcevc_dec      && require_pkg_config liblcevc_dec "lcevc_dec >= 4.0.0" "LCEVC/lcevc_dec.h" LCEVC_CreateDecoder
+enabled liblz4            && require_pkg_config liblz4 liblz4 lz4.h LZ4_compress_default
 
 if enabled libmfx && enabled libvpl; then
    die "ERROR: can not use libmfx and libvpl together"

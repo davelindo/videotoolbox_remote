@@ -27,24 +27,24 @@ This is *not* a good fit if:
 ```mermaid
 flowchart LR
   %% Encode path (remote encode only)
-  subgraph C1[FFmpeg client]
-    C1a[demux → decode → filters → mux]
+  subgraph C1["FFmpeg client"]
+    C1a["demux -> decode -> filters -> mux"]
   end
-  subgraph S1[vtremoted (macOS)]
-    S1a[VTCompressionSession]
+  subgraph S1["vtremoted (macOS)"]
+    S1a["VTCompressionSession"]
   end
-  C1a -- "raw NV12/P010 frames\nVTRemote TCP (+LZ4)" --> S1a
-  S1a -- "Annex B packets\nVTRemote TCP (+LZ4)" --> C1a
+  C1a -- "raw NV12/P010 frames<br/>VTRemote TCP (+LZ4)" --> S1a
+  S1a -- "Annex B packets<br/>VTRemote TCP (+LZ4)" --> C1a
 
   %% Decode path (remote decode only)
-  subgraph C2[FFmpeg client]
-    C2a[demux → filters → encode → mux]
+  subgraph C2["FFmpeg client"]
+    C2a["demux -> filters -> encode -> mux"]
   end
-  subgraph S2[vtremoted (macOS)]
-    S2a[VTDecompressionSession]
+  subgraph S2["vtremoted (macOS)"]
+    S2a["VTDecompressionSession"]
   end
-  C2a -- "Annex B packets\nVTRemote TCP (+LZ4)" --> S2a
-  S2a -- "raw NV12/P010 frames\nVTRemote TCP (+LZ4)" --> C2a
+  C2a -- "Annex B packets<br/>VTRemote TCP (+LZ4)" --> S2a
+  S2a -- "raw NV12/P010 frames<br/>VTRemote TCP (+LZ4)" --> C2a
 ```
 
 Wire compression (LZ4) is enabled by default to reduce bandwidth. 
