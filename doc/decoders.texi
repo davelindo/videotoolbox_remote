@@ -27,7 +27,7 @@ Decoders: @code{h264_videotoolbox_remote}, @code{hevc_videotoolbox_remote}
 Enable at configure time (example):
 @example
   ./configure --enable-liblz4 \
-    --enable-decoder=h264_videotoolbox_remote --enable-decoder=hevc_videotoolbox_remote
+    --enable-videotoolbox-remote
 @end example
 Network support must be enabled (default @code{--enable-network}).
 Requires liblz4 (pkg-config name: @code{liblz4}).

@@ -371,6 +371,7 @@ External library support:
   --disable-vaapi          disable Video Acceleration API (mainly Unix/Intel) code [autodetect]
   --disable-vdpau          disable Nvidia Video Decode and Presentation API for Unix code [autodetect]
   --disable-videotoolbox   disable VideoToolbox code [autodetect]
+  --enable-videotoolbox-remote enable VideoToolbox Remote codecs (h264/hevc) [no]
   --disable-vulkan         disable Vulkan code [autodetect]
   --enable-vulkan-static   statically link to libvulkan [no]
 
@@ -2149,6 +2150,7 @@ FEATURE_LIST="
     static
     swscale_alpha
     unstable
+    videotoolbox_remote
 "
 
 # this list should be kept in linking order
@@ -4675,6 +4677,13 @@ for opt do
         ;;
     esac
 done
+
+if enabled videotoolbox_remote; then
+    enable h264_videotoolbox_remote_encoder h264_videotoolbox_remote_decoder \
+           hevc_videotoolbox_remote_encoder hevc_videotoolbox_remote_decoder
+    enable network
+    enable liblz4
+fi
 
 for e in $env; do
     eval "export $e"
