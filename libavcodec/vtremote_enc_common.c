@@ -477,7 +477,7 @@ static int vtremote_handshake(AVCodecContext *avctx)
     int ret = vtremote_send_msg(s, VTREMOTE_MSG_HELLO, &payload);
     vtremote_wbuf_free(&payload);
     if (ret < 0) {
-        close(fd);
+        VTR_CLOSE_SOCKET(fd);
         s->fd = -1;
         return ret;
     }
@@ -486,20 +486,20 @@ static int vtremote_handshake(AVCodecContext *avctx)
     uint8_t *pl = NULL;
     ret = vtremote_read_msg(s, &hdr, &pl);
     if (ret < 0) {
-        close(fd);
+        VTR_CLOSE_SOCKET(fd);
         s->fd = -1;
         return ret;
     }
     if (hdr.type != VTREMOTE_MSG_HELLO_ACK) {
         av_free(pl);
-        close(fd);
+        VTR_CLOSE_SOCKET(fd);
         s->fd = -1;
         return AVERROR_INVALIDDATA;
     }
     ret = vtremote_handle_hello_ack(avctx, pl, hdr.length);
     av_free(pl);
     if (ret < 0) {
-        close(fd);
+        VTR_CLOSE_SOCKET(fd);
         s->fd = -1;
         return ret;
     }
