@@ -106,8 +106,7 @@ Configure FFmpeg with the remote codecs:
 cd ffmpeg
 
 ./configure ... --enable-liblz4 \
-  --enable-encoder=h264_videotoolbox_remote --enable-encoder=hevc_videotoolbox_remote \
-  --enable-decoder=h264_videotoolbox_remote --enable-decoder=hevc_videotoolbox_remote
+  --enable-videotoolbox-remote
 
 make -j
 ```

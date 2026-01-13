@@ -15,6 +15,28 @@ on:
 permissions:
   contents: write
 
+env:
+  FFMPEG_CONFIGURE_FLAGS: >-
+    --enable-gpl
+    --enable-liblz4
+    --enable-libopus
+    --enable-libvorbis
+    --enable-libmp3lame
+    --enable-libx264
+    --enable-libx265
+    --enable-libvpx
+    --enable-libass
+    --enable-libfreetype
+    --enable-libfontconfig
+    --enable-libfribidi
+    --enable-libharfbuzz
+    --enable-libxml2
+    --enable-libzimg
+    --enable-libwebp
+    --enable-ffplay
+    --enable-videotoolbox-remote
+    --disable-debug
+
 jobs:
   swift-macos-arm64:
     name: Swift (vtremoted) macOS arm64
@@ -75,11 +97,16 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y yasm nasm pkg-config liblz4-dev ccache
+          sudo apt-get install -y yasm nasm pkg-config liblz4-dev ccache \
+            libopus-dev libvorbis-dev libmp3lame-dev libx264-dev libx265-dev libvpx-dev \
+            libass-dev libfreetype6-dev libfontconfig1-dev libfribidi-dev libharfbuzz-dev \
+            libxml2-dev libzimg-dev libwebp-dev libsdl2-dev
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install lz4 pkg-config yasm nasm ccache
+        run: brew install lz4 pkg-config yasm nasm ccache \
+          opus libvorbis lame x264 x265 libvpx libass freetype fontconfig fribidi harfbuzz \
+          libxml2 zimg webp sdl2
 
       - name: Install dependencies (Windows/MSYS2)
         if: runner.os == 'Windows'
@@ -95,6 +122,21 @@ jobs:
             mingw-w64-x86_64-nasm
             mingw-w64-x86_64-yasm
             mingw-w64-x86_64-ccache
+            mingw-w64-x86_64-opus
+            mingw-w64-x86_64-libvorbis
+            mingw-w64-x86_64-lame
+            mingw-w64-x86_64-x264
+            mingw-w64-x86_64-x265
+            mingw-w64-x86_64-libvpx
+            mingw-w64-x86_64-libass
+            mingw-w64-x86_64-freetype
+            mingw-w64-x86_64-fontconfig
+            mingw-w64-x86_64-fribidi
+            mingw-w64-x86_64-harfbuzz
+            mingw-w64-x86_64-libxml2
+            mingw-w64-x86_64-zimg
+            mingw-w64-x86_64-libwebp
+            mingw-w64-x86_64-SDL2
 
       - name: Cache ccache
         uses: actions/cache@v4
@@ -118,22 +160,18 @@ jobs:
             export CXX="ccache g++"
           fi
           cd ffmpeg
-          ./configure \
-            --enable-gpl \
-            --enable-liblz4 \
-            --enable-encoder=h264_videotoolbox_remote \
-            --enable-encoder=hevc_videotoolbox_remote \
-            --enable-decoder=h264_videotoolbox_remote \
-            --enable-decoder=hevc_videotoolbox_remote \
-            --disable-debug
+          ./configure $FFMPEG_CONFIGURE_FLAGS
           make -j2
           ccache -s
       - name: Package ffmpeg (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
-          cp ffmpeg/ffmpeg ffmpeg/ffprobe ffmpeg/ffplay dist/
-          tar -C dist -czf ffmpeg-${{ matrix.label }}.tar.gz ffmpeg ffprobe ffplay
+          cp ffmpeg/ffmpeg ffmpeg/ffprobe dist/
+          if [ -f ffmpeg/ffplay ]; then
+            cp ffmpeg/ffplay dist/
+          fi
+          tar -C dist -czf ffmpeg-${{ matrix.label }}.tar.gz .
           shasum -a 256 ffmpeg-${{ matrix.label }}.tar.gz > ffmpeg-${{ matrix.label }}.tar.gz.sha256
 
       - name: Configure + build (Windows/MSYS2)
@@ -146,14 +184,7 @@ jobs:
           export CC="ccache gcc"
           export CXX="ccache g++"
           cd ffmpeg
-          ./configure \
-            --enable-gpl \
-            --enable-liblz4 \
-            --enable-encoder=h264_videotoolbox_remote \
-            --enable-encoder=hevc_videotoolbox_remote \
-            --enable-decoder=h264_videotoolbox_remote \
-            --enable-decoder=hevc_videotoolbox_remote \
-            --disable-debug
+          ./configure $FFMPEG_CONFIGURE_FLAGS
           make -j2
           ccache -s
       - name: Package ffmpeg (Windows/MSYS2)
@@ -161,8 +192,11 @@ jobs:
         shell: msys2 {0}
         run: |
           mkdir -p dist
-          cp ffmpeg/ffmpeg.exe ffmpeg/ffprobe.exe ffmpeg/ffplay.exe dist/
-          tar -C dist -czf ffmpeg-${{ matrix.label }}.tar.gz ffmpeg.exe ffprobe.exe ffplay.exe
+          cp ffmpeg/ffmpeg.exe ffmpeg/ffprobe.exe dist/
+          if [ -f ffmpeg/ffplay.exe ]; then
+            cp ffmpeg/ffplay.exe dist/
+          fi
+          tar -C dist -czf ffmpeg-${{ matrix.label }}.tar.gz .
           sha256sum ffmpeg-${{ matrix.label }}.tar.gz > ffmpeg-${{ matrix.label }}.tar.gz.sha256
 
       - name: Upload ffmpeg artifact

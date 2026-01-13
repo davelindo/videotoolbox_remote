@@ -16,6 +16,6 @@ Once real encoders/server land, add scripts here to:
 2. Run FFmpeg with `*_videotoolbox_remote` encoders from another machine (lavfi `testsrc2` preferred).
 3. Validate with `ffprobe` (duration, stream parameters, seekability).
 
-FFmpeg build note: enable the codecs during configure, e.g.
-`./configure --enable-encoder=h264_videotoolbox_remote --enable-encoder=hevc_videotoolbox_remote --enable-decoder=h264_videotoolbox_remote --enable-decoder=hevc_videotoolbox_remote`
+FFmpeg build note: enable the remote codecs during configure, e.g.
+`./configure --enable-videotoolbox-remote`
 and keep `--enable-network` on.

@@ -38,8 +38,7 @@ Common:
   Example:
   ```
   ./configure ... --enable-liblz4 \
-    --enable-encoder=h264_videotoolbox_remote --enable-encoder=hevc_videotoolbox_remote \
-    --enable-decoder=h264_videotoolbox_remote --enable-decoder=hevc_videotoolbox_remote
+    --enable-videotoolbox-remote
   ```
 - Server: SwiftPM or Xcode on macOS; flags for listen addr/port, optional token, max_sessions, log level. Requires system `liblz4`.
 
