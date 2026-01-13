@@ -9,6 +9,20 @@ the rest of the FFmpeg pipeline (demux, decode/filters, audio/subs, mux) local.
 - `ffmpeg/` — FFmpeg fork with `h264_videotoolbox_remote` / `hevc_videotoolbox_remote`
 - `docs/` — protocol + architecture docs
 
+## FFmpeg changes (key files)
+
+For quick navigation (subtree diffs are noisy), these are the core files added/modified
+under `ffmpeg/`:
+
+- `ffmpeg/libavcodec/vtremote_enc_common.c` / `ffmpeg/libavcodec/vtremote_enc_common.h` — shared encoder client
+- `ffmpeg/libavcodec/vtremote_dec_common.c` / `ffmpeg/libavcodec/vtremote_dec_common.h` — shared decoder client
+- `ffmpeg/libavcodec/vtremote_proto.c` / `ffmpeg/libavcodec/vtremote_proto.h` — protocol framing + I/O
+- `ffmpeg/libavcodec/vtremote_h264.c` / `ffmpeg/libavcodec/vtremote_hevc.c` — encoders
+- `ffmpeg/libavcodec/vtremote_h264_dec.c` / `ffmpeg/libavcodec/vtremote_hevc_dec.c` — decoders
+- `ffmpeg/libavcodec/allcodecs.c` — codec registration
+- `ffmpeg/configure` — build deps for liblz4 + network
+- `ffmpeg/doc/encoders.texi` / `ffmpeg/doc/decoders.texi` — user-facing docs
+
 ## Quickstart
 
 ### 1) macOS server (vtremoted)
