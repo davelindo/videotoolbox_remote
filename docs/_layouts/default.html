@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ page.title | default: site.title }}</title>
+    <meta name="description" content="{{ page.description | default: site.description }}" />
+    <link rel="stylesheet" href="{{ '/assets/style.css' | relative_url }}" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap nav">
+        <a class="brand" href="{{ '/' | relative_url }}">VideoToolbox Remote</a>
+        <input type="checkbox" id="nav-toggle" class="nav-toggle" />
+        <label class="nav-toggle-label" for="nav-toggle" aria-label="Toggle navigation">☰</label>
+        <nav class="nav-links">
+          <a href="{{ '/' | relative_url }}">Home</a>
+          <a href="{{ '/getting-started.html' | relative_url }}">Getting Started</a>
+          <a href="{{ '/architecture.html' | relative_url }}">Architecture</a>
+          <a href="{{ '/protocol.html' | relative_url }}">Protocol</a>
+          <a href="{{ '/troubleshooting.html' | relative_url }}">Troubleshooting</a>
+          <a href="https://github.com/davelindo/videotoolbox_remote" rel="noopener">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="page">
+      {{ content }}
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap footer">
+        <div>
+          <div class="brand">VideoToolbox Remote</div>
+          <div class="muted">Remote VideoToolbox encode/decode for FFmpeg.</div>
+        </div>
+        <div class="muted">© {{ site.time | date: "%Y" }} Dave Lindon</div>
+      </div>
+    </footer>
+  </body>
+</html>

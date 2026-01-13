@@ -1,3 +1,7 @@
+---
+title: Architecture
+---
+
 # VideoToolbox Remote Architecture (MVP)
 
 Updated: 2026-01-12

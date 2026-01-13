@@ -1,3 +1,7 @@
+---
+title: Protocol
+---
+
 # VideoToolbox Remote Protocol — Version 1 (authoritative)
 
 Status: draft locked for MVP (as of 2026-01-12). On-wire bitstream format is **Annex B** (mandatory for v1).

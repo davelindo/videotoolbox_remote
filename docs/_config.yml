@@ -1,4 +1,10 @@
 title: VideoToolbox Remote
 description: Remote VideoToolbox encode/decode for FFmpeg
-theme: minima
 markdown: kramdown
+baseurl: "/videotoolbox_remote"
+url: "https://davelindo.github.io"
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default

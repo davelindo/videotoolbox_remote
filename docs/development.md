@@ -1,3 +1,7 @@
+---
+title: Development
+---
+
 # Development notes
 
 This is for contributors who want to modify the client codecs, protocol, or daemon.
