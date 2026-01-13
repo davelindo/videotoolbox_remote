@@ -17,39 +17,6 @@ with the options @code{--enable-decoder=@var{DECODER}} /
 The option @code{-decoders} of the ff* tools will display the list of
 enabled decoders.
 
-@section Remote VideoToolbox decoders
-
-These decoders offload H.264/HEVC decoding to a remote macOS host running
-@code{vtremoted} while demux/filters/audio/subtitles stay local.
-
-Decoders: @code{h264_videotoolbox_remote}, @code{hevc_videotoolbox_remote}
-
-Enable at configure time (example):
-@example
-  ./configure --enable-liblz4 \
-    --enable-videotoolbox-remote
-@end example
-Network support must be enabled (default @code{--enable-network}).
-Requires liblz4 (pkg-config name: @code{liblz4}).
-
-Supported pixel formats: H.264 @code{nv12}; HEVC @code{nv12} and @code{p010}.
-
-AVOptions (common):
-@table @option
-@item vt_remote_host
-Host:port of the vtremoted server (required).
-@item vt_remote_token
-Pre-shared authentication token (optional).
-@item vt_remote_timeout_ms
-Socket timeout in milliseconds (default 5000).
-@item vt_remote_wire_compression
-Wire compression mode (none/lz4; default lz4).
-@item vt_remote_log_level
-Remote decoder log level (default info).
-@end table
-
-Status: functional for NV12/P010; remote VideoToolbox decode only.
-
 @c man end DECODERS
 
 @chapter Video Decoders

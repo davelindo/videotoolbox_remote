@@ -1154,30 +1154,6 @@ static void set_encoder_property_or_log(AVCodecContext *avctx,
     }
 }
 
-static void vt_log_prop(AVCodecContext *avctx, VTCompressionSessionRef session,
-                        CFDictionaryRef supported, const char *label, CFStringRef key)
-{
-    CFTypeRef v = NULL;
-    OSStatus st = VTSessionCopyProperty(session, key, kCFAllocatorDefault, &v);
-    const char *supported_str = (supported && CFDictionaryContainsKey(supported, key)) ? "supported" : "unknown";
-
-    if (st == noErr) {
-        char buf[512] = {0};
-        CFStringRef desc = CFCopyDescription(v);
-        if (desc) {
-            CFStringGetCString(desc, buf, sizeof(buf), kCFStringEncodingUTF8);
-            CFRelease(desc);
-        }
-        av_log(avctx, AV_LOG_DEBUG, "VT prop %s (%s) = %s\n",
-               label, supported_str, buf[0] ? buf : "<unprintable>");
-        if (v) CFRelease(v);
-    } else if (st == kVTPropertyNotSupportedErr) {
-        av_log(avctx, AV_LOG_DEBUG, "VT prop %s (%s) = not supported\n", label, supported_str);
-    } else {
-        av_log(avctx, AV_LOG_DEBUG, "VT prop %s (%s) read failed %d\n", label, supported_str, (int)st);
-    }
-}
-
 static int set_encoder_int_property_or_log(AVCodecContext* avctx,
                                            CFStringRef key,
                                            const char* print_option_name,
@@ -1651,34 +1627,6 @@ static int vtenc_create_encoder(AVCodecContext   *avctx,
     if (status) {
         av_log(avctx, AV_LOG_ERROR, "Cannot prepare encoder: %d\n", status);
         return AVERROR_EXTERNAL;
-    }
-
-    if (av_log_get_level() >= AV_LOG_DEBUG) {
-        CFDictionaryRef supported = NULL;
-        OSStatus sup = VTSessionCopySupportedPropertyDictionary(vtctx->session, &supported);
-        if (sup != noErr) {
-            av_log(avctx, AV_LOG_DEBUG, "VT supported properties unavailable status=%d\n", (int)sup);
-        }
-
-        vt_log_prop(avctx, vtctx->session, supported, "AverageBitRate", kVTCompressionPropertyKey_AverageBitRate);
-        vt_log_prop(avctx, vtctx->session, supported, "DataRateLimits", kVTCompressionPropertyKey_DataRateLimits);
-        vt_log_prop(avctx, vtctx->session, supported, "ConstantBitRate", compat_keys.kVTCompressionPropertyKey_ConstantBitRate);
-        vt_log_prop(avctx, vtctx->session, supported, "Quality", kVTCompressionPropertyKey_Quality);
-        vt_log_prop(avctx, vtctx->session, supported, "MaxKeyFrameInterval", kVTCompressionPropertyKey_MaxKeyFrameInterval);
-        vt_log_prop(avctx, vtctx->session, supported, "AllowFrameReordering", kVTCompressionPropertyKey_AllowFrameReordering);
-        vt_log_prop(avctx, vtctx->session, supported, "ProfileLevel", kVTCompressionPropertyKey_ProfileLevel);
-        vt_log_prop(avctx, vtctx->session, supported, "RealTime", kVTCompressionPropertyKey_RealTime);
-        vt_log_prop(avctx, vtctx->session, supported, "MinAllowedFrameQP", compat_keys.kVTCompressionPropertyKey_MinAllowedFrameQP);
-        vt_log_prop(avctx, vtctx->session, supported, "MaxAllowedFrameQP", compat_keys.kVTCompressionPropertyKey_MaxAllowedFrameQP);
-        vt_log_prop(avctx, vtctx->session, supported, "MaxH264SliceBytes", kVTCompressionPropertyKey_MaxH264SliceBytes);
-        vt_log_prop(avctx, vtctx->session, supported, "H264EntropyMode", compat_keys.kVTCompressionPropertyKey_H264EntropyMode);
-        vt_log_prop(avctx, vtctx->session, supported, "AllowOpenGOP", compat_keys.kVTCompressionPropertyKey_AllowOpenGOP);
-        vt_log_prop(avctx, vtctx->session, supported, "MaximizePowerEfficiency", compat_keys.kVTCompressionPropertyKey_MaximizePowerEfficiency);
-        vt_log_prop(avctx, vtctx->session, supported, "SpatialAdaptiveQP", compat_keys.kVTCompressionPropertyKey_SpatialAdaptiveQPLevel);
-        vt_log_prop(avctx, vtctx->session, supported, "ReferenceBufferCount", compat_keys.kVTCompressionPropertyKey_ReferenceBufferCount);
-
-        if (supported)
-            CFRelease(supported);
     }
 
     return 0;

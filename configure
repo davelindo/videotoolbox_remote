@@ -248,7 +248,6 @@ External library support:
   --enable-libkvazaar      enable HEVC encoding via libkvazaar [no]
   --enable-liblc3          enable LC3 de/encoding via liblc3 [no]
   --enable-liblcevc-dec    enable LCEVC decoding via liblcevc-dec [no]
-  --enable-liblz4          enable LZ4 compression via liblz4 [no]
   --enable-liblensfun      enable lensfun lens correction [no]
   --enable-libmodplug      enable ModPlug via libmodplug [no]
   --enable-libmp3lame      enable MP3 encoding via libmp3lame [no]
@@ -371,7 +370,6 @@ External library support:
   --disable-vaapi          disable Video Acceleration API (mainly Unix/Intel) code [autodetect]
   --disable-vdpau          disable Nvidia Video Decode and Presentation API for Unix code [autodetect]
   --disable-videotoolbox   disable VideoToolbox code [autodetect]
-  --enable-videotoolbox-remote enable VideoToolbox Remote codecs (h264/hevc) [no]
   --disable-vulkan         disable Vulkan code [autodetect]
   --enable-vulkan-static   statically link to libvulkan [no]
 
@@ -2026,7 +2024,6 @@ EXTERNAL_LIBRARY_LIST="
     libkvazaar
     liblc3
     liblcevc_dec
-    liblz4
     libmodplug
     libmp3lame
     libmysofa
@@ -2150,7 +2147,6 @@ FEATURE_LIST="
     static
     swscale_alpha
     unstable
-    videotoolbox_remote
 "
 
 # this list should be kept in linking order
@@ -3320,7 +3316,7 @@ av1_videotoolbox_hwaccel_deps="videotoolbox"
 av1_videotoolbox_hwaccel_select="av1_decoder"
 av1_vulkan_hwaccel_deps="vulkan"
 av1_vulkan_hwaccel_select="av1_decoder"
-dpx_vulkan_hwaccel_deps="vulkan"
+dpx_vulkan_hwaccel_deps="vulkan spirv_compiler"
 dpx_vulkan_hwaccel_select="dpx_decoder"
 ffv1_vulkan_hwaccel_deps="vulkan spirv_library"
 ffv1_vulkan_hwaccel_select="ffv1_decoder"
@@ -3400,9 +3396,9 @@ mpeg4_videotoolbox_hwaccel_deps="videotoolbox"
 mpeg4_videotoolbox_hwaccel_select="mpeg4_decoder"
 prores_videotoolbox_hwaccel_deps="videotoolbox"
 prores_videotoolbox_hwaccel_select="prores_decoder"
-prores_raw_vulkan_hwaccel_deps="vulkan"
+prores_raw_vulkan_hwaccel_deps="vulkan spirv_compiler"
 prores_raw_vulkan_hwaccel_select="prores_raw_decoder"
-prores_vulkan_hwaccel_deps="vulkan"
+prores_vulkan_hwaccel_deps="vulkan spirv_compiler"
 prores_vulkan_hwaccel_select="prores_decoder"
 vc1_d3d11va_hwaccel_deps="d3d11va"
 vc1_d3d11va_hwaccel_select="vc1_decoder"
@@ -3703,16 +3699,8 @@ pcm_mulaw_at_encoder_select="audio_frame_queue"
 chromaprint_muxer_deps="chromaprint"
 h264_videotoolbox_encoder_deps="pthreads"
 h264_videotoolbox_encoder_select="atsc_a53 videotoolbox_encoder"
-h264_videotoolbox_remote_decoder_deps="network liblz4"
-h264_videotoolbox_remote_decoder_select=""
-h264_videotoolbox_remote_encoder_deps="network liblz4"
-h264_videotoolbox_remote_encoder_select=""
 hevc_videotoolbox_encoder_deps="pthreads"
 hevc_videotoolbox_encoder_select="atsc_a53 videotoolbox_encoder"
-hevc_videotoolbox_remote_decoder_deps="network liblz4"
-hevc_videotoolbox_remote_decoder_select=""
-hevc_videotoolbox_remote_encoder_deps="network liblz4"
-hevc_videotoolbox_remote_encoder_select=""
 prores_videotoolbox_encoder_deps="pthreads"
 prores_videotoolbox_encoder_select="videotoolbox_encoder"
 libaom_av1_decoder_deps="libaom"
@@ -4047,7 +4035,7 @@ aresample_filter_deps="swresample"
 asr_filter_deps="pocketsphinx"
 ass_filter_deps="libass"
 avgblur_opencl_filter_deps="opencl"
-avgblur_vulkan_filter_deps="vulkan"
+avgblur_vulkan_filter_deps="vulkan spirv_compiler"
 azmq_filter_deps="libzmq"
 blackdetect_vulkan_filter_deps="vulkan spirv_library"
 blackframe_filter_deps="gpl"
@@ -4057,7 +4045,7 @@ boxblur_opencl_filter_deps="opencl gpl"
 bs2b_filter_deps="libbs2b"
 bwdif_cuda_filter_deps="ffnvcodec"
 bwdif_cuda_filter_deps_any="cuda_nvcc cuda_llvm"
-bwdif_vulkan_filter_deps="vulkan"
+bwdif_vulkan_filter_deps="vulkan spirv_compiler"
 chromaber_vulkan_filter_deps="vulkan spirv_library"
 color_vulkan_filter_deps="vulkan spirv_library"
 colorkey_opencl_filter_deps="opencl"
@@ -4198,7 +4186,7 @@ zoompan_filter_deps="swscale"
 zscale_filter_deps="libzimg const_nan"
 scale_vaapi_filter_deps="vaapi"
 scale_vt_filter_deps="videotoolbox VTPixelTransferSessionCreate"
-scale_vulkan_filter_deps="vulkan spirv_library"
+scale_vulkan_filter_deps="vulkan spirv_compiler"
 vpp_qsv_filter_deps="libmfx"
 vpp_qsv_filter_select="qsvvpp"
 xfade_opencl_filter_deps="opencl"
@@ -4677,13 +4665,6 @@ for opt do
         ;;
     esac
 done
-
-if enabled videotoolbox_remote; then
-    enable h264_videotoolbox_remote_encoder h264_videotoolbox_remote_decoder \
-           hevc_videotoolbox_remote_encoder hevc_videotoolbox_remote_decoder
-    enable network
-    enable liblz4
-fi
 
 for e in $env; do
     eval "export $e"
@@ -7326,7 +7307,6 @@ enabled libshaderc        && require_pkg_config spirv_library "shaderc >= 2019.1
 enabled libshine          && require_pkg_config libshine shine shine/layer3.h shine_encode_buffer
 enabled libsmbclient      && { check_pkg_config libsmbclient smbclient libsmbclient.h smbc_init ||
                                require libsmbclient libsmbclient.h smbc_init -lsmbclient; }
-enabled liblz4            && require_pkg_config liblz4 liblz4 lz4.h LZ4_compress_default
 enabled libsnappy         && require libsnappy snappy-c.h snappy_compress -lsnappy -lstdc++
 enabled libsoxr           && require libsoxr soxr.h soxr_create -lsoxr
 enabled libssh            && require_pkg_config libssh "libssh >= 0.6.0" libssh/sftp.h sftp_init
@@ -7721,16 +7701,11 @@ probe_glslc(){
         glslc_debug="-g"
         GLSLC_DEPFLAGS='-MD -MF $(@:.spv=.d) -MT $@'
     else
+        disable spirv_compiler
         return 1
     fi
-    check_glslc vulkan
-}
+    check_glslc spirv_compiler || return 0
 
-if enabled vulkan; then
-    for program in $glslc glslc glslang glslangValidator; do
-        probe_glslc $program && break
-    done
-    disabled vulkan && warn "glslc/glslang not found or too old, disabling Vulkan."
     append GLSLCFLAGS $glslcflags
     if enabled small; then
         append GLSLCFLAGS $glslc_opt_size
@@ -7739,11 +7714,19 @@ if enabled vulkan; then
     else
         append GLSLCFLAGS $glslc_opt_none
     fi
-    enabled debug && append GLSLCFLAGS $glslc_debug
-fi
+    if enabled debug; then
+        append GLSLCFLAGS $glslc_debug
+    fi
+}
 
-if disabled vulkan; then
-    disable libglslang libshaderc spirv_library
+if enabled vulkan; then
+    check_pkg_config_header_only vulkan_1_4 "vulkan >= 1.4.317" "vulkan/vulkan.h" "defined VK_VERSION_1_4" ||
+        check_cpp_condition vulkan_1_4 "vulkan/vulkan.h" "defined(VK_VERSION_1_5) || (defined(VK_VERSION_1_4) && VK_HEADER_VERSION >= 317)"
+    for program in $glslc glslc glslang glslangValidator; do
+        probe_glslc $program && break
+    done
+else
+    disable libglslang libshaderc spirv_library spirv_compiler
 fi
 
 if enabled x86; then
