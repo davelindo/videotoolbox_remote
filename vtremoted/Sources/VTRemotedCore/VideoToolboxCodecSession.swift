@@ -344,7 +344,7 @@ final class VideoToolboxCodecSession: CodecSession {
 
         var hasBFrames = config.options.maxBFrames > 0
         var entropy = config.options.entropy
-        var profile = config.options.profile
+        let profile = config.options.profile
 
         if config.codec == .h264 {
             if hasBFrames && (profile & 0xFF) == AV_PROFILE_H264_BASELINE {
@@ -564,10 +564,16 @@ final class VideoToolboxCodecSession: CodecSession {
             try setProp(vtKeySpatialAdaptiveQP, num!, "spatial_aq")
         }
 
-        var encId: CFTypeRef?
-        let encStatus = VTSessionCopyProperty(cs, key: vtKeyEncoderID,
-                                              allocator: kCFAllocatorDefault, valueOut: &encId)
-        if encStatus == noErr, let s = encId as? String {
+        func copyProp(_ key: CFString) -> (OSStatus, CFTypeRef?) {
+            var value: CFTypeRef?
+            let status = withUnsafeMutablePointer(to: &value) { ptr in
+                VTSessionCopyProperty(cs, key: key, allocator: kCFAllocatorDefault, valueOut: UnsafeMutableRawPointer(ptr))
+            }
+            return (status, value)
+        }
+
+        let (encStatus, encValue) = copyProp(vtKeyEncoderID)
+        if encStatus == noErr, let s = encValue as? String {
             logger.debug("DBG EncoderID \(s)")
         }
 
@@ -589,8 +595,7 @@ final class VideoToolboxCodecSession: CodecSession {
 
             func logProp(_ name: String, _ key: CFString) {
                 let supportedStr = (supportedDict?[key] != nil) ? "supported" : "unknown"
-                var v: CFTypeRef?
-                let st = VTSessionCopyProperty(cs, key: key, allocator: kCFAllocatorDefault, valueOut: &v)
+                let (st, v) = copyProp(key)
                 if st == noErr {
                     logger.debug("DBG VT prop \(name) (\(supportedStr)) = \(describe(v))")
                 } else if st == kVTPropertyNotSupportedErr {
@@ -1080,8 +1085,8 @@ final class VideoToolboxCodecSession: CodecSession {
             }
             guard let sps, let pps else { throw VTRemotedError.protocolViolation("missing SPS/PPS") }
             var fmt: CMFormatDescription?
-            var spsBytes = [UInt8](sps)
-            var ppsBytes = [UInt8](pps)
+            let spsBytes = [UInt8](sps)
+            let ppsBytes = [UInt8](pps)
             let status = spsBytes.withUnsafeBytes { spsPtr in
                 ppsBytes.withUnsafeBytes { ppsPtr in
                     var ptrs: [UnsafePointer<UInt8>] = [
@@ -1114,9 +1119,9 @@ final class VideoToolboxCodecSession: CodecSession {
             }
             guard let vps, let sps, let pps else { throw VTRemotedError.protocolViolation("missing VPS/SPS/PPS") }
             var fmt: CMFormatDescription?
-            var vpsBytes = [UInt8](vps)
-            var spsBytes = [UInt8](sps)
-            var ppsBytes = [UInt8](pps)
+            let vpsBytes = [UInt8](vps)
+            let spsBytes = [UInt8](sps)
+            let ppsBytes = [UInt8](pps)
             let status = vpsBytes.withUnsafeBytes { vpsPtr in
                 spsBytes.withUnsafeBytes { spsPtr in
                     ppsBytes.withUnsafeBytes { ppsPtr in

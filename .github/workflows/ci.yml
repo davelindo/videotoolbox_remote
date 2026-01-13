@@ -84,8 +84,7 @@ jobs:
         run: brew install lz4 pkg-config
       - name: Build vtremoted
         run: |
-          cd vtremoted
-          swift build -c release
+          make build-vtremoted
       - name: Package vtremoted
         run: |
           mkdir -p dist/vtremoted
@@ -194,9 +193,7 @@ jobs:
             export CC="ccache gcc"
             export CXX="ccache g++"
           fi
-          cd ffmpeg
-          ./configure $FFMPEG_CONFIGURE_FLAGS
-          make -j2
+          make build-ffmpeg
           ccache -s
       - name: Package ffmpeg (Linux/macOS)
         if: runner.os != 'Windows'
@@ -218,9 +215,7 @@ jobs:
           ccache -z
           export CC="ccache gcc"
           export CXX="ccache g++"
-          cd ffmpeg
-          ./configure $FFMPEG_CONFIGURE_FLAGS
-          make -j2
+          make build-ffmpeg
           ccache -s
       - name: Package ffmpeg (Windows/MSYS2)
         if: runner.os == 'Windows'

@@ -15,8 +15,9 @@ if [[ ! -x "$VTREMOTED_BIN" ]]; then
   echo "vtremoted not found at $VTREMOTED_BIN (build it or set VTREMOTED)" >&2; exit 1
 fi
 
-PORT="${VTREMOTE_PORT:-5571}"
+PORT="${VTREMOTE_PORT:-5555}"
 TOKEN="${VTREMOTE_TOKEN:-}"
+USE_EXISTING="${VTREMOTE_USE_EXISTING:-}"
 TOKEN_ARGS=()
 IN_H264="$(mktemp /tmp/vtremote_dec_h264XXXX.mp4)"
 IN_HEVC="$(mktemp /tmp/vtremote_dec_hevcXXXX.mp4)"
@@ -29,14 +30,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Starting vtremoted on 127.0.0.1:${PORT}..."
-if [[ -n "$TOKEN" ]]; then
-  "$VTREMOTED_BIN" --listen 127.0.0.1:${PORT} --token "$TOKEN" > /tmp/vtremoted_decode.log 2>&1 &
+if [[ -z "$USE_EXISTING" ]]; then
+  echo "Starting vtremoted on 127.0.0.1:${PORT}..."
+  if [[ -n "$TOKEN" ]]; then
+    "$VTREMOTED_BIN" --listen 127.0.0.1:${PORT} --token "$TOKEN" > /tmp/vtremoted_decode.log 2>&1 &
+  else
+    "$VTREMOTED_BIN" --listen 127.0.0.1:${PORT} > /tmp/vtremoted_decode.log 2>&1 &
+  fi
+  SERVER_PID=$!
+  sleep 0.3
 else
-  "$VTREMOTED_BIN" --listen 127.0.0.1:${PORT} > /tmp/vtremoted_decode.log 2>&1 &
+  echo "Using existing vtremoted on 127.0.0.1:${PORT}..."
 fi
-SERVER_PID=$!
-sleep 0.3
 
 if [[ -n "$TOKEN" ]]; then
   TOKEN_ARGS=( -vt_remote_token "$TOKEN" )
@@ -59,5 +64,7 @@ echo "Remote decode HEVC..."
   -c:v hevc_videotoolbox_remote -i "$IN_HEVC" -f null - >/dev/null
 
 echo "Decode OK"
-kill "$SERVER_PID" 2>/dev/null || true
-wait "$SERVER_PID" 2>/dev/null || true
+if [[ -n "${SERVER_PID}" ]]; then
+  kill "$SERVER_PID" 2>/dev/null || true
+  wait "$SERVER_PID" 2>/dev/null || true
+fi

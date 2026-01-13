@@ -19,8 +19,9 @@ if [[ ! -x "$VTREMOTED_BIN" ]]; then
   echo "vtremoted not found at $VTREMOTED_BIN (build it or set VTREMOTED)" >&2; exit 1
 fi
 
-PORT="${VTREMOTE_PORT:-5570}"
+PORT="${VTREMOTE_PORT:-5555}"
 TOKEN="${VTREMOTE_TOKEN:-}"
+USE_EXISTING="${VTREMOTE_USE_EXISTING:-}"
 TOKEN_ARGS=()
 OUT_MP4_H264="$(mktemp /tmp/vtremote_h264_outXXXX.mp4)"
 OUT_MP4_HEVC="$(mktemp /tmp/vtremote_hevc_outXXXX.mp4)"
@@ -58,7 +59,11 @@ start_server() {
   fi
 }
 
-start_server
+if [[ -z "$USE_EXISTING" ]]; then
+  start_server
+else
+  echo "Using existing vtremoted on 127.0.0.1:${PORT}..."
+fi
 
 if [[ -n "$TOKEN" ]]; then
   TOKEN_ARGS=( -vt_remote_token "$TOKEN" )

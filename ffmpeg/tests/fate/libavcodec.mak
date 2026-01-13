@@ -114,7 +114,7 @@ FATE_LIBAVCODEC-yes += fate-libavcodec-htmlsubtitles
 fate-libavcodec-htmlsubtitles: libavcodec/tests/htmlsubtitles$(EXESUF)
 fate-libavcodec-htmlsubtitles: CMD = run libavcodec/tests/htmlsubtitles$(EXESUF)
 
-FATE_LIBAVCODEC-yes += fate-vtremote-proto
+FATE_LIBAVCODEC-$(CONFIG_VIDEOTOOLBOX_REMOTE) += fate-vtremote-proto
 fate-vtremote-proto: libavcodec/tests/vtremote_proto$(EXESUF)
 fate-vtremote-proto: CMD = run libavcodec/tests/vtremote_proto$(EXESUF)
 fate-vtremote-proto: CMP = null

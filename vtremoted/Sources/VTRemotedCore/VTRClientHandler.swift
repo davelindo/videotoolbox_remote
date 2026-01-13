@@ -84,11 +84,13 @@ public final class VTRClientHandler: @unchecked Sendable {
                 "gop=\(config.options.gop) wc=\(config.options.wireCompression)"
         )
 
+        let mode = config.mode
         let session = CodecSessionFactory.make { [weak self] type, body in
             guard let self else { return }
             self.stats.bytesOut += Int64(VTRProtocol.headerSize + body.count)
             if type == .packet { self.stats.packetsOut += 1; self.stats.recordOutput() }
             if type == .frame { self.stats.framesOut += 1 }
+            self.stats.maybeReport(mode: mode, logger: self.logger, intervalSeconds: 0.25)
             try self.io.send(type: type, body: body)
         }
         codecSession = session
@@ -115,6 +117,7 @@ public final class VTRClientHandler: @unchecked Sendable {
         while true {
             let (header, payload) = try io.readMessage(timeoutSeconds: 10)
             stats.bytesIn += Int64(VTRProtocol.headerSize + payload.count)
+            stats.maybeReport(mode: configuration.mode, logger: logger, intervalSeconds: 0.25)
             guard let type = VTRMessageType(rawValue: header.type) else { continue }
 
             switch type {

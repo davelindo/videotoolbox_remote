@@ -19,8 +19,17 @@ public struct Arguments: Equatable, Sendable {
             case "--token":
                 if let v = it.next() { args.token = v }
             case "--log-level":
-                if let v = it.next(), let n = Int(v), let lvl = LogLevel(rawValue: n) {
-                    args.logLevel = lvl
+                if let v = it.next() {
+                    let lower = v.lowercased()
+                    if let n = Int(lower), let lvl = LogLevel(rawValue: n) {
+                        args.logLevel = lvl
+                    } else if lower == "debug" {
+                        args.logLevel = .debug
+                    } else if lower == "info" {
+                        args.logLevel = .info
+                    } else if lower == "error" {
+                        args.logLevel = .error
+                    }
                 }
             case "--once":
                 args.once = true

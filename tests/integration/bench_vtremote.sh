@@ -9,7 +9,7 @@ FFMPEG_BIN="${FFMPEG:-${ROOT}/ffmpeg/ffmpeg}"
 FFPROBE_BIN="${FFPROBE:-${ROOT}/ffmpeg/ffprobe}"
 VTREMOTED_BIN="${VTREMOTED:-${ROOT}/vtremoted/.build/debug/vtremoted}"
 
-PORT="${VTREMOTE_PORT:-5580}"
+PORT="${VTREMOTE_PORT:-5555}"
 TOKEN="${VTREMOTE_TOKEN:-}"
 WIRE_COMP="${VTREMOTE_WIRE_COMPRESSION:-}"
 
@@ -103,15 +103,75 @@ run_remote_case() {
   run_case "$label" "$size" "$rate" "$out" "$encoder" "$pix_fmt" "${args[@]}"
 }
 
-echo "Benchmarking local vs remote (5s each)..."
-run_case "720p30"  "1280x720"  "30" "/tmp/vt_local_720p30.mp4" "h264_videotoolbox" nv12
-run_remote_case "720p30"  "1280x720"  "30" "/tmp/vt_remote_720p30.mp4" "h264_videotoolbox_remote" nv12 -vt_remote_host "127.0.0.1:${PORT}"
-run_case "1080p30" "1920x1080" "30" "/tmp/vt_local_1080p30.mp4" "h264_videotoolbox" nv12
-run_remote_case "1080p30" "1920x1080" "30" "/tmp/vt_remote_1080p30.mp4" "h264_videotoolbox_remote" nv12 -vt_remote_host "127.0.0.1:${PORT}"
-run_case "1080p60" "1920x1080" "60" "/tmp/vt_local_1080p60.mp4" "h264_videotoolbox" nv12
-run_remote_case "1080p60" "1920x1080" "60" "/tmp/vt_remote_1080p60.mp4" "h264_videotoolbox_remote" nv12 -vt_remote_host "127.0.0.1:${PORT}"
+run_remote_decode_case() {
+  local label="$1"
+  local in_file="$2"
+  local decoder="$3"
+  local args=()
+  if [[ -n "$TOKEN" ]]; then
+    args+=( -vt_remote_token "$TOKEN" )
+  fi
+  if [[ -n "$WIRE_COMP" ]]; then
+    args+=( -vt_remote_wire_compression "$WIRE_COMP" )
+  fi
+  "$FFMPEG_BIN" -v warning -xerror \
+    -vt_remote_host "127.0.0.1:${PORT}" "${args[@]}" \
+    -c:v "$decoder" -i "$in_file" -f null - >/tmp/vtremote_bench_ffmpeg.log 2>&1
+  echo "decode ${label} ${decoder} ok"
+}
 
-run_case "1080p30" "1920x1080" "30" "/tmp/vt_local_hevc_1080p30.mp4" "hevc_videotoolbox" p010le
-run_remote_case "1080p30" "1920x1080" "30" "/tmp/vt_remote_hevc_1080p30.mp4" "hevc_videotoolbox_remote" p010le -vt_remote_host "127.0.0.1:${PORT}"
+echo "Benchmarking local vs remote encode (5s each, LZ4 on wire if enabled)..."
+
+sizes=(
+  "720p 1280x720"
+  "1080p 1920x1080"
+  "1440p 2560x1440"
+  "2k 2048x1080"
+)
+rates=(30 60 120)
+
+for entry in "${sizes[@]}"; do
+  label="${entry%% *}"
+  size="${entry##* }"
+  for rate in "${rates[@]}"; do
+    run_case "${label}${rate}"  "$size"  "$rate" "/tmp/vt_local_h264_${label}${rate}.mp4" "h264_videotoolbox" nv12
+    run_remote_case "${label}${rate}"  "$size"  "$rate" "/tmp/vt_remote_h264_${label}${rate}.mp4" "h264_videotoolbox_remote" nv12 -vt_remote_host "127.0.0.1:${PORT}"
+  done
+done
+
+# 4K (DCI 4096x2160) only at 60fps
+run_case "4k60" "4096x2160" "60" "/tmp/vt_local_h264_4k60.mp4" "h264_videotoolbox" nv12
+run_remote_case "4k60" "4096x2160" "60" "/tmp/vt_remote_h264_4k60.mp4" "h264_videotoolbox_remote" nv12 -vt_remote_host "127.0.0.1:${PORT}"
+
+for entry in "${sizes[@]}"; do
+  label="${entry%% *}"
+  size="${entry##* }"
+  for rate in "${rates[@]}"; do
+    run_case "${label}${rate}"  "$size"  "$rate" "/tmp/vt_local_hevc_${label}${rate}.mp4" "hevc_videotoolbox" p010le
+    run_remote_case "${label}${rate}"  "$size"  "$rate" "/tmp/vt_remote_hevc_${label}${rate}.mp4" "hevc_videotoolbox_remote" p010le -vt_remote_host "127.0.0.1:${PORT}"
+  done
+done
+
+run_case "4k60" "4096x2160" "60" "/tmp/vt_local_hevc_4k60.mp4" "hevc_videotoolbox" p010le
+run_remote_case "4k60" "4096x2160" "60" "/tmp/vt_remote_hevc_4k60.mp4" "hevc_videotoolbox_remote" p010le -vt_remote_host "127.0.0.1:${PORT}"
+
+if [[ "${VTREMOTE_BENCH_DECODE:-1}" != "0" ]]; then
+  echo "Benchmarking remote decode (uses local encoded inputs)..."
+  for entry in "${sizes[@]}"; do
+    label="${entry%% *}"
+    for rate in "${rates[@]}"; do
+      run_remote_decode_case "${label}${rate}" "/tmp/vt_local_h264_${label}${rate}.mp4" "h264_videotoolbox_remote"
+    done
+  done
+  run_remote_decode_case "4k60" "/tmp/vt_local_h264_4k60.mp4" "h264_videotoolbox_remote"
+
+  for entry in "${sizes[@]}"; do
+    label="${entry%% *}"
+    for rate in "${rates[@]}"; do
+      run_remote_decode_case "${label}${rate}" "/tmp/vt_local_hevc_${label}${rate}.mp4" "hevc_videotoolbox_remote"
+    done
+  done
+  run_remote_decode_case "4k60" "/tmp/vt_local_hevc_4k60.mp4" "hevc_videotoolbox_remote"
+fi
 
 echo "Note: capture CPU usage separately (e.g., Activity Monitor or 'ps -o %cpu -p <pid>')."
