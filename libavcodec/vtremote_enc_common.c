@@ -2,6 +2,9 @@
  * VTRemote encoder common scaffolding (M0)
  */
 
+#include "config.h"
+#include "config_components.h"
+
 #include <errno.h>
 #include <string.h>
 #include <inttypes.h>
@@ -16,9 +19,6 @@
 #include <unistd.h>
 #include <sys/time.h>
 #endif
-
-#include "config.h"
-#include "config_components.h"
 #include "avcodec.h"
 #include "codec_internal.h"
 #include "encode.h"
