@@ -101,45 +101,62 @@
             func processPlane(planeIndex: Int, rawRange: Range<Int>, expectedSize: Int, stride: Int, rowBytes: Int) throws {
                 guard let destBase = CVPixelBufferGetBaseAddressOfPlane(pBuffer, planeIndex) else { return }
                 let destStride = CVPixelBufferGetBytesPerRowOfPlane(pBuffer, planeIndex)
-                
-                // Decompress to temp buffer first (System Memory) to avoid 
-                // reading from WC memory during LZ4 back-references
+
+                if config.options.wireCompression == 0 {
+                    // No compression: copy directly from payload into the pixel buffer (avoid temp buffer).
+                    guard rawRange.count >= expectedSize else {
+                        throw VTRemotedError.protocolViolation("plane too small")
+                    }
+                    payload.withUnsafeBytes { payloadPtr in
+                        let srcBase = payloadPtr.baseAddress!.advanced(by: rawRange.lowerBound)
+                            .assumingMemoryBound(to: UInt8.self)
+                        let dstBase = destBase.assumingMemoryBound(to: UInt8.self)
+                        if stride == destStride, stride == rowBytes {
+                            memcpy(dstBase, srcBase, expectedSize)
+                        } else {
+                            let height = expectedSize / stride
+                            let copyBytes = min(rowBytes, min(stride, destStride))
+                            for row in 0 ..< height {
+                                memcpy(dstBase.advanced(by: row * destStride),
+                                       srcBase.advanced(by: row * stride),
+                                       copyBytes)
+                            }
+                        }
+                    }
+                    return
+                }
+
+                // Compressed path: decompress to temp buffer first (System Memory) to avoid
+                // reading from WC memory during LZ4 back-references.
                 var temp = inputBufferPool.get(capacity: expectedSize)
                 defer { inputBufferPool.return(temp) }
                 if temp.count != expectedSize {
                     temp.count = expectedSize
                 }
-                
+
                 // Zero-copy access to source data
                 let success: Bool = payload.withUnsafeBytes { payloadPtr in
                     let rawPtr = UnsafeRawBufferPointer(
                         start: payloadPtr.baseAddress!.advanced(by: rawRange.lowerBound),
                         count: rawRange.count
                     )
-                    
                     if config.options.wireCompression == 1 {
                         return temp.withUnsafeMutableBytes { dstPtr in
                             LZ4Codec.decompressRaw(rawPtr, into: dstPtr.baseAddress!, expectedSize: expectedSize)
                         }
-                    } else if config.options.wireCompression == 2 {
+                    } else {
                         return temp.withUnsafeMutableBytes { dstPtr in
                             ZstdCodec.decompressRaw(rawPtr, into: dstPtr.baseAddress!, expectedSize: expectedSize)
                         }
-                    } else {
-                        // No compression - direct copy to temp buffer
-                        temp.withUnsafeMutableBytes { dstPtr in
-                            _ = memcpy(dstPtr.baseAddress!, rawPtr.baseAddress!, rawRange.count)
-                        }
-                        return true
                     }
                 }
                 guard success else { throw VTRemotedError.protocolViolation("Decompress failed") }
-                
+
                 // Copy from System Memory to Video Memory (WC)
                 temp.withUnsafeBytes { srcPtr in
                     guard let srcBase = srcPtr.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
                     let dstBase = destBase.assumingMemoryBound(to: UInt8.self)
-                    
+
                     if stride == destStride, stride == rowBytes {
                         // Fast path: single contiguous copy
                         memcpy(dstBase, srcBase, expectedSize)
@@ -454,7 +471,7 @@
              if config.codec == .hevc, config.options.alphaQuality > 0.0 {
                 var alphaVal = config.options.alphaQuality
                 let num = CFNumberCreate(kCFAllocatorDefault, .doubleType, &alphaVal)
-                _ = VTSessionSetProperty(session, key: VideoToolboxProperties.vtKeyTargetQualityForAlpha, value: num)
+                try setProp(session, VideoToolboxProperties.vtKeyTargetQualityForAlpha, num!, "alpha_quality")
             }
              
              // QMin/QMax
@@ -536,7 +553,7 @@
             // Allow more frames to be queued for encoding (improves throughput at slight latency cost)
             var maxFrameDelay: Int32 = 8
             let delayNum = CFNumberCreate(kCFAllocatorDefault, .sInt32Type, &maxFrameDelay)
-            _ = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxFrameDelayCount, value: delayNum!)
+            try setProp(session, kVTCompressionPropertyKey_MaxFrameDelayCount, delayNum!, "max_frame_delay")
 
             if config.codec == .h264 || config.codec == .hevc, config.options.maxRate > 0 {
                 let bytesPerSecond = Int64(config.options.maxRate >> 3)

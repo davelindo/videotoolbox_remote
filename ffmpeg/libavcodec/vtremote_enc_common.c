@@ -968,11 +968,17 @@ int ff_vtremote_common_close(AVCodecContext *avctx)
         double elapsed = elapsed_us > 0 ? (double)elapsed_us / 1000000.0 : 0.0;
         double mbps_in = elapsed > 0 ? (double)s->bytes_sent * 8.0 / (elapsed * 1000000.0) : 0.0;
         double mbps_out = elapsed > 0 ? (double)s->bytes_recv * 8.0 / (elapsed * 1000000.0) : 0.0;
+        double avg_send_ms = s->send_frames > 0
+            ? (double)s->send_time_us / (double)s->send_frames / 1000.0
+            : 0.0;
+        double avg_wait_ms = s->recv_calls > 0
+            ? (double)s->recv_wait_us / (double)s->recv_calls / 1000.0
+            : 0.0;
         av_log(avctx, AV_LOG_INFO,
                "VT remote summary: frames=%"PRId64" packets=%"PRId64" bytes_in=%"PRId64" bytes_out=%"PRId64
-               " max_inflight=%d elapsed=%.3fs in=%.2fMb/s out=%.2fMb/s\n",
+               " max_inflight=%d elapsed=%.3fs in=%.2fMb/s out=%.2fMb/s avg_send_ms=%.2f avg_wait_ms=%.2f\n",
                s->frames_sent, s->packets_recv, s->bytes_sent, s->bytes_recv,
-               s->max_inflight, elapsed, mbps_in, mbps_out);
+               s->max_inflight, elapsed, mbps_in, mbps_out, avg_send_ms, avg_wait_ms);
     }
     av_opt_free(s);
     return 0;
@@ -1007,6 +1013,8 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame)
     uint32_t sizes[2] = { strides[0] * heights[0], strides[1] * heights[1] };
     const uint8_t *send_planes[2] = { planes[0], planes[1] };
     uint32_t send_sizes[2] = { sizes[0], sizes[1] };
+
+    int64_t send_start_us = av_gettime_relative();
 
     if (s->wire_compression == 1 || s->wire_compression == 2) {
         for (int i = 0; i < 2; i++) {
@@ -1081,6 +1089,13 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame)
         s->max_inflight = s->inflight_frames;
     if (ret == 0)
         s->frames_sent++;
+    {
+        int64_t send_elapsed_us = av_gettime_relative() - send_start_us;
+        if (send_elapsed_us > 0) {
+            s->send_time_us += send_elapsed_us;
+            s->send_frames++;
+        }
+    }
     return ret;
 }
 
@@ -1101,9 +1116,15 @@ int ff_vtremote_common_receive_packet(AVCodecContext *avctx, AVPacket *pkt)
     }
 
     for (;;) {
+        int64_t recv_start_us = av_gettime_relative();
         VTRemoteMsgHeader hdr;
         uint8_t *payload = NULL;
         int ret = vtremote_read_msg(s, &hdr, &payload);
+        int64_t recv_elapsed_us = av_gettime_relative() - recv_start_us;
+        if (recv_elapsed_us > 0) {
+            s->recv_wait_us += recv_elapsed_us;
+            s->recv_calls++;
+        }
         if (ret < 0)
             return ret;
 

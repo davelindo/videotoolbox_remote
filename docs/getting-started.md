@@ -4,14 +4,14 @@ title: Getting Started
 
 # Getting Started
 
-This guide aims for “I have a Mac + another machine, and I want remote H.264/HEVC working.”
+This guide aims for "I have a Mac + another machine, and I want remote H.264/HEVC working."
 
 ## Step 1 — Prepare the Mac (server)
 
 Install dependencies and build:
 
 ```bash
-brew install lz4 pkg-config
+brew install lz4 zstd pkg-config
 cd vtremoted
 swift build -c release
 ```
@@ -30,11 +30,11 @@ Optionally install as a service:
 
 ## Step 2 — Build FFmpeg client (other machine)
 
-Install `liblz4` + `pkg-config` for your OS, then:
+Install `libzstd` + `liblz4` + `pkg-config` for your OS, then:
 
 ```bash
 cd ffmpeg
-./configure ... --enable-liblz4 \
+./configure ... --enable-libzstd --enable-liblz4 \
   --enable-videotoolbox-remote
 make -j
 ```
@@ -58,5 +58,6 @@ ffmpeg -i input.mkv \
 
 ## Notes
 
-- Wire compression (LZ4) is enabled by default.
+- Wire compression uses **Zstd** by default (~30-40% smaller than LZ4).
 - Token auth is optional; add `-vt_remote_token` on the client and `--token` on the server to enforce.
+- The server automatically optimizes VideoToolbox settings for batch encoding throughput.

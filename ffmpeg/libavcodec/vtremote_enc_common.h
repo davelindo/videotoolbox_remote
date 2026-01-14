@@ -59,6 +59,10 @@ typedef struct VTRemoteEncContext {
     int64_t packets_recv;
     int64_t bytes_sent;
     int64_t bytes_recv;
+    int64_t send_time_us;
+    int64_t send_frames;
+    int64_t recv_wait_us;
+    int64_t recv_calls;
     int max_inflight;
 } VTRemoteEncContext;
 
