@@ -7,7 +7,7 @@ BINDIR ?= $(PREFIX)/bin
 FFMPEG_DIR := ffmpeg
 VTREMOTED_DIR := vtremoted
 
-FFMPEG_CONFIGURE_FLAGS ?= --enable-videotoolbox-remote --disable-debug
+FFMPEG_CONFIGURE_FLAGS ?= --enable-videotoolbox-remote --enable-libzstd --disable-debug
 JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 2)
 
 VTREMOTED_LISTEN ?= 0.0.0.0:5555

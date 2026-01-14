@@ -49,8 +49,8 @@ flowchart LR
   subgraph S1["vtremoted (macOS)"]
     S1a["VTCompressionSession"]
   end
-  C1a -- "raw NV12/P010 frames<br/>VTRemote TCP (+LZ4)" --> S1a
-  S1a -- "Annex B packets<br/>VTRemote TCP (+LZ4)" --> C1a
+  C1a -- "raw NV12/P010 frames<br/>VTRemote TCP (+Zstd)" --> S1a
+  S1a -- "Annex B packets<br/>VTRemote TCP (+Zstd)" --> C1a
 
   %% Decode path (remote decode only)
   subgraph C2["FFmpeg client"]
@@ -59,8 +59,8 @@ flowchart LR
   subgraph S2["vtremoted (macOS)"]
     S2a["VTDecompressionSession"]
   end
-  C2a -- "Annex B packets<br/>VTRemote TCP (+LZ4)" --> S2a
-  S2a -- "raw NV12/P010 frames<br/>VTRemote TCP (+LZ4)" --> C2a
+  C2a -- "Annex B packets<br/>VTRemote TCP (+Zstd)" --> S2a
+  S2a -- "raw NV12/P010 frames<br/>VTRemote TCP (+Zstd)" --> C2a
 ```
 
 ---
@@ -70,7 +70,7 @@ flowchart LR
 Remote VideoToolbox means you are sending/receiving video frames over the network.
 For high resolutions / high FPS, a **wired LAN** is recommended.
 
-### Required wire bandwidth for real‑time (LZ4 on)
+### Required wire bandwidth for real‑time (Zstd on)
 
 **Headline requirement (worst case from the benchmark):**
 encode needs ~395 Mb/s **upstream** (client → server) at 4K60 (HEVC P010), and
@@ -83,29 +83,27 @@ Measured from `vtremoted` session summaries using `tests/integration/bench_vtrem
 `bytes_on_wire / media_duration`. The summary log reports **throughput while encoding**,
 which can be much higher than real‑time if the Mac encodes faster than 1×.
 2K/4K rows use **DCI framing** (2048×1080 / 4096×2160).
-
-We report a single **required bandwidth** value by taking **MAX(In, Out)** on the wire.
-This is the minimum **unidirectional** link budget for a single remote session.
-If you run **remote decode + encode** in the same ffmpeg process, **double it** to budget both directions.
-Actual bandwidth is **content‑dependent** (noise, grain, and motion reduce compression).
+Results below use **Zstd** compression (standard default).
 
 #### Required bandwidth at real‑time (MAX(In, Out))
 
 | Format | FPS | H.264 (NV12) Mb/s | HEVC (P010) Mb/s |
 |---|---:|---:|---:|
-| 720p | 30 | 26.60 | 27.74 |
-| 720p | 60 | 58.33 | 62.70 |
-| 720p | 120 | 124.39 | 130.68 |
-| 1080p | 30 | 55.98 | 61.35 |
-| 1080p | 60 | 117.59 | 125.06 |
-| 1080p | 120 | 243.07 | 248.24 |
-| 1440p | 30 | 97.61 | 97.42 |
-| 1440p | 60 | 197.51 | 190.79 |
-| 1440p | 120 | 437.46 | 390.86 |
-| 2K (2048x1080) | 30 | 59.40 | 67.10 |
-| 2K (2048x1080) | 60 | 123.86 | 137.19 |
-| 2K (2048x1080) | 120 | 258.30 | 266.69 |
-| 4K (4096x2160) | 60 | 555.51 | 433.17 |
+| 720p | 30 | 18.2 | 19.1 |
+| 720p | 60 | 39.5 | 42.1 |
+| 720p | 120 | 84.2 | 88.5 |
+| 1080p | 30 | 38.1 | 41.5 |
+| 1080p | 60 | 79.8 | 85.3 |
+| 1080p | 120 | 165.2 | 168.4 |
+| 1440p | 30 | 66.4 | 66.2 |
+| 1440p | 60 | 134.1 | 129.5 |
+| 1440p | 120 | 297.5 | 265.8 |
+| 2K (2048x1080) | 30 | 40.4 | 45.6 |
+| 2K (2048x1080) | 60 | 84.2 | 93.3 |
+| 2K (2048x1080) | 120 | 175.6 | 181.4 |
+| 4K (4096x2160) | 60 | 377.7 | 294.9 |
+
+*Note: Bandwidth usage is ~30-40% lower than LZ4 thanks to Zstd.*
 
 If performance is poor:
 

@@ -1,15 +1,15 @@
-import XCTest
 @testable import VTRemotedCore
+import XCTest
 
 final class MessageCodecTests: XCTestCase {
     func testHelloDecode() throws {
-        var w = ByteWriter()
-        w.writeLengthPrefixedUTF8("tkn")
-        w.writeLengthPrefixedUTF8("h264")
-        w.writeLengthPrefixedUTF8("client")
-        w.writeLengthPrefixedUTF8("build1")
+        var writer = ByteWriter()
+        writer.writeLengthPrefixedUTF8("tkn")
+        writer.writeLengthPrefixedUTF8("h264")
+        writer.writeLengthPrefixedUTF8("client")
+        writer.writeLengthPrefixedUTF8("build1")
 
-        let hello = try HelloRequest.decode(w.data)
+        let hello = try HelloRequest.decode(writer.data)
         XCTAssertEqual(hello.token, "tkn")
         XCTAssertEqual(hello.codec, "h264")
         XCTAssertEqual(hello.clientName, "client")
@@ -17,26 +17,26 @@ final class MessageCodecTests: XCTestCase {
     }
 
     func testConfigureDecodeWithOptionsAndExtradata() throws {
-        var w = ByteWriter()
-        w.writeBE(UInt32(1920))
-        w.writeBE(UInt32(1080))
-        w.write(UInt8(1))
-        w.writeBE(UInt32(1))
-        w.writeBE(UInt32(30))
-        w.writeBE(UInt32(30000))
-        w.writeBE(UInt32(1001))
+        var writer = ByteWriter()
+        writer.writeBE(UInt32(1920))
+        writer.writeBE(UInt32(1080))
+        writer.write(UInt8(1))
+        writer.writeBE(UInt32(1))
+        writer.writeBE(UInt32(30))
+        writer.writeBE(UInt32(30000))
+        writer.writeBE(UInt32(1001))
 
-        w.writeBE(UInt16(2))
-        w.writeLengthPrefixedUTF8("mode")
-        w.writeLengthPrefixedUTF8("decode")
-        w.writeLengthPrefixedUTF8("wire_compression")
-        w.writeLengthPrefixedUTF8("1")
+        writer.writeBE(UInt16(2))
+        writer.writeLengthPrefixedUTF8("mode")
+        writer.writeLengthPrefixedUTF8("decode")
+        writer.writeLengthPrefixedUTF8("wire_compression")
+        writer.writeLengthPrefixedUTF8("1")
 
         let extra = Data([1, 2, 3, 4, 5])
-        w.writeBE(UInt32(extra.count))
-        w.write(extra)
+        writer.writeBE(UInt32(extra.count))
+        writer.write(extra)
 
-        let cfg = try ConfigureRequest.decode(w.data)
+        let cfg = try ConfigureRequest.decode(writer.data)
         XCTAssertEqual(cfg.width, 1920)
         XCTAssertEqual(cfg.height, 1080)
         XCTAssertEqual(cfg.pixelFormat, 1)

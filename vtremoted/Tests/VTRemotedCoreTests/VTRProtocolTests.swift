@@ -1,10 +1,10 @@
-import XCTest
 @testable import VTRemotedCore
+import XCTest
 
 final class VTRProtocolTests: XCTestCase {
     func testHeaderEncodeDecode() throws {
-        let h = VTRMessageHeader(type: VTRMessageType.ping.rawValue, length: 42)
-        let data = h.encoded()
+        let header = VTRMessageHeader(type: VTRMessageType.ping.rawValue, length: 42)
+        let data = header.encoded()
         XCTAssertEqual(data.count, VTRProtocol.headerSize)
         let decoded = try VTRMessageHeader.decode(data)
         XCTAssertEqual(decoded.type, VTRMessageType.ping.rawValue)
@@ -12,11 +12,11 @@ final class VTRProtocolTests: XCTestCase {
     }
 
     func testHeaderBadMagicThrows() {
-        var w = ByteWriter()
-        w.writeBE(UInt32(0xDEADBEEF))
-        w.writeBE(VTRProtocol.version)
-        w.writeBE(VTRMessageType.ping.rawValue)
-        w.writeBE(UInt32(0))
-        XCTAssertThrowsError(try VTRMessageHeader.decode(w.data))
+        var writer = ByteWriter()
+        writer.writeBE(UInt32(0xDEAD_BEEF))
+        writer.writeBE(VTRProtocol.version)
+        writer.writeBE(VTRMessageType.ping.rawValue)
+        writer.writeBE(UInt32(0))
+        XCTAssertThrowsError(try VTRMessageHeader.decode(writer.data))
     }
 }

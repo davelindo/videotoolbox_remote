@@ -27,7 +27,12 @@ public struct VTRMessageHeader: Equatable, Sendable {
     public var type: UInt16
     public var length: UInt32
 
-    public init(magic: UInt32 = VTRProtocol.magic, version: UInt16 = VTRProtocol.version, type: UInt16, length: UInt32) {
+    public init(
+        magic: UInt32 = VTRProtocol.magic,
+        version: UInt16 = VTRProtocol.version,
+        type: UInt16,
+        length: UInt32
+    ) {
         self.magic = magic
         self.version = version
         self.type = type
@@ -35,23 +40,23 @@ public struct VTRMessageHeader: Equatable, Sendable {
     }
 
     public func encoded() -> Data {
-        var w = ByteWriter(reserveCapacity: VTRProtocol.headerSize)
-        w.writeBE(magic)
-        w.writeBE(version)
-        w.writeBE(type)
-        w.writeBE(length)
-        return w.data
+        var writer = ByteWriter(reserveCapacity: VTRProtocol.headerSize)
+        writer.writeBE(magic)
+        writer.writeBE(version)
+        writer.writeBE(type)
+        writer.writeBE(length)
+        return writer.data
     }
 
     public static func decode(_ data: Data) throws -> VTRMessageHeader {
         guard data.count == VTRProtocol.headerSize else {
             throw VTRemotedError.protocolViolation("header size mismatch")
         }
-        var r = ByteReader(data)
-        let magic = try r.readBEUInt32()
-        let version = try r.readBEUInt16()
-        let type = try r.readBEUInt16()
-        let length = try r.readBEUInt32()
+        var reader = ByteReader(data)
+        let magic = try reader.readBEUInt32()
+        let version = try reader.readBEUInt16()
+        let type = try reader.readBEUInt16()
+        let length = try reader.readBEUInt32()
         guard magic == VTRProtocol.magic else {
             throw VTRemotedError.protocolViolation("bad magic")
         }

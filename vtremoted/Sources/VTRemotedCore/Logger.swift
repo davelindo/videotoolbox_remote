@@ -1,9 +1,9 @@
 import Foundation
 
 #if os(Linux)
-import Glibc
+    import Glibc
 #else
-import Darwin
+    import Darwin
 #endif
 
 public enum LogLevel: Int, Sendable {

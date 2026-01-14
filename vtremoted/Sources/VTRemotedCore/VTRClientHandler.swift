@@ -1,9 +1,11 @@
 import Foundation
 
 public final class VTRClientHandler: @unchecked Sendable {
-    private let io: VTRMessageIO
+    private let messageIO: VTRMessageIO
     private let expectedToken: String
     private let logger: Logger
+    public typealias SessionFactory = (@escaping MessageSender) -> CodecSession
+    private let sessionFactory: SessionFactory
 
     private var codec: VideoCodec = .h264
     private var clientName: String = "unknown"
@@ -11,10 +13,16 @@ public final class VTRClientHandler: @unchecked Sendable {
     private var configuration: SessionConfiguration?
     private var codecSession: (any CodecSession)?
 
-    public init(io: VTRMessageIO, expectedToken: String, logger: Logger = .shared) {
-        self.io = io
+    public init(
+        io messageIO: VTRMessageIO,
+        expectedToken: String,
+        logger: Logger = .shared,
+        sessionFactory: @escaping SessionFactory = CodecSessionFactory.make
+    ) {
+        self.messageIO = messageIO
         self.expectedToken = expectedToken
         self.logger = logger
+        self.sessionFactory = sessionFactory
     }
 
     public func run() {
@@ -35,7 +43,7 @@ public final class VTRClientHandler: @unchecked Sendable {
     }
 
     private func handshake() throws {
-        let (header, payload) = try io.readMessage(timeoutSeconds: 10)
+        let (header, payload) = try messageIO.readMessage(timeoutSeconds: 10)
         stats.bytesIn += Int64(VTRProtocol.headerSize + payload.count)
         guard header.type == VTRMessageType.hello.rawValue else {
             throw VTRemotedError.protocolViolation("expected HELLO")
@@ -51,7 +59,7 @@ public final class VTRClientHandler: @unchecked Sendable {
         let ack = HelloAckResponse(status: status, supportedCodecs: ["h264", "hevc"], warnings: 0)
         let ackBody = ack.encode()
         stats.bytesOut += Int64(VTRProtocol.headerSize + ackBody.count)
-        try io.send(type: .helloAck, body: ackBody)
+        try messageIO.send(type: .helloAck, body: ackBody)
 
         if !authed {
             logger.info("HELLO authfail from \(hello.clientName) codec=\(hello.codec)")
@@ -61,7 +69,7 @@ public final class VTRClientHandler: @unchecked Sendable {
     }
 
     private func configure() throws {
-        let (header, payload) = try io.readMessage(timeoutSeconds: 10)
+        let (header, payload) = try messageIO.readMessage(timeoutSeconds: 10)
         stats.bytesIn += Int64(VTRProtocol.headerSize + payload.count)
         guard header.type == VTRMessageType.configure.rawValue else {
             throw VTRemotedError.protocolViolation("expected CONFIGURE")
@@ -69,29 +77,34 @@ public final class VTRClientHandler: @unchecked Sendable {
         let request = try ConfigureRequest.decode(payload)
         let config = try SessionConfiguration(codec: codec, request: request)
 
-        if config.options.wireCompression != 0 && config.options.wireCompression != 1 {
-            let err = ErrorResponse(code: 1, message: "unsupported wire_compression=\(config.options.wireCompression)")
+        let wireComp = config.options.wireCompression
+        if wireComp != 0, wireComp != 1, wireComp != 2 {
+            let err = ErrorResponse(
+                code: 1,
+                message: "unsupported wire_compression=\(wireComp)"
+            )
             let body = err.encode()
             stats.bytesOut += Int64(VTRProtocol.headerSize + body.count)
-            try io.send(type: .error, body: body)
+            try messageIO.send(type: .error, body: body)
             throw VTRemotedError.unsupported("wire_compression")
         }
 
         logger.info(
-            "CONFIGURE req mode=\(config.mode.rawValue) codec=\(config.codec.rawValue) \(config.width)x\(config.height) " +
+            "CONFIGURE req mode=\(config.mode.rawValue) codec=\(config.codec.rawValue) " +
+                "\(config.width)x\(config.height) " +
                 "pix=\(config.pixelFormat) tb=\(config.timebase.num)/\(config.timebase.den) " +
                 "fr=\(config.frameRate.num)/\(config.frameRate.den) br=\(config.options.bitrate) " +
                 "gop=\(config.options.gop) wc=\(config.options.wireCompression)"
         )
 
         let mode = config.mode
-        let session = CodecSessionFactory.make { [weak self] type, body in
+        let session = sessionFactory { [weak self] type, body in
             guard let self else { return }
-            self.stats.bytesOut += Int64(VTRProtocol.headerSize + body.count)
-            if type == .packet { self.stats.packetsOut += 1; self.stats.recordOutput() }
-            if type == .frame { self.stats.framesOut += 1 }
-            self.stats.maybeReport(mode: mode, logger: self.logger, intervalSeconds: 0.25)
-            try self.io.send(type: type, body: body)
+            stats.bytesOut += Int64(VTRProtocol.headerSize + body.count)
+            if type == .packet { stats.packetsOut += 1; stats.recordOutput() }
+            if type == .frame { stats.framesOut += 1 }
+            stats.maybeReport(mode: mode, logger: logger, intervalSeconds: 0.25)
+            try messageIO.send(type: type, body: body)
         }
         codecSession = session
         configuration = config
@@ -100,11 +113,13 @@ public final class VTRClientHandler: @unchecked Sendable {
         let resp = ConfigureAckResponse(status: 0, extradata: extradata, pixelFormat: config.pixelFormat, warnings: 0)
         let body = resp.encode()
         stats.bytesOut += Int64(VTRProtocol.headerSize + body.count)
-        try io.send(type: .configureAck, body: body)
+        try messageIO.send(type: .configureAck, body: body)
 
         logger.info(
-            "CONFIGURE ok mode=\(config.mode.rawValue) codec=\(config.codec.rawValue) \(config.width)x\(config.height) " +
-                "pixfmt=\(config.pixelFormat) tb=\(config.timebase.num)/\(config.timebase.den) br=\(config.options.bitrate) " +
+            "CONFIGURE ok mode=\(config.mode.rawValue) codec=\(config.codec.rawValue) " +
+                "\(config.width)x\(config.height) " +
+                "pixfmt=\(config.pixelFormat) tb=\(config.timebase.num)/\(config.timebase.den) " +
+                "br=\(config.options.bitrate) " +
                 "gop=\(config.options.gop) wc=\(config.options.wireCompression)"
         )
     }
@@ -115,7 +130,7 @@ public final class VTRClientHandler: @unchecked Sendable {
         }
 
         while true {
-            let (header, payload) = try io.readMessage(timeoutSeconds: 10)
+            let (header, payload) = try messageIO.readMessage(timeoutSeconds: 10)
             stats.bytesIn += Int64(VTRProtocol.headerSize + payload.count)
             stats.maybeReport(mode: configuration.mode, logger: logger, intervalSeconds: 0.25)
             guard let type = VTRMessageType(rawValue: header.type) else { continue }
@@ -130,14 +145,14 @@ public final class VTRClientHandler: @unchecked Sendable {
                 try codecSession.handlePacketMessage(payload)
             case .flush:
                 try codecSession.flush()
-                try io.send(type: .done, body: Data())
+                try messageIO.send(type: .done, body: Data())
                 let msg = configuration.mode == .encode
                     ? "DONE client=\(clientName) frames=\(stats.framesIn) packets=\(stats.packetsOut)"
                     : "DONE client=\(clientName) packets=\(stats.packetsIn) frames=\(stats.framesOut)"
                 logger.info(msg)
                 return
             case .ping:
-                try io.send(type: .pong, body: Data())
+                try messageIO.send(type: .pong, body: Data())
             default:
                 break
             }

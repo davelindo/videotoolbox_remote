@@ -149,6 +149,12 @@ typedef struct VTRemoteKV {
     const char *value;
 } VTRemoteKV;
 
+typedef struct VTRemoteSideData {
+    uint32_t type;
+    uint32_t size;
+    const uint8_t *data;
+} VTRemoteSideData;
+
 /* High-level payload writers (helpers for encoders). */
 /* Caller must initialize VTRemoteWBuf via vtremote_wbuf_init before first use. */
 int vtremote_payload_hello(VTRemoteWBuf *b,
@@ -171,7 +177,9 @@ int vtremote_payload_frame(VTRemoteWBuf *b,
                           const uint8_t *const *planes,
                           const uint32_t *strides,
                           const uint32_t *heights,
-                          const uint32_t *sizes);
+                          const uint32_t *sizes,
+                          const VTRemoteSideData *side_data,
+                          uint8_t side_data_count);
 
 int vtremote_payload_packet(VTRemoteWBuf *b,
                            int64_t pts, int64_t dts, int64_t duration, uint32_t flags,
@@ -202,6 +210,8 @@ typedef struct VTRemoteFrameView {
     uint32_t flags;
     uint8_t plane_count;
     VTRemotePlaneView planes[4];
+    uint8_t side_data_count;
+    VTRemoteSideData side_data[8];
 } VTRemoteFrameView;
 
 int vtremote_parse_frame(const uint8_t *payload, int payload_size, VTRemoteFrameView *out);

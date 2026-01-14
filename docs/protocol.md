@@ -55,7 +55,7 @@ UTF‑8. Prefix with `uint16_t len`, followed by `len` bytes (no NUL).
 ### Options map
 `uint16_t count` followed by repeated key/value string pairs.
 Mandatory key: `mode` (`encode` or `decode`).
-Optional key: `wire_compression` (`0`=none, `1`=lz4). When set to `1`, FRAME plane data is LZ4-compressed. Client default is `lz4` unless overridden.
+Optional key: `wire_compression` (`0`=none, `1`=lz4, `2`=zstd). When set to `1` or `2`, FRAME plane data is compressed. Client default is `zstd` (2) unless overridden.
 
 ### CONFIGURE extradata
 `uint32_t extradata_len` + `extradata_len` bytes. For decode, send codec config
@@ -67,7 +67,14 @@ records (avcC/hvcC) when available.
 ### FRAME planes
 `uint8_t plane_count`, then for each plane: `uint32_t stride`, `uint32_t height`, `uint32_t data_len`, `data`.  
 MVP requires plane_count=2 (NV12).
-If `wire_compression=1`, `data` is LZ4-compressed and must decompress to `stride * height` bytes for that plane.
+If `wire_compression` is active, `data` is compressed and must decompress to `stride * height` bytes for that plane. Zstd (2) is preferred for better compression efficiency.
+
+### FRAME side data
+Following the planes, `uint8_t side_data_count` (new in v1 late-addition).
+For each side data item:
+- `uint32_t type` (matches `AVFrameSideDataType` enum in FFmpeg, e.g., `A53_CC=2`)
+- `uint32_t size`
+- `data` bytes
 
 ### PACKET data
 - `uint32_t data_len` + `data` (Annex B NAL units).

@@ -9,8 +9,10 @@ public struct LatencyTracker: Sendable {
     public private(set) var maxNanoseconds: UInt64 = 0
     public private(set) var sampleCount: UInt64 = 0
 
+    public var isEmpty: Bool { count == 0 } // swiftlint:disable:this empty_count
+
     public init(initialCapacity: Int = 64) {
-        self.times = Array(repeating: 0, count: max(1, initialCapacity))
+        times = Array(repeating: 0, count: max(1, initialCapacity))
     }
 
     public mutating func submit(at nowNanoseconds: UInt64) {
@@ -23,7 +25,7 @@ public struct LatencyTracker: Sendable {
     }
 
     public mutating func output(at nowNanoseconds: UInt64) {
-        guard count > 0 else { return }
+        guard !isEmpty else { return }
         let start = times[head]
         head = (head + 1) % times.count
         count -= 1
@@ -35,13 +37,13 @@ public struct LatencyTracker: Sendable {
     }
 
     public mutating func discardOne() {
-        guard count > 0 else { return }
+        guard !isEmpty else { return }
         head = (head + 1) % times.count
         count -= 1
     }
 
     public var averageMilliseconds: Double {
-        guard sampleCount > 0 else { return 0 }
+        guard sampleCount != 0 else { return 0 }
         return Double(sumNanoseconds) / Double(sampleCount) / 1_000_000.0
     }
 

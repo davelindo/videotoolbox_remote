@@ -8,14 +8,14 @@ public enum VTRemotedError: Error, CustomStringConvertible, Sendable {
 
     public var description: String {
         switch self {
-        case .protocolViolation(let msg):
-            return "Protocol violation: \(msg)"
-        case .ioError(let code, let message):
-            return "I/O error \(code): \(message)"
-        case .unsupported(let msg):
-            return "Unsupported: \(msg)"
+        case let .protocolViolation(msg):
+            "Protocol violation: \(msg)"
+        case let .ioError(code, message):
+            "I/O error \(code): \(message)"
+        case let .unsupported(msg):
+            "Unsupported: \(msg)"
         case .videoToolboxUnavailable:
-            return "VideoToolbox is unavailable on this platform"
+            "VideoToolbox is unavailable on this platform"
         }
     }
 }

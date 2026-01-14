@@ -23,14 +23,14 @@ public struct SessionConfiguration: Sendable {
 
     public init(codec: VideoCodec, request: ConfigureRequest) throws {
         self.codec = codec
-        self.mode = SessionMode(rawValue: request.options["mode"] ?? "encode") ?? .encode
-        self.width = request.width
-        self.height = request.height
-        self.pixelFormat = request.pixelFormat
-        self.timebase = request.timebase
-        self.frameRate = request.frameRate
-        self.options = SessionOptions(options: request.options)
-        self.configExtradata = request.extradata
+        mode = SessionMode(rawValue: request.options["mode"] ?? "encode") ?? .encode
+        width = request.width
+        height = request.height
+        pixelFormat = request.pixelFormat
+        timebase = request.timebase
+        frameRate = request.frameRate
+        options = SessionOptions(options: request.options)
+        configExtradata = request.extradata
     }
 }
 

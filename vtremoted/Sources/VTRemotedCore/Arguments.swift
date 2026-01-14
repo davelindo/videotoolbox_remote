@@ -10,19 +10,19 @@ public struct Arguments: Equatable, Sendable {
 
     public static func parse(_ argv: [String]) -> Arguments {
         var args = Arguments()
-        var it = argv.makeIterator()
-        _ = it.next()
-        while let arg = it.next() {
+        var iterator = argv.makeIterator()
+        _ = iterator.next()
+        while let arg = iterator.next() {
             switch arg {
             case "--listen":
-                if let v = it.next() { args.listen = v }
+                if let value = iterator.next() { args.listen = value }
             case "--token":
-                if let v = it.next() { args.token = v }
+                if let value = iterator.next() { args.token = value }
             case "--log-level":
-                if let v = it.next() {
-                    let lower = v.lowercased()
-                    if let n = Int(lower), let lvl = LogLevel(rawValue: n) {
-                        args.logLevel = lvl
+                if let value = iterator.next() {
+                    let lower = value.lowercased()
+                    if let levelInt = Int(lower), let level = LogLevel(rawValue: levelInt) {
+                        args.logLevel = level
                     } else if lower == "debug" {
                         args.logLevel = .debug
                     } else if lower == "info" {

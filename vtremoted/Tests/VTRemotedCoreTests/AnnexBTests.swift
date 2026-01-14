@@ -1,18 +1,18 @@
-import XCTest
 @testable import VTRemotedCore
+import XCTest
 
 final class AnnexBTests: XCTestCase {
     func testStripAtomHeaderIfPresent() {
-        var d = Data()
-        d.append(contentsOf: [0, 0, 0, 16])
-        d.append("avcC".data(using: .ascii)!)
-        d.append(contentsOf: [1, 2, 3, 4, 5, 6, 7, 8])
+        var atomData = Data()
+        atomData.append(contentsOf: [0, 0, 0, 16])
+        atomData.append("avcC".data(using: .ascii)!)
+        atomData.append(contentsOf: [1, 2, 3, 4, 5, 6, 7, 8])
 
-        let stripped = AnnexB.stripAtomHeaderIfPresent(d, fourCC: "avcC")
+        let stripped = AnnexB.stripAtomHeaderIfPresent(atomData, fourCC: "avcC")
         XCTAssertEqual(stripped, Data([1, 2, 3, 4, 5, 6, 7, 8]))
 
-        let unchanged = AnnexB.stripAtomHeaderIfPresent(d, fourCC: "hvcC")
-        XCTAssertEqual(unchanged, d)
+        let unchanged = AnnexB.stripAtomHeaderIfPresent(atomData, fourCC: "hvcC")
+        XCTAssertEqual(unchanged, atomData)
     }
 
     func testSplitNALUnits() {
@@ -31,8 +31,8 @@ final class AnnexBTests: XCTestCase {
         let nal = Data([0x65, 0xAA, 0xBB])
         var annex = Data([0, 0, 0, 1])
         annex.append(nal)
-        let lp = AnnexB.toLengthPrefixed(annex, lengthSize: 4)
-        XCTAssertEqual(lp.prefix(4), Data([0, 0, 0, 3]))
-        XCTAssertEqual(lp.dropFirst(4), nal)
+        let lengthPrefixed = AnnexB.toLengthPrefixed(annex, lengthSize: 4)
+        XCTAssertEqual(lengthPrefixed.prefix(4), Data([0, 0, 0, 3]))
+        XCTAssertEqual(lengthPrefixed.dropFirst(4), nal)
     }
 }

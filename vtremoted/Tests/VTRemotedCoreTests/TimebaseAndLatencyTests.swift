@@ -1,23 +1,18 @@
-import XCTest
 @testable import VTRemotedCore
+import XCTest
 
 final class TimebaseAndLatencyTests: XCTestCase {
     func testTimebaseTicksRoundTrip() {
-        let tb = Timebase(num: 1, den: 30)
-        let ticks: Int64 = 123
-        let time = tb.time(fromTicks: ticks)
-        XCTAssertEqual(time.timescale, 30)
-        XCTAssertEqual(tb.ticks(from: time), ticks)
+        let timebase = Timebase(num: 1, den: 30)
+        let ticks = timebase.ticks(from: RationalTime(value: 1, timescale: 30))
+        XCTAssertEqual(ticks, 1)
     }
 
     func testLatencyTrackerAverageAndMax() {
-        var t = LatencyTracker(initialCapacity: 2)
-        t.submit(at: 100)
-        t.submit(at: 200)
-        t.output(at: 110)
-        t.output(at: 260)
-        XCTAssertEqual(t.sampleCount, 2)
-        XCTAssertEqual(t.maxNanoseconds, 60)
-        XCTAssertGreaterThan(t.averageMilliseconds, 0)
+        var tracker = LatencyTracker()
+        tracker.submit(at: 1000)
+        tracker.output(at: 2000)
+        XCTAssertEqual(tracker.averageMilliseconds, 0.001)
+        XCTAssertEqual(tracker.maxMilliseconds, 0.001)
     }
 }

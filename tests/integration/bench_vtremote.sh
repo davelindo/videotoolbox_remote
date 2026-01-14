@@ -100,7 +100,7 @@ run_remote_case() {
   if [[ -n "$WIRE_COMP" ]]; then
     args+=( -vt_remote_wire_compression "$WIRE_COMP" )
   fi
-  run_case "$label" "$size" "$rate" "$out" "$encoder" "$pix_fmt" "${args[@]}"
+  run_case "$label" "$size" "$rate" "$out" "$encoder" "$pix_fmt" ${args[@]+"${args[@]}"}
 }
 
 run_remote_decode_case() {
@@ -115,7 +115,7 @@ run_remote_decode_case() {
     args+=( -vt_remote_wire_compression "$WIRE_COMP" )
   fi
   "$FFMPEG_BIN" -v warning -xerror \
-    -vt_remote_host "127.0.0.1:${PORT}" "${args[@]}" \
+    -vt_remote_host "127.0.0.1:${PORT}" ${args[@]+"${args[@]}"} \
     -c:v "$decoder" -i "$in_file" -f null - >/tmp/vtremote_bench_ffmpeg.log 2>&1
   echo "decode ${label} ${decoder} ok"
 }

@@ -5,7 +5,7 @@
 ## Build
 
 ```bash
-brew install lz4 pkg-config
+brew install lz4 zstd pkg-config
 swift build -c release
 ```
 

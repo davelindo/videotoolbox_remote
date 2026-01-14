@@ -1,5 +1,5 @@
-import XCTest
 @testable import VTRemotedCore
+import XCTest
 
 final class ArgumentsTests: XCTestCase {
     func testParseArgs() {
@@ -8,7 +8,7 @@ final class ArgumentsTests: XCTestCase {
             "--listen", "127.0.0.1:9999",
             "--token", "abc",
             "--log-level", "2",
-            "--once",
+            "--once"
         ]
         let args = Arguments.parse(argv)
         XCTAssertEqual(args.listen, "127.0.0.1:9999")

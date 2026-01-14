@@ -33,6 +33,7 @@
 #include "vtremote_dec_common.h"
 #include "vtremote_proto.h"
 #include <lz4.h>
+#include <zstd.h>
 
 #if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
 #define VTR_CLOSE_SOCKET closesocket
@@ -486,16 +487,13 @@ int ff_vtremote_dec_init(AVCodecContext *avctx)
     s->bytes_sent = 0;
     s->bytes_recv = 0;
     vtremote_wbuf_init(&s->pkt_buf);
-    s->lz4_buf[0] = s->lz4_buf[1] = NULL;
-    s->lz4_buf_cap[0] = s->lz4_buf_cap[1] = 0;
+    s->comp_buf[0] = s->comp_buf[1] = NULL;
+    s->comp_buf_cap[0] = s->comp_buf_cap[1] = 0;
+    s->zstd_dctx = NULL;
 
     if (!s->host) {
         av_log(avctx, AV_LOG_ERROR, "vt_remote_host is required\n");
         return AVERROR(EINVAL);
-    }
-    if (s->wire_compression == 2) {
-        av_log(avctx, AV_LOG_ERROR, "vt_remote_wire_compression=zstd not supported\n");
-        return AVERROR(ENOSYS);
     }
 
     if (vtremote_log_enabled(s, AV_LOG_VERBOSE)) {
@@ -522,8 +520,12 @@ int ff_vtremote_dec_close(AVCodecContext *avctx)
         VTR_CLOSE_SOCKET(s->fd);
     vtremote_net_close();
     vtremote_wbuf_free(&s->pkt_buf);
-    av_freep(&s->lz4_buf[0]);
-    av_freep(&s->lz4_buf[1]);
+    av_freep(&s->comp_buf[0]);
+    av_freep(&s->comp_buf[1]);
+    if (s->zstd_dctx) {
+        ZSTD_freeDCtx(s->zstd_dctx);
+        s->zstd_dctx = NULL;
+    }
     if (vtremote_log_enabled(s, AV_LOG_INFO) && s->start_time_us > 0) {
         int64_t elapsed_us = av_gettime_relative() - s->start_time_us;
         double elapsed = elapsed_us > 0 ? (double)elapsed_us / 1000000.0 : 0.0;
@@ -562,10 +564,20 @@ static int fill_frame_from_view(AVCodecContext *avctx, AVFrame *frame, const VTR
             memcpy(dst + y * dst_stride, src + y * src_stride, row_bytes);
         }
     }
+    
+    // Add side data if present (V1 extension)
+    for (int i = 0; i < view->side_data_count; i++) {
+        enum AVFrameSideDataType type = (enum AVFrameSideDataType)view->side_data[i].type;
+        AVFrameSideData *sd = av_frame_new_side_data(frame, type, view->side_data[i].size);
+        if (sd) {
+            memcpy(sd->data, view->side_data[i].data, view->side_data[i].size);
+        }
+    }
+    
     return 0;
 }
 
-static int decompress_frame_lz4(VTRemoteDecContext *s, const VTRemoteFrameView *in, VTRemoteFrameView *out)
+static int decompress_frame(VTRemoteDecContext *s, const VTRemoteFrameView *in, VTRemoteFrameView *out)
 {
     if (!s || !in || !out)
         return AVERROR(EINVAL);
@@ -576,20 +588,32 @@ static int decompress_frame_lz4(VTRemoteDecContext *s, const VTRemoteFrameView *
         int expected = (int)in->planes[i].stride * (int)in->planes[i].height;
         if (expected <= 0)
             return AVERROR_INVALIDDATA;
-        if (expected > s->lz4_buf_cap[i]) {
-            uint8_t *tmp = av_realloc(s->lz4_buf[i], expected);
+        if (expected > s->comp_buf_cap[i]) {
+            uint8_t *tmp = av_realloc(s->comp_buf[i], expected);
             if (!tmp)
                 return AVERROR(ENOMEM);
-            s->lz4_buf[i] = tmp;
-            s->lz4_buf_cap[i] = expected;
+            s->comp_buf[i] = tmp;
+            s->comp_buf_cap[i] = expected;
         }
-        int decoded = LZ4_decompress_safe((const char *)in->planes[i].data,
-                                          (char *)s->lz4_buf[i],
-                                          in->planes[i].data_len,
-                                          expected);
-        if (decoded != expected)
-            return AVERROR_INVALIDDATA;
-        out->planes[i].data = s->lz4_buf[i];
+        
+        if (s->wire_compression == 1) {
+            int decoded = LZ4_decompress_safe((const char *)in->planes[i].data,
+                                              (char *)s->comp_buf[i],
+                                              in->planes[i].data_len,
+                                              expected);
+            if (decoded != expected)
+                return AVERROR_INVALIDDATA;
+        } else {
+            if (!s->zstd_dctx) {
+                s->zstd_dctx = ZSTD_createDCtx();
+                if (!s->zstd_dctx) return AVERROR(ENOMEM);
+            }
+            size_t ret = ZSTD_decompressDCtx(s->zstd_dctx, s->comp_buf[i], expected,
+                                             in->planes[i].data, in->planes[i].data_len);
+            if (ZSTD_isError(ret) || ret != (size_t)expected)
+                return AVERROR_INVALIDDATA;
+        }
+        out->planes[i].data = s->comp_buf[i];
         out->planes[i].data_len = expected;
     }
     return 0;
@@ -646,9 +670,9 @@ int ff_vtremote_decode(AVCodecContext *avctx, AVFrame *frame, int *got_frame, AV
                 av_free(payload);
                 return ret;
             }
-            if (s->wire_compression == 1) {
+            if (s->wire_compression == 1 || s->wire_compression == 2) {
                 VTRemoteFrameView dec_view;
-                ret = decompress_frame_lz4(s, &view, &dec_view);
+                ret = decompress_frame(s, &view, &dec_view);
                 if (ret < 0) {
                     av_free(payload);
                     return ret;

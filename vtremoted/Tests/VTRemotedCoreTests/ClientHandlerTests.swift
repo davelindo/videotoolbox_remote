@@ -1,5 +1,5 @@
-import XCTest
 @testable import VTRemotedCore
+import XCTest
 
 final class ClientHandlerTests: XCTestCase {
     private final class FakeIO: VTRMessageIO, @unchecked Sendable {
@@ -27,64 +27,64 @@ final class ClientHandlerTests: XCTestCase {
     func testHappyPathEncodeHandshakeAndFlush() {
         let helloPayload = makeHello(token: "", codec: "h264")
         let configurePayload = makeConfigure(mode: "encode", wireCompression: "0")
-        let io = FakeIO(incoming: [
+        let fakeIO = FakeIO(incoming: [
             (.hello, helloPayload),
             (.configure, configurePayload),
-            (.flush, Data()),
+            (.flush, Data())
         ])
 
         Logger.shared.level = .error
-        let handler = VTRClientHandler(io: io, expectedToken: "")
+        let handler = VTRClientHandler(io: fakeIO, expectedToken: "")
         handler.run()
 
-        XCTAssertEqual(io.sent.count, 3)
-        XCTAssertEqual(io.sent[0].0, .helloAck)
-        XCTAssertEqual(io.sent[1].0, .configureAck)
-        XCTAssertEqual(io.sent[2].0, .done)
-        XCTAssertEqual(io.sent[0].1.first, 0)
+        XCTAssertEqual(fakeIO.sent.count, 3)
+        XCTAssertEqual(fakeIO.sent[0].0, .helloAck)
+        XCTAssertEqual(fakeIO.sent[1].0, .configureAck)
+        XCTAssertEqual(fakeIO.sent[2].0, .done)
+        XCTAssertEqual(fakeIO.sent[0].1.first, 0)
     }
 
     func testAuthFailStopsAfterHelloAck() {
         let helloPayload = makeHello(token: "bad", codec: "h264")
-        let io = FakeIO(incoming: [
-            (.hello, helloPayload),
+        let fakeIO = FakeIO(incoming: [
+            (.hello, helloPayload)
         ])
 
         Logger.shared.level = .error
-        let handler = VTRClientHandler(io: io, expectedToken: "good")
+        let handler = VTRClientHandler(io: fakeIO, expectedToken: "good")
         handler.run()
 
-        XCTAssertEqual(io.sent.count, 1)
-        XCTAssertEqual(io.sent[0].0, .helloAck)
-        XCTAssertEqual(io.sent[0].1.first, 2)
+        XCTAssertEqual(fakeIO.sent.count, 1)
+        XCTAssertEqual(fakeIO.sent[0].0, .helloAck)
+        XCTAssertEqual(fakeIO.sent[0].1.first, 2)
     }
 }
 
 private func makeHello(token: String, codec: String) -> Data {
-    var w = ByteWriter()
-    w.writeLengthPrefixedUTF8(token)
-    w.writeLengthPrefixedUTF8(codec)
-    w.writeLengthPrefixedUTF8("client")
-    w.writeLengthPrefixedUTF8("build")
-    return w.data
+    var writer = ByteWriter()
+    writer.writeLengthPrefixedUTF8(token)
+    writer.writeLengthPrefixedUTF8(codec)
+    writer.writeLengthPrefixedUTF8("client")
+    writer.writeLengthPrefixedUTF8("build")
+    return writer.data
 }
 
 private func makeConfigure(mode: String, wireCompression: String) -> Data {
-    var w = ByteWriter()
-    w.writeBE(UInt32(64))
-    w.writeBE(UInt32(64))
-    w.write(UInt8(1))
-    w.writeBE(UInt32(1))
-    w.writeBE(UInt32(30))
-    w.writeBE(UInt32(30))
-    w.writeBE(UInt32(1))
+    var writer = ByteWriter()
+    writer.writeBE(UInt32(64))
+    writer.writeBE(UInt32(64))
+    writer.write(UInt8(1))
+    writer.writeBE(UInt32(1))
+    writer.writeBE(UInt32(30))
+    writer.writeBE(UInt32(30))
+    writer.writeBE(UInt32(1))
 
-    w.writeBE(UInt16(2))
-    w.writeLengthPrefixedUTF8("mode")
-    w.writeLengthPrefixedUTF8(mode)
-    w.writeLengthPrefixedUTF8("wire_compression")
-    w.writeLengthPrefixedUTF8(wireCompression)
+    writer.writeBE(UInt16(2))
+    writer.writeLengthPrefixedUTF8("mode")
+    writer.writeLengthPrefixedUTF8(mode)
+    writer.writeLengthPrefixedUTF8("wire_compression")
+    writer.writeLengthPrefixedUTF8(wireCompression)
 
-    w.writeBE(UInt32(0))
-    return w.data
+    writer.writeBE(UInt32(0))
+    return writer.data
 }

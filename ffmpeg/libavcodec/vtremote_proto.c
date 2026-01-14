@@ -298,7 +298,9 @@ int vtremote_payload_frame(VTRemoteWBuf *b,
                           const uint8_t *const *planes,
                           const uint32_t *strides,
                           const uint32_t *heights,
-                          const uint32_t *sizes)
+                          const uint32_t *sizes,
+                          const VTRemoteSideData *side_data,
+                          uint8_t side_data_count)
 {
     if (!planes || !strides || !heights || !sizes)
         return AVERROR(EINVAL);
@@ -320,6 +322,18 @@ int vtremote_payload_frame(VTRemoteWBuf *b,
         if (ret < 0)
             return ret;
     }
+    
+    if (side_data_count > 0 && side_data) {
+        ret |= vtremote_wbuf_put_u8(b, side_data_count);
+        for (int i = 0; i < side_data_count; i++) {
+            ret |= vtremote_wbuf_put_u32(b, side_data[i].type);
+            ret |= vtremote_wbuf_put_u32(b, side_data[i].size);
+            if (ret < 0) return ret;
+            ret |= vtremote_wbuf_put_bytes(b, side_data[i].data, (int)side_data[i].size);
+            if (ret < 0) return ret;
+        }
+    }
+    
     return ret;
 }
 
@@ -408,5 +422,31 @@ int vtremote_parse_frame(const uint8_t *payload, int payload_size, VTRemoteFrame
         out->planes[i].data = r.data + r.pos;
         r.pos += data_len;
     }
+    
+    if (r.pos < r.size) {
+        uint8_t sd_count = 0;
+        ret |= vtremote_rbuf_read_u8(&r, &sd_count);
+        if (ret < 0) return ret;
+        
+        out->side_data_count = sd_count > 8 ? 8 : sd_count;
+        
+        for (int i = 0; i < sd_count; i++) {
+            uint32_t type, size;
+            ret |= vtremote_rbuf_read_u32(&r, &type);
+            ret |= vtremote_rbuf_read_u32(&r, &size);
+            if (ret < 0) return ret;
+            if (size > (uint32_t)(r.size - r.pos)) return AVERROR_INVALIDDATA;
+            
+            if (i < 8) {
+                out->side_data[i].type = type;
+                out->side_data[i].size = size;
+                out->side_data[i].data = r.data + r.pos;
+            }
+            r.pos += size;
+        }
+    } else {
+        out->side_data_count = 0;
+    }
+    
     return 0;
 }

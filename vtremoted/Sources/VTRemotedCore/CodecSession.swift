@@ -19,9 +19,9 @@ public typealias MessageSender = (VTRMessageType, Data) throws -> Void
 public enum CodecSessionFactory {
     public static func make(sender: @escaping MessageSender) -> CodecSession {
         #if canImport(VideoToolbox)
-        return VideoToolboxCodecSession(sender: sender)
+            return VideoToolboxCodecSession(sender: sender)
         #else
-        return StubCodecSession(sender: sender)
+            return StubCodecSession(sender: sender)
         #endif
     }
 }

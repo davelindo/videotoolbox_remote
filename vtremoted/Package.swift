@@ -20,9 +20,18 @@ let package = Package(
                 .apt(["liblz4-dev"])
             ]
         ),
+        .systemLibrary(
+            name: "CZstd",
+            path: "Sources/CZstd",
+            pkgConfig: "libzstd",
+            providers: [
+                .brew(["zstd"]),
+                .apt(["libzstd-dev"])
+            ]
+        ),
         .target(
             name: "VTRemotedCore",
-            dependencies: ["CLZ4"],
+            dependencies: ["CLZ4", "CZstd"],
             path: "Sources/VTRemotedCore",
             swiftSettings: [
                 .define("VTR_SWIFT_PACKAGE")

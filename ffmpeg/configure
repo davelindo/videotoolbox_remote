@@ -2027,6 +2027,7 @@ EXTERNAL_LIBRARY_LIST="
     liblc3
     liblcevc_dec
     liblz4
+    libzstd
     libmodplug
     libmp3lame
     libmysofa
@@ -3701,19 +3702,20 @@ pcm_alaw_at_encoder_select="audio_frame_queue"
 pcm_mulaw_at_encoder_deps="audiotoolbox"
 pcm_mulaw_at_encoder_select="audio_frame_queue"
 chromaprint_muxer_deps="chromaprint"
-h264_videotoolbox_encoder_deps="pthreads"
+h264_videotoolbox_encoder_deps="videotoolbox pthreads"
 h264_videotoolbox_encoder_select="atsc_a53 videotoolbox_encoder"
-h264_videotoolbox_remote_decoder_deps="network liblz4"
+hevc_videotoolbox_encoder_deps="videotoolbox pthreads"
+hevc_videotoolbox_encoder_select="videotoolbox_encoder"
+h264_videotoolbox_remote_decoder_deps="network liblz4 libzstd"
 h264_videotoolbox_remote_decoder_select=""
-h264_videotoolbox_remote_encoder_deps="network liblz4"
+h264_videotoolbox_remote_encoder_deps="network liblz4 libzstd"
 h264_videotoolbox_remote_encoder_select=""
-hevc_videotoolbox_encoder_deps="pthreads"
-hevc_videotoolbox_encoder_select="atsc_a53 videotoolbox_encoder"
-hevc_videotoolbox_remote_decoder_deps="network liblz4"
+
+hevc_videotoolbox_remote_decoder_deps="network liblz4 libzstd"
 hevc_videotoolbox_remote_decoder_select=""
-hevc_videotoolbox_remote_encoder_deps="network liblz4"
+hevc_videotoolbox_remote_encoder_deps="network liblz4 libzstd"
 hevc_videotoolbox_remote_encoder_select=""
-prores_videotoolbox_encoder_deps="pthreads"
+prores_videotoolbox_encoder_deps="videotoolbox pthreads"
 prores_videotoolbox_encoder_select="videotoolbox_encoder"
 libaom_av1_decoder_deps="libaom"
 libaom_av1_encoder_deps="libaom"
@@ -3802,7 +3804,7 @@ libxvid_encoder_deps="libxvid"
 libzvbi_teletext_decoder_deps="libzvbi"
 vapoursynth_demuxer_deps="vapoursynth"
 videotoolbox_suggest="coreservices"
-videotoolbox_deps="corefoundation coremedia corevideo VTDecompressionSessionDecodeFrame"
+videotoolbox_deps="corefoundation coremedia corevideo availability_h VTDecompressionSessionDecodeFrame"
 videotoolbox_encoder_deps="videotoolbox VTCompressionSessionPrepareToEncodeFrames"
 
 # demuxers / muxers
@@ -6952,6 +6954,7 @@ check_headers sys/un.h
 check_headers termios.h
 check_headers unistd.h
 check_headers valgrind/valgrind.h
+check_headers Availability.h
 check_func_headers VideoToolbox/VTCompressionSession.h VTCompressionSessionPrepareToEncodeFrames -framework VideoToolbox
 check_func_headers VideoToolbox/VideoToolbox.h VTDecompressionSessionDecodeFrame -framework VideoToolbox
 check_func_headers VideoToolbox/VideoToolbox.h VTPixelTransferSessionCreate -framework VideoToolbox
@@ -7248,6 +7251,7 @@ enabled liblc3            && require_pkg_config liblc3 "lc3 >= 1.1.0" lc3.h lc3_
 enabled liblensfun        && require_pkg_config liblensfun lensfun lensfun.h lf_db_create
 enabled liblcevc_dec      && require_pkg_config liblcevc_dec "lcevc_dec >= 4.0.0" "LCEVC/lcevc_dec.h" LCEVC_CreateDecoder
 enabled liblz4            && require_pkg_config liblz4 liblz4 lz4.h LZ4_compress_default
+enabled libzstd           && require_pkg_config libzstd libzstd zstd.h ZSTD_compress
 
 if enabled libmfx && enabled libvpl; then
    die "ERROR: can not use libmfx and libvpl together"

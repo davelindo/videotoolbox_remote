@@ -40,7 +40,8 @@ public struct ClientStats: Sendable {
 
         logger.debug(
             String(
-                format: "WIRE mode=%@ inst_in_mbps=%.2f inst_out_mbps=%.2f totals_in=%lldB totals_out=%lldB",
+                format: "WIRE mode=%@ inst_in_mbps=%.2f inst_out_mbps=%.2f " +
+                    "totals_in=%lldB totals_out=%lldB",
                 mode.rawValue, inMbps, outMbps, bytesIn, bytesOut
             )
         )
@@ -59,12 +60,15 @@ public struct ClientStats: Sendable {
         switch mode {
         case .encode:
             return String(
-                format: "SUMMARY mode=encode frames_in=%d packets_out=%d in=%lldB out=%lldB duration=%.3fs in_mbps=%.2f out_mbps=%.2f avg_encode_ms=%.2f max_encode_ms=%.2f",
-                framesIn, packetsOut, bytesIn, bytesOut, elapsed, inMbps, outMbps, latency.averageMilliseconds, latency.maxMilliseconds
+                format: "SUMMARY mode=encode frames_in=%d packets_out=%d in=%lldB out=%lldB " +
+                    "duration=%.3fs in_mbps=%.2f out_mbps=%.2f avg_encode_ms=%.2f max_encode_ms=%.2f",
+                framesIn, packetsOut, bytesIn, bytesOut, elapsed, inMbps, outMbps,
+                latency.averageMilliseconds, latency.maxMilliseconds
             )
         case .decode:
             return String(
-                format: "SUMMARY mode=decode packets_in=%d frames_out=%d in=%lldB out=%lldB duration=%.3fs in_mbps=%.2f out_mbps=%.2f",
+                format: "SUMMARY mode=decode packets_in=%d frames_out=%d in=%lldB out=%lldB " +
+                    "duration=%.3fs in_mbps=%.2f out_mbps=%.2f",
                 packetsIn, framesOut, bytesIn, bytesOut, elapsed, inMbps, outMbps
             )
         }

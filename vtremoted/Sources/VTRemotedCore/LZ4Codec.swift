@@ -1,5 +1,5 @@
-import Foundation
 import CLZ4
+import Foundation
 
 public enum LZ4Codec {
     public static func compress(_ data: Data) -> Data? {
@@ -20,7 +20,7 @@ public enum LZ4Codec {
             }
         }
         guard written > 0 else { return nil }
-        out.removeSubrange(Int(written)..<out.count)
+        out.removeSubrange(Int(written) ..< out.count)
         return out
     }
 

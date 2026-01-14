@@ -7,12 +7,12 @@ public struct HelloRequest: Equatable, Sendable {
     public var build: String
 
     public static func decode(_ payload: Data) throws -> HelloRequest {
-        var r = ByteReader(payload)
-        return HelloRequest(
-            token: try r.readLengthPrefixedUTF8(),
-            codec: try r.readLengthPrefixedUTF8(),
-            clientName: try r.readLengthPrefixedUTF8(),
-            build: try r.readLengthPrefixedUTF8()
+        var reader = ByteReader(payload)
+        return try HelloRequest(
+            token: reader.readLengthPrefixedUTF8(),
+            codec: reader.readLengthPrefixedUTF8(),
+            clientName: reader.readLengthPrefixedUTF8(),
+            build: reader.readLengthPrefixedUTF8()
         )
     }
 }
@@ -23,19 +23,19 @@ public struct HelloAckResponse: Equatable, Sendable {
     public var warnings: UInt8
 
     public func encode() -> Data {
-        var w = ByteWriter()
-        w.write(status)
+        var writer = ByteWriter()
+        writer.write(status)
         // reserved for future fields (kept for wire compatibility)
-        w.writeBE(UInt16(0))
-        w.writeBE(UInt16(0))
-        w.write(UInt8(UInt8(clamping: supportedCodecs.count)))
+        writer.writeBE(UInt16(0))
+        writer.writeBE(UInt16(0))
+        writer.write(UInt8(UInt8(clamping: supportedCodecs.count)))
         for codec in supportedCodecs {
-            w.writeLengthPrefixedUTF8(codec)
+            writer.writeLengthPrefixedUTF8(codec)
         }
         // Keep parity with legacy vtremoted: nal length size + something reserved.
-        w.writeBE(UInt16(4))
-        w.writeBE(UInt16(1))
-        return w.data
+        writer.writeBE(UInt16(4))
+        writer.writeBE(UInt16(1))
+        return writer.data
     }
 }
 
@@ -49,35 +49,35 @@ public struct ConfigureRequest: Sendable {
     public var extradata: Data?
 
     public static func decode(_ payload: Data) throws -> ConfigureRequest {
-        var r = ByteReader(payload)
-        let width = Int(try r.readBEUInt32())
-        let height = Int(try r.readBEUInt32())
-        let pix = try r.readUInt8()
-        let tbNum = Int(try r.readBEUInt32())
-        let tbDen = Int(try r.readBEUInt32())
-        let frNum = Int(try r.readBEUInt32())
-        let frDen = Int(try r.readBEUInt32())
+        var reader = ByteReader(payload)
+        let width = try Int(reader.readBEUInt32())
+        let height = try Int(reader.readBEUInt32())
+        let pix = try reader.readUInt8()
+        let tbNum = try Int(reader.readBEUInt32())
+        let tbDen = try Int(reader.readBEUInt32())
+        let frNum = try Int(reader.readBEUInt32())
+        let frDen = try Int(reader.readBEUInt32())
 
         var options: [String: String] = [:]
-        if r.remaining >= 2 {
-            let count = Int(try r.readBEUInt16())
-            for _ in 0..<count {
-                let kLen = Int(try r.readBEUInt16())
-                let k = try r.readBytes(count: kLen)
-                let vLen = Int(try r.readBEUInt16())
-                let v = try r.readBytes(count: vLen)
-                if let key = String(data: k, encoding: .utf8),
-                   let val = String(data: v, encoding: .utf8) {
+        if reader.remaining >= 2 {
+            let count = try Int(reader.readBEUInt16())
+            for _ in 0 ..< count {
+                let keyLen = try Int(reader.readBEUInt16())
+                let keyData = try reader.readBytes(count: keyLen)
+                let valLen = try Int(reader.readBEUInt16())
+                let valData = try reader.readBytes(count: valLen)
+                if let key = String(data: keyData, encoding: .utf8),
+                   let val = String(data: valData, encoding: .utf8) {
                     options[key] = val
                 }
             }
         }
 
         var extradata: Data?
-        if r.remaining >= 4 {
-            let extraLen = Int(try r.readBEUInt32())
+        if reader.remaining >= 4 {
+            let extraLen = try Int(reader.readBEUInt32())
             if extraLen > 0 {
-                extradata = try r.readBytes(count: extraLen)
+                extradata = try reader.readBytes(count: extraLen)
             }
         }
 
@@ -100,13 +100,13 @@ public struct ConfigureAckResponse: Equatable, Sendable {
     public var warnings: UInt8
 
     public func encode() -> Data {
-        var w = ByteWriter()
-        w.write(status)
-        w.writeBE(UInt16(clamping: extradata.count))
-        w.write(extradata)
-        w.write(pixelFormat)
-        w.write(warnings)
-        return w.data
+        var writer = ByteWriter()
+        writer.write(status)
+        writer.writeBE(UInt16(clamping: extradata.count))
+        writer.write(extradata)
+        writer.write(pixelFormat)
+        writer.write(warnings)
+        return writer.data
     }
 }
 
@@ -115,9 +115,9 @@ public struct ErrorResponse: Equatable, Sendable {
     public var message: String
 
     public func encode() -> Data {
-        var w = ByteWriter()
-        w.writeBE(code)
-        w.writeLengthPrefixedUTF8(message)
-        return w.data
+        var writer = ByteWriter()
+        writer.writeBE(code)
+        writer.writeLengthPrefixedUTF8(message)
+        return writer.data
     }
 }
