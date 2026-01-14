@@ -10,11 +10,18 @@ final class IntegrationTests: XCTestCase {
             self.incoming = incoming
         }
 
-        func readMessage(timeoutSeconds: Int) throws -> (header: VTRMessageHeader, body: Data) {
+        func readMessage(pool: BufferPool?, timeoutSeconds: Int) throws -> (header: VTRMessageHeader, body: Data) {
             guard !incoming.isEmpty else {
                 throw VTRemotedError.protocolViolation("no more messages")
             }
             let (type, body) = incoming.removeFirst()
+            
+            if let pool = pool {
+                var buf = pool.get(capacity: body.count)
+                buf.append(body)
+                return (VTRMessageHeader(type: type.rawValue, length: UInt32(body.count)), buf)
+            }
+            
             return (VTRMessageHeader(type: type.rawValue, length: UInt32(body.count)), body)
         }
 
@@ -200,6 +207,79 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(fakeIO.sent[1].0, .configureAck)
         XCTAssertEqual(fakeIO.sent[2].0, .packet)
         XCTAssertEqual(fakeIO.sent[3].0, .done)
+    }
+
+    func testDTSMonotonicity() throws {
+        // This test verifies:
+        // 1. Duplicate PTS frames are skipped (VideoToolbox sometimes produces duplicate callbacks)
+        // 2. DTS is strictly monotonically increasing for unique frames
+        
+        let helloPayload = makeHello(token: "secret", codec: "h264")
+        let configurePayload = makeConfigure(mode: "encode", wireCompression: "0", width: 64, height: 64)
+        
+        func makeFrame(pts: UInt64) -> Data {
+            var writer = ByteWriter()
+            writer.writeBE(pts)
+            writer.writeBE(UInt64(1)) // dur
+            writer.writeBE(UInt32(0)) // flags
+            writer.write(UInt8(2)) // planeCount
+            
+            let plane0 = Data(repeating: 0xAA, count: 64 * 64)
+            let plane1 = Data(repeating: 0xBB, count: 64 * 32)
+            
+            writer.writeBE(UInt32(64)) // stride
+            writer.writeBE(UInt32(64)) // height
+            writer.writeBE(UInt32(plane0.count))
+            writer.write(plane0)
+            
+            writer.writeBE(UInt32(64)) // stride
+            writer.writeBE(UInt32(32)) // height
+            writer.writeBE(UInt32(plane1.count))
+            writer.write(plane1)
+            
+            return writer.data
+        }
+        
+        // Send frames with some duplicates to simulate VideoToolbox behavior
+        // Unique PTS: 1000, 1001, 1002 (plus duplicates that should be skipped)
+        let fakeIO = FakeIO(incoming: [
+            (.hello, helloPayload),
+            (.configure, configurePayload),
+            (.frame, makeFrame(pts: 1000)),
+            (.frame, makeFrame(pts: 1000)), // Duplicate - should be skipped
+            (.frame, makeFrame(pts: 1001)),
+            (.frame, makeFrame(pts: 1001)), // Duplicate - should be skipped
+            (.frame, makeFrame(pts: 1002)),
+            (.flush, Data())
+        ])
+        
+        Logger.shared.level = .error
+        let handler = VTRClientHandler(
+            io: fakeIO,
+            expectedToken: "secret",
+            sessionFactory: { sender in StubCodecSession(sender: sender) }
+        )
+        handler.run()
+        
+        // Verify duplicates were skipped - only 3 unique packets
+        let packets = fakeIO.sent.filter { $0.0 == .packet }
+        XCTAssertEqual(packets.count, 3, "Expected 3 PACKET messages (duplicates should be skipped)")
+        
+        // Extract DTS from each packet and verify monotonicity
+        var dtsValues: [Int64] = []
+        for (_, body) in packets {
+            var reader = ByteReader(body)
+            _ = try reader.readBEUInt64() // PTS
+            let dts = try Int64(bitPattern: reader.readBEUInt64()) // DTS
+            dtsValues.append(dts)
+        }
+        
+        // Verify DTS is strictly monotonically increasing
+        XCTAssertEqual(dtsValues.count, 3, "Should have 3 DTS values")
+        for i in 1 ..< dtsValues.count {
+            XCTAssertGreaterThan(dtsValues[i], dtsValues[i - 1],
+                "DTS must be strictly monotonically increasing. Got: \(dtsValues)")
+        }
     }
 
     // Helpers

@@ -18,6 +18,9 @@
 #include <netdb.h>
 #include <unistd.h>
 #include <sys/time.h>
+#include <poll.h>
+#include <fcntl.h>
+#include <netinet/tcp.h>
 #endif
 #include "avcodec.h"
 #include "codec_internal.h"
@@ -159,6 +162,19 @@ static int set_socket_timeout(int fd, int timeout_ms)
     return 0;
 }
 
+/* Configure socket for high-throughput video streaming */
+static void configure_socket_buffers(int fd)
+{
+    /* Disable Nagle's algorithm for lower latency */
+    int nodelay = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, VTR_SOCKOPT_ARG &nodelay, sizeof(nodelay));
+
+    /* 4MB buffers to handle 4K+ frames without blocking */
+    int bufsize = 4 * 1024 * 1024;
+    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, VTR_SOCKOPT_ARG &bufsize, sizeof(bufsize));
+    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, VTR_SOCKOPT_ARG &bufsize, sizeof(bufsize));
+}
+
 static int write_full(int fd, const uint8_t *buf, int size)
 {
     int sent = 0;
@@ -209,6 +225,26 @@ static int read_full(int fd, uint8_t *buf, int size)
     return 0;
 }
 
+/* Non-blocking check if data is available to read */
+static int check_readable(int fd, int timeout_ms)
+{
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+    fd_set readfds;
+    struct timeval tv;
+    FD_ZERO(&readfds);
+    FD_SET(fd, &readfds);
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    return select(fd + 1, &readfds, NULL, NULL, &tv);
+#else
+    struct pollfd pfd;
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    return poll(&pfd, 1, timeout_ms);
+#endif
+}
+
 static int connect_hostport(const char *hostport, int timeout_ms)
 {
     if (!hostport)
@@ -247,6 +283,10 @@ static int connect_hostport(const char *hostport, int timeout_ms)
     freeaddrinfo(res);
     if (fd < 0)
         return AVERROR(vtremote_sock_errno() ? vtremote_sock_errno() : EIO);
+    
+    /* Configure socket for high-throughput streaming */
+    configure_socket_buffers(fd);
+    
     return fd;
 }
 
@@ -254,6 +294,9 @@ static inline int vtremote_log_enabled(const VTRemoteEncContext *s, int level)
 {
     return s && s->log_level >= level;
 }
+
+/* Forward declaration for enqueue_packet */
+static int enqueue_packet(AVCodecContext *avctx, const uint8_t *payload, int payload_size);
 
 static int vtremote_add_opt(VTRemoteKV **opts, int *count, int *cap,
                             const char *key, char *value)
@@ -338,6 +381,76 @@ static int vtremote_read_msg(VTRemoteEncContext *s, VTRemoteMsgHeader *hdr, uint
     *payload = buf;
     s->bytes_recv += VTREMOTE_HEADER_SIZE + hdr->length;
     return 0;
+}
+
+/* Try to read a message without blocking. Returns AVERROR(EAGAIN) if no data available. */
+static int vtremote_read_msg_nonblock(VTRemoteEncContext *s, VTRemoteMsgHeader *hdr, uint8_t **payload)
+{
+    if (!s)
+        return AVERROR(EINVAL);
+    /* Check if data is available with 0ms timeout */
+    int ready = check_readable(s->fd, 0);
+    if (ready <= 0)
+        return AVERROR(EAGAIN);
+    return vtremote_read_msg(s, hdr, payload);
+}
+
+/* Drain all available packets into the queue without blocking */
+static int vtremote_drain_available_packets(AVCodecContext *avctx)
+{
+    VTRemoteEncContext *s = avctx->priv_data;
+    int packets_read = 0;
+
+    while (s->pkt_q_count < s->pkt_q_size) {
+        VTRemoteMsgHeader hdr;
+        uint8_t *payload = NULL;
+        int ret = vtremote_read_msg_nonblock(s, &hdr, &payload);
+        if (ret == AVERROR(EAGAIN))
+            break;  /* No more data available */
+        if (ret < 0)
+            return ret;
+
+        switch (hdr.type) {
+        case VTREMOTE_MSG_PACKET:
+            ret = enqueue_packet(avctx, payload, hdr.length);
+            av_free(payload);
+            if (ret < 0)
+                return ret;
+            if (s->inflight_frames > 0)
+                s->inflight_frames--;
+            packets_read++;
+            break;
+        case VTREMOTE_MSG_DONE:
+            av_free(payload);
+            s->done = 1;
+            return packets_read;
+        case VTREMOTE_MSG_PING:
+        {
+            VTRemoteWBuf empty = {0};
+            vtremote_send_msg(s, VTREMOTE_MSG_PONG, &empty);
+            av_free(payload);
+            break;
+        }
+        case VTREMOTE_MSG_ERROR:
+        {
+            uint32_t code = 0;
+            VTRemoteRBuf er;
+            vtremote_rbuf_init(&er, payload, hdr.length);
+            vtremote_rbuf_read_u32(&er, &code);
+            const uint8_t *msg = NULL; int mlen = 0;
+            if (vtremote_rbuf_read_str(&er, &msg, &mlen) == 0)
+                av_log(avctx, AV_LOG_ERROR, "vtremote server error %u: %.*s\n", code, mlen, msg);
+            else
+                av_log(avctx, AV_LOG_ERROR, "vtremote server error %u\n", code);
+            av_free(payload);
+            return AVERROR(EIO);
+        }
+        default:
+            av_free(payload);
+            break;
+        }
+    }
+    return packets_read;
 }
 
 static int vtremote_handle_hello_ack(AVCodecContext *avctx, const uint8_t *payload, int len)
@@ -1048,7 +1161,7 @@ int ff_vtremote_encode(AVCodecContext *avctx, AVPacket *pkt, const AVFrame *fram
 {
     VTRemoteEncContext *s = avctx->priv_data;
     if (!s->pkt_queue) {
-        s->pkt_q_size = FFMAX(4, s->inflight);
+        s->pkt_q_size = FFMAX(4, s->inflight * 2);  /* Double for better pipelining */
         s->pkt_queue = av_calloc(s->pkt_q_size, sizeof(AVPacket));
         if (!s->pkt_queue)
             return AVERROR(ENOMEM);
@@ -1056,12 +1169,46 @@ int ff_vtremote_encode(AVCodecContext *avctx, AVPacket *pkt, const AVFrame *fram
 
     int ret = 0;
 
+    /* 
+     * Pipelining optimization: Try to drain any available packets first (non-blocking).
+     * This allows us to keep the pipeline full while receiving encoded data.
+     */
+    ret = vtremote_drain_available_packets(avctx);
+    if (ret < 0 && ret != AVERROR(EAGAIN))
+        return ret;
+
+    /* Return a queued packet if available */
+    if (s->pkt_q_count > 0) {
+        AVPacket *src = &s->pkt_queue[s->pkt_q_head];
+        int rc = av_packet_ref(pkt, src);
+        av_packet_unref(src);
+        s->pkt_q_head = (s->pkt_q_head + 1) % s->pkt_q_size;
+        s->pkt_q_count--;
+        if (got_packet)
+            *got_packet = 1;
+        /* Continue to send the frame if we have one (pipelining) */
+        if (frame && s->inflight_frames < s->inflight) {
+            ff_vtremote_common_send_frame(avctx, frame);
+        }
+        return rc;
+    }
+
+    /* If we have a frame and haven't hit the inflight limit, send it */
+    if (frame && s->inflight_frames < s->inflight) {
+        ret = ff_vtremote_common_send_frame(avctx, frame);
+        if (ret < 0 && ret != AVERROR_EOF)
+            return ret;
+    }
+
+    /* If we have a frame but hit the inflight limit, we must wait for a packet */
     if (frame && s->inflight_frames >= s->inflight) {
-        /* backpressure: drain before sending more */
+        /* Block until we get at least one packet */
         ret = ff_vtremote_common_receive_packet(avctx, pkt);
         if (ret >= 0) {
             if (got_packet)
                 *got_packet = 1;
+            /* Now send the pending frame since we freed up a slot */
+            ff_vtremote_common_send_frame(avctx, frame);
             return 0;
         }
         if (got_packet)
@@ -1069,21 +1216,24 @@ int ff_vtremote_encode(AVCodecContext *avctx, AVPacket *pkt, const AVFrame *fram
         return ret;
     }
 
-    if (frame || avctx->internal->draining) {
-        ret = ff_vtremote_common_send_frame(avctx, frame);
+    /* Handle flush/draining */
+    if (!frame && avctx->internal->draining) {
+        ret = ff_vtremote_common_send_frame(avctx, NULL);
         if (ret < 0 && ret != AVERROR_EOF)
             return ret;
     }
 
-    ret = ff_vtremote_common_receive_packet(avctx, pkt);
-    if (ret >= 0) {
-        if (got_packet)
-            *got_packet = 1;
-        return 0;
+    /* Try to get a packet (blocking if flushing, otherwise non-blocking) */
+    if (!frame || s->flushing) {
+        ret = ff_vtremote_common_receive_packet(avctx, pkt);
+        if (ret >= 0) {
+            if (got_packet)
+                *got_packet = 1;
+            return 0;
+        }
     }
-    if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-        if (got_packet)
-            *got_packet = 0;
-    }
-    return ret;
+
+    if (got_packet)
+        *got_packet = 0;
+    return frame ? 0 : ret;  /* Return success if we sent a frame even without packet yet */
 }

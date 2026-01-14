@@ -3,6 +3,7 @@ import Foundation
 final class StubCodecSession: CodecSession {
     private let send: MessageSender
     private var config: SessionConfiguration?
+    private let timestampTracker = TimestampTracker()
 
     init(sender: @escaping MessageSender) {
         send = sender
@@ -10,6 +11,7 @@ final class StubCodecSession: CodecSession {
 
     func configure(_ configuration: SessionConfiguration) throws -> Data {
         config = configuration
+        timestampTracker.reset()
         return Data()
     }
 
@@ -62,10 +64,16 @@ final class StubCodecSession: CodecSession {
         var annexB = Data([0x00, 0x00, 0x00, 0x01])
         annexB.append(digest)
 
+        // Process timestamps to ensure monotonicity and skip duplicates
+        let result = timestampTracker.process(ptsTicks: pts, dtsTicks: pts)
+        guard case .emit(let dts) = result else {
+            return // Skip duplicate PTS
+        }
+
         var writer = ByteWriter()
-        writer.writeBE(UInt64(bitPattern: pts)) // pts
-        writer.writeBE(UInt64(bitPattern: pts)) // dts
-        writer.writeBE(UInt64(bitPattern: dur)) // duration
+        writer.writeBE(UInt64(bitPattern: pts))
+        writer.writeBE(UInt64(bitPattern: dts))
+        writer.writeBE(UInt64(bitPattern: dur))
         let isKey = (flags & 1) != 0
         writer.writeBE(UInt32(isKey ? 1 : 0))
         writer.writeBE(UInt32(annexB.count))

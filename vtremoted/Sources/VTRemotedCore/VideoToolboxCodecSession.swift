@@ -22,6 +22,9 @@
         private var warmupPending = false
         private let warmupSemaphore = DispatchSemaphore(value: 0)
         private var forceKeyframeNext = false
+        
+        /// Tracks DTS/PTS for monotonicity and duplicate detection
+        private let timestampTracker = TimestampTracker()
 
         private class FrameContext {
             let sideData: [Data]
@@ -30,28 +33,6 @@
             }
         }
 
-        private class BufferPool {
-            private var buffers: [Data] = []
-            private let lock = NSLock()
-
-            func get(capacity: Int) -> Data {
-                lock.lock()
-                defer { lock.unlock() }
-                if var buf = buffers.popLast() {
-                    buf.count = 0
-                    buf.reserveCapacity(capacity)
-                    return buf
-                }
-                return Data(capacity: capacity)
-            }
-
-            func `return`(_ buffer: Data) {
-                lock.lock()
-                defer { lock.unlock() }
-                buffers.append(buffer)
-            }
-        }
-        
         private let inputBufferPool = BufferPool()
         private let outputBufferPool = BufferPool()
 
@@ -61,6 +42,7 @@
 
         func configure(_ configuration: SessionConfiguration) throws -> Data {
             config = configuration
+            timestampTracker.reset()
             switch configuration.mode {
             case .encode:
                 try setupEncoder(configuration)
@@ -87,12 +69,14 @@
             let stride0 = try Int(reader.readBEUInt32())
             let height0 = try Int(reader.readBEUInt32())
             let len0 = try Int(reader.readBEUInt32())
-            let yRaw = try reader.readBytes(count: len0)
+            // Zero-copy: get range instead of copying data
+            let yRange = try reader.sliceRange(count: len0)
 
             let stride1 = try Int(reader.readBEUInt32())
             let height1 = try Int(reader.readBEUInt32())
             let len1 = try Int(reader.readBEUInt32())
-            let uvRaw = try reader.readBytes(count: len1)
+            // Zero-copy: get range instead of copying data
+            let uvRange = try reader.sliceRange(count: len1)
 
             let expectedY = max(0, stride0 * height0)
             let expectedUV = max(0, stride1 * height1)
@@ -113,8 +97,8 @@
             let rowBytesY = config.width * bytesPerSample
             let rowBytesUV = config.width * bytesPerSample
 
-            // Helper to process a plane
-            func processPlane(planeIndex: Int, raw: Data, expectedSize: Int, stride: Int, rowBytes: Int) throws {
+            // Helper to process a plane with zero-copy source access
+            func processPlane(planeIndex: Int, rawRange: Range<Int>, expectedSize: Int, stride: Int, rowBytes: Int) throws {
                 guard let destBase = CVPixelBufferGetBaseAddressOfPlane(pBuffer, planeIndex) else { return }
                 let destStride = CVPixelBufferGetBytesPerRowOfPlane(pBuffer, planeIndex)
                 
@@ -122,19 +106,32 @@
                 // reading from WC memory during LZ4 back-references
                 var temp = inputBufferPool.get(capacity: expectedSize)
                 defer { inputBufferPool.return(temp) }
+                if temp.count != expectedSize {
+                    temp.count = expectedSize
+                }
                 
-                let success: Bool
-                if config.options.wireCompression == 1 {
-                    success = temp.withUnsafeMutableBytes { dstPtr in
-                        LZ4Codec.decompress(raw, into: dstPtr.baseAddress!, expectedSize: expectedSize)
+                // Zero-copy access to source data
+                let success: Bool = payload.withUnsafeBytes { payloadPtr in
+                    let rawPtr = UnsafeRawBufferPointer(
+                        start: payloadPtr.baseAddress!.advanced(by: rawRange.lowerBound),
+                        count: rawRange.count
+                    )
+                    
+                    if config.options.wireCompression == 1 {
+                        return temp.withUnsafeMutableBytes { dstPtr in
+                            LZ4Codec.decompressRaw(rawPtr, into: dstPtr.baseAddress!, expectedSize: expectedSize)
+                        }
+                    } else if config.options.wireCompression == 2 {
+                        return temp.withUnsafeMutableBytes { dstPtr in
+                            ZstdCodec.decompressRaw(rawPtr, into: dstPtr.baseAddress!, expectedSize: expectedSize)
+                        }
+                    } else {
+                        // No compression - direct copy to temp buffer
+                        temp.withUnsafeMutableBytes { dstPtr in
+                            _ = memcpy(dstPtr.baseAddress!, rawPtr.baseAddress!, rawRange.count)
+                        }
+                        return true
                     }
-                } else if config.options.wireCompression == 2 {
-                    success = temp.withUnsafeMutableBytes { dstPtr in
-                        ZstdCodec.decompress(raw, into: dstPtr.baseAddress!, expectedSize: expectedSize)
-                    }
-                } else {
-                    temp.append(raw)
-                    success = true
                 }
                 guard success else { throw VTRemotedError.protocolViolation("Decompress failed") }
                 
@@ -147,7 +144,7 @@
                         // Fast path: single contiguous copy
                         memcpy(dstBase, srcBase, expectedSize)
                     } else {
-                         // Strided copy
+                        // Strided copy row-by-row
                         let height = expectedSize / stride
                         let copyBytes = min(rowBytes, min(stride, destStride))
                         for row in 0 ..< height {
@@ -163,10 +160,10 @@
             DispatchQueue.concurrentPerform(iterations: 2) { plane in
                 do {
                     if plane == 0 {
-                        try processPlane(planeIndex: 0, raw: yRaw, expectedSize: expectedY, 
+                        try processPlane(planeIndex: 0, rawRange: yRange, expectedSize: expectedY, 
                                          stride: stride0, rowBytes: rowBytesY)
                     } else {
-                        try processPlane(planeIndex: 1, raw: uvRaw, expectedSize: expectedUV, 
+                        try processPlane(planeIndex: 1, rawRange: uvRange, expectedSize: expectedUV, 
                                          stride: stride1, rowBytes: rowBytesUV)
                     }
                 } catch {
@@ -700,9 +697,17 @@
             let pts = sbuf.presentationTimeStamp
             let ptsTicks = config.timebase.ticks(from: RationalTime(value: pts.value, timescale: pts.timescale))
 
+            // Get DTS from VideoToolbox, falling back to PTS when invalid (common when B-frames disabled)
             let rawDts = CMSampleBufferGetDecodeTimeStamp(sbuf)
             let dtsTime: CMTime = (rawDts.isValid && rawDts.isNumeric) ? rawDts : pts
-            let dtsTicks = config.timebase.ticks(from: RationalTime(value: dtsTime.value, timescale: dtsTime.timescale))
+            let rawDtsTicks = config.timebase.ticks(from: RationalTime(value: dtsTime.value, timescale: dtsTime.timescale))
+            
+            // Process timestamps to ensure monotonicity and skip duplicates
+            let result = timestampTracker.process(ptsTicks: ptsTicks, dtsTicks: rawDtsTicks)
+            guard case .emit(let dtsTicks) = result else {
+                return // Skip duplicate PTS
+            }
+            
             let dur = sbuf.duration.isNumeric ? sbuf.duration : .invalid
             let durTicks = dur.isNumeric ?
                 config.timebase.ticks(from: RationalTime(value: dur.value, timescale: dur.timescale)) : 0

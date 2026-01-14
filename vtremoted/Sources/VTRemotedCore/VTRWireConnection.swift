@@ -33,20 +33,35 @@ public final class VTRWireConnection: @unchecked Sendable {
         return try VTRMessageHeader.decode(headerBuf)
     }
 
-    public func readMessage(timeoutSeconds: Int = 10) throws -> (header: VTRMessageHeader, body: Data) {
+    public func readMessage(pool: BufferPool? = nil, timeoutSeconds: Int = 10) throws -> (header: VTRMessageHeader, body: Data) {
         let header = try readHeader(timeoutSeconds: timeoutSeconds)
 
         if header.length > 0 {
             let len = Int(header.length)
-            // Resize buffer. Data tries to preserve capacity if possible.
-            // If the previous caller still holds a reference, this triggers a copy (COW),
-            // effectively allocating a new buffer, which is correct for safety.
-            // If the previous caller released it, we reuse the storage.
-            if bodyBuf.count != len {
-                bodyBuf.count = len
+            var buf: Data
+            
+            if let pool {
+                buf = pool.get(capacity: len)
+            } else {
+                if bodyBuf.count != len {
+                    bodyBuf.count = len
+                }
+                buf = bodyBuf
             }
-            try POSIXIO.readExact(fd: fileDescriptor, into: &bodyBuf, count: len)
-            return (header, bodyBuf)
+            
+            // Ensure correct size (BufferPool.get sets count=0)
+            if buf.count != len {
+                buf.count = len
+            }
+            
+            try POSIXIO.readExact(fd: fileDescriptor, into: &buf, count: len)
+            
+            if pool == nil {
+                // Determine if we need to update our internal buffer reference
+                // (Though strictly speaking, bodyBuf was a value copy, but we want to keep the capacity)
+                bodyBuf = buf
+            }
+            return (header, buf)
         } else {
             return (header, Data())
         }

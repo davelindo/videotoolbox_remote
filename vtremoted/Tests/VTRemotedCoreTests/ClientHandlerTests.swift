@@ -10,12 +10,22 @@ final class ClientHandlerTests: XCTestCase {
             self.incoming = incoming
         }
 
-        func readMessage(timeoutSeconds: Int) throws -> (header: VTRMessageHeader, body: Data) {
+        func readMessage(pool: BufferPool?, timeoutSeconds: Int) throws -> (header: VTRMessageHeader, body: Data) {
             XCTAssertGreaterThan(timeoutSeconds, 0)
             guard !incoming.isEmpty else {
                 throw VTRemotedError.protocolViolation("no more messages")
             }
             let (type, body) = incoming.removeFirst()
+            
+            // If internal implementation wants to verify pool usage, we could.
+            // For now, just return data.
+            // If pool is provided, we *could* copy body into it, but FakeIO is for logic testing.
+            if let pool = pool {
+                var buf = pool.get(capacity: body.count)
+                buf.append(body)
+                return (VTRMessageHeader(type: type.rawValue, length: UInt32(body.count)), buf)
+            }
+            
             return (VTRMessageHeader(type: type.rawValue, length: UInt32(body.count)), body)
         }
 

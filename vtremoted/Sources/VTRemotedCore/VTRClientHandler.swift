@@ -12,6 +12,7 @@ public final class VTRClientHandler: @unchecked Sendable {
     private var stats = ClientStats()
     private var configuration: SessionConfiguration?
     private var codecSession: (any CodecSession)?
+    private let inputBufferPool = BufferPool()
 
     public init(
         io messageIO: VTRMessageIO,
@@ -43,7 +44,8 @@ public final class VTRClientHandler: @unchecked Sendable {
     }
 
     private func handshake() throws {
-        let (header, payload) = try messageIO.readMessage(timeoutSeconds: 10)
+        let (header, payload) = try messageIO.readMessage(pool: inputBufferPool, timeoutSeconds: 10)
+        defer { inputBufferPool.return(payload) }
         stats.bytesIn += Int64(VTRProtocol.headerSize + payload.count)
         guard header.type == VTRMessageType.hello.rawValue else {
             throw VTRemotedError.protocolViolation("expected HELLO")
@@ -69,7 +71,8 @@ public final class VTRClientHandler: @unchecked Sendable {
     }
 
     private func configure() throws {
-        let (header, payload) = try messageIO.readMessage(timeoutSeconds: 10)
+        let (header, payload) = try messageIO.readMessage(pool: inputBufferPool, timeoutSeconds: 10)
+        defer { inputBufferPool.return(payload) }
         stats.bytesIn += Int64(VTRProtocol.headerSize + payload.count)
         guard header.type == VTRMessageType.configure.rawValue else {
             throw VTRemotedError.protocolViolation("expected CONFIGURE")
@@ -131,19 +134,24 @@ public final class VTRClientHandler: @unchecked Sendable {
         }
 
         while true {
-            let (header, payload) = try messageIO.readMessage(timeoutSeconds: 10)
+            let (header, payload) = try messageIO.readMessage(pool: inputBufferPool, timeoutSeconds: 10)
             stats.bytesIn += Int64(VTRProtocol.headerSize + payload.count)
             stats.maybeReport(mode: configuration.mode, logger: logger, intervalSeconds: 0.25)
-            guard let type = VTRMessageType(rawValue: header.type) else { continue }
+            guard let type = VTRMessageType(rawValue: header.type) else {
+                inputBufferPool.return(payload)
+                continue
+            }
 
             switch type {
             case .frame:
                 stats.framesIn += 1
                 stats.recordSubmit()
                 try codecSession.handleFrameMessage(payload)
+                inputBufferPool.return(payload)
             case .packet:
                 stats.packetsIn += 1
                 try codecSession.handlePacketMessage(payload)
+                inputBufferPool.return(payload)
             case .flush:
                 try codecSession.flush()
                 try messageIO.send(type: .done, body: Data())
@@ -151,10 +159,13 @@ public final class VTRClientHandler: @unchecked Sendable {
                     ? "DONE client=\(clientName) frames=\(stats.framesIn) packets=\(stats.packetsOut)"
                     : "DONE client=\(clientName) packets=\(stats.packetsIn) frames=\(stats.framesOut)"
                 logger.info(msg)
+                inputBufferPool.return(payload)
                 return
             case .ping:
                 try messageIO.send(type: .pong, body: Data())
+                inputBufferPool.return(payload)
             default:
+                inputBufferPool.return(payload)
                 break
             }
         }

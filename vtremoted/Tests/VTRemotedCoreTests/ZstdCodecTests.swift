@@ -32,4 +32,20 @@ final class ZstdCodecTests: XCTestCase {
         let decompressed = ZstdCodec.decompress(compressed, expectedSize: original.count - 1)
         XCTAssertNil(decompressed)
     }
+    
+    func testZstdDecompressRaw() {
+        let input = Data((0 ..< 10000).map { UInt8($0 % 251) })
+        guard let compressed = ZstdCodec.compress(input) else {
+            return XCTFail("compress returned nil")
+        }
+        
+        var output = Data(count: input.count)
+        let success = compressed.withUnsafeBytes { srcPtr in
+            output.withUnsafeMutableBytes { dstPtr in
+                ZstdCodec.decompressRaw(srcPtr, into: dstPtr.baseAddress!, expectedSize: input.count)
+            }
+        }
+        XCTAssertTrue(success)
+        XCTAssertEqual(output, input)
+    }
 }

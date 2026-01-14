@@ -47,6 +47,28 @@ public struct ByteReader: Sendable {
     }
 
     public var remaining: Int { data.count - index }
+    
+    /// Validates and advances the read position by `count` bytes.
+    /// Returns the start index of the consumed range.
+    private mutating func consumeBytes(_ count: Int) throws -> Int {
+        guard count >= 0 else {
+            throw VTRemotedError.protocolViolation("negative length")
+        }
+        guard index + count <= data.count else {
+            throw VTRemotedError.protocolViolation("unexpected EOF")
+        }
+        let startIdx = index
+        index += count
+        return startIdx
+    }
+    
+    /// Returns the byte range for a slice without copying.
+    /// Advances the read position by `count` bytes.
+    /// Use with the underlying Data's withUnsafeBytes for zero-copy access.
+    public mutating func sliceRange(count: Int) throws -> Range<Int> {
+        let startIdx = try consumeBytes(count)
+        return startIdx ..< (startIdx + count)
+    }
 
     public mutating func readUInt8() throws -> UInt8 {
         guard index + 1 <= data.count else {
@@ -104,14 +126,8 @@ public struct ByteReader: Sendable {
     }
 
     public mutating func readBytes(count: Int) throws -> Data {
-        guard count >= 0 else {
-            throw VTRemotedError.protocolViolation("negative length")
-        }
-        guard index + count <= data.count else {
-            throw VTRemotedError.protocolViolation("unexpected EOF")
-        }
-        defer { index += count }
-        return data.subdata(in: index ..< (index + count))
+        let range = try sliceRange(count: count)
+        return data.subdata(in: range)
     }
 
     public mutating func readLengthPrefixedUTF8() throws -> String {

@@ -23,4 +23,36 @@ final class ByteBufferTests: XCTestCase {
         XCTAssertNoThrow(try reader.readBytes(count: 3))
         XCTAssertThrowsError(try reader.readUInt8())
     }
+    
+    func testSliceRangeAdvancesPosition() throws {
+        let data = Data([0, 1, 2, 3, 4, 5, 6, 7])
+        var reader = ByteReader(data)
+        
+        let range1 = try reader.sliceRange(count: 3)
+        XCTAssertEqual(range1, 0..<3)
+        XCTAssertEqual(reader.remaining, 5)
+        
+        let range2 = try reader.sliceRange(count: 2)
+        XCTAssertEqual(range2, 3..<5)
+        XCTAssertEqual(reader.remaining, 3)
+    }
+    
+    func testSliceRangeEOFThrows() {
+        var reader = ByteReader(Data([1, 2, 3]))
+        XCTAssertThrowsError(try reader.sliceRange(count: 4))
+    }
+    
+    func testSliceRangeNegativeThrows() {
+        var reader = ByteReader(Data([1, 2, 3]))
+        XCTAssertThrowsError(try reader.sliceRange(count: -1))
+    }
+    
+    func testReadBytesUsesSliceRange() throws {
+        let data = Data([0xDE, 0xAD, 0xBE, 0xEF])
+        var reader = ByteReader(data)
+        
+        let bytes = try reader.readBytes(count: 2)
+        XCTAssertEqual(bytes, Data([0xDE, 0xAD]))
+        XCTAssertEqual(reader.remaining, 2)
+    }
 }
