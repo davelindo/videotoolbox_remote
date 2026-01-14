@@ -29,52 +29,65 @@ public enum POSIXIO {
         return data
     }
 
-    public static func writev(fd fileDescriptor: Int32, header: Data, body: Data) throws {
-        try header.withUnsafeBytes { hPtr in
-            try body.withUnsafeBytes { bPtr in
-                var iovecs = [
-                    iovec(iov_base: UnsafeMutableRawPointer(mutating: hPtr.baseAddress), iov_len: hPtr.count),
-                    iovec(iov_base: UnsafeMutableRawPointer(mutating: bPtr.baseAddress), iov_len: bPtr.count)
-                ]
+    public static func writev(fd fileDescriptor: Int32, parts: [Data]) throws {
+        // Recursive helper to bind pointers for all chunks
+        func withPointers(_ chunks: [Data], 
+                          _ index: Int, 
+                          _ pointers: [UnsafeRawBufferPointer], 
+                          _ block: ([UnsafeRawBufferPointer]) throws -> Void) rethrows {
+            if index == chunks.count {
+                try block(pointers)
+                return
+            }
+            try chunks[index].withUnsafeBytes { ptr in
+                var newPointers = pointers
+                newPointers.append(ptr)
+                try withPointers(chunks, index + 1, newPointers, block)
+            }
+        }
 
-                var totalWritten = 0
-                let totalExpected = hPtr.count + bPtr.count
-
-                while totalWritten < totalExpected {
-                    let written = iovecs.withUnsafeMutableBufferPointer { ptr in
-                        Darwin.writev(fileDescriptor, ptr.baseAddress, Int32(ptr.count))
-                    }
-                    if written < 0 {
-                        let code = errno
-                        if code == EINTR { continue }
-                        throw VTRemotedError.ioError(code: code, message: String(cString: strerror(code)))
-                    }
-                    if written == 0 { throw VTRemotedError.ioError(code: 0, message: "writev returned 0") }
-
-                    totalWritten += written
-                    if totalWritten == totalExpected { return }
-
-                    // Adjust iovecs for partial write
-                    var remaining = written
-                    var idx = 0
-                    while remaining > 0, idx < iovecs.count {
-                        if iovecs[idx].iov_len <= remaining {
-                            remaining -= iovecs[idx].iov_len
-                            iovecs[idx].iov_len = 0
-                            idx += 1
-                        } else {
-                            iovecs[idx].iov_base = iovecs[idx].iov_base.advanced(by: remaining)
-                            iovecs[idx].iov_len -= remaining
-                            remaining = 0
-                        }
-                    }
-                    // Remove fully written iovecs
-                    if idx > 0 {
-                        iovecs.removeFirst(idx)
+        try withPointers(parts, 0, []) { buffers in
+            var iovecs = buffers.map { buffer in
+                iovec(iov_base: UnsafeMutableRawPointer(mutating: buffer.baseAddress), iov_len: buffer.count)
+            }
+            
+            var totalWritten = 0
+            let totalExpected = iovecs.reduce(0) { $0 + $1.iov_len }
+            
+            while totalWritten < totalExpected {
+                let written = iovecs.withUnsafeMutableBufferPointer { ptr in
+                    Darwin.writev(fileDescriptor, ptr.baseAddress, Int32(ptr.count))
+                }
+                
+                if written < 0 {
+                    let code = errno
+                    if code == EINTR { continue }
+                    throw VTRemotedError.ioError(code: code, message: String(cString: strerror(code)))
+                }
+                if written == 0 { throw VTRemotedError.ioError(code: 0, message: "writev returned 0") }
+                
+                totalWritten += written
+                if totalWritten == totalExpected { return }
+                
+                // Adjust iovecs for partial write
+                var remaining = written
+                while remaining > 0 && !iovecs.isEmpty {
+                    if iovecs[0].iov_len <= remaining {
+                        remaining -= iovecs[0].iov_len
+                        iovecs.removeFirst()
+                    } else {
+                        iovecs[0].iov_base = iovecs[0].iov_base.advanced(by: remaining)
+                        iovecs[0].iov_len -= remaining
+                        remaining = 0
                     }
                 }
             }
         }
+    }
+
+    // Legacy helper for header+body calling the new vectorized version
+    public static func writev(fd fileDescriptor: Int32, header: Data, body: Data) throws {
+        try writev(fd: fileDescriptor, parts: [header, body])
     }
 
     public static func writeAll(fd fileDescriptor: Int32, data: Data) throws {

@@ -9,11 +9,19 @@ public final class VTRWireConnection: @unchecked Sendable {
     }
 
     public func send(type: VTRMessageType, body: Data = Data()) throws {
+        try sendMessage(type: type, bodyParts: [body])
+    }
+
+    public func sendMessage(type: VTRMessageType, bodyParts: [Data]) throws {
         sendLock.lock()
         defer { sendLock.unlock() }
-        let header = VTRMessageHeader(type: type.rawValue, length: UInt32(body.count)).encoded()
-        // Use writev to avoid copying body into a new Data
-        try POSIXIO.writev(fd: fileDescriptor, header: header, body: body)
+        let totalLen = bodyParts.reduce(0) { $0 + $1.count }
+        let header = VTRMessageHeader(type: type.rawValue, length: UInt32(totalLen)).encoded()
+        
+        var chunks = [header]
+        chunks.append(contentsOf: bodyParts)
+        
+        try POSIXIO.writev(fd: fileDescriptor, parts: chunks)
     }
 
     private var headerBuf = Data(count: VTRProtocol.headerSize)

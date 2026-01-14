@@ -11,36 +11,44 @@ public enum AnnexB {
     }
 
     public static func splitNALUnits(_ data: Data) -> [Data] {
-        let bytes = [UInt8](data)
         var units: [Data] = []
         var index = 0
         var startPos: Int?
+        let count = data.count
 
-        func commit(until endPos: Int) {
-            if let start = startPos, endPos > start {
-                units.append(Data(bytes[start ..< endPos]))
-            }
-        }
+        data.withUnsafeBytes { ptr in
+            guard let base = ptr.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
 
-        while index + 3 < bytes.count {
-            if bytes[index] == 0, bytes[index + 1] == 0, bytes[index + 2] == 1 {
-                commit(until: index)
-                startPos = index + 3
-                index += 3
-                continue
+            func commit(until endPos: Int) {
+                if let start = startPos, endPos > start {
+                    units.append(data.subdata(in: start ..< endPos))
+                }
             }
-            if index + 4 < bytes.count,
-               bytes[index] == 0, bytes[index + 1] == 0, bytes[index + 2] == 0, bytes[index + 3] == 1 {
-                commit(until: index)
-                startPos = index + 4
-                index += 4
-                continue
+
+            while index + 3 < count {
+                // Check 0x000001
+                if base[index] == 0, base[index + 1] == 0, base[index + 2] == 1 {
+                    commit(until: index)
+                    startPos = index + 3
+                    index += 3
+                    continue
+                }
+                // Check 0x00000001
+                if index + 4 < count,
+                   base[index] == 0, base[index + 1] == 0, base[index + 2] == 0, base[index + 3] == 1 {
+                    commit(until: index)
+                    startPos = index + 4
+                    index += 4
+                    continue
+                }
+                index += 1
             }
-            index += 1
         }
 
         if startPos != nil {
-            commit(until: bytes.count)
+            if let start = startPos, start < count {
+                units.append(data.subdata(in: start ..< count))
+            }
         } else {
             units.append(data)
         }
@@ -50,17 +58,35 @@ public enum AnnexB {
     public static func toLengthPrefixed(_ annexB: Data, lengthSize: Int) -> Data {
         precondition((1 ... 4).contains(lengthSize), "lengthSize must be 1...4")
         let units = splitNALUnits(annexB)
-        var out = Data()
-        out.reserveCapacity(annexB.count)
-        for unit in units {
-            let len = unit.count
-            var prefix = [UInt8](repeating: 0, count: lengthSize)
-            for idx in 0 ..< lengthSize {
-                let shift = (lengthSize - 1 - idx) * 8
-                prefix[idx] = UInt8((len >> shift) & 0xFF)
-            }
-            out.append(contentsOf: prefix)
-            out.append(unit)
+        
+        // Calculate total size
+        let totalSize = units.reduce(0) { $0 + lengthSize + $1.count }
+        var out = Data(count: totalSize)
+        
+        var offset = 0
+        out.withUnsafeMutableBytes { outRaw in
+             guard let outBase = outRaw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+             
+             for unit in units {
+                 let len = unit.count
+                 // Write length prefix
+                 for idx in 0 ..< lengthSize {
+                     let shift = (lengthSize - 1 - idx) * 8
+                     outBase[offset + idx] = UInt8((len >> shift) & 0xFF)
+                 }
+                 offset += lengthSize
+                 
+                 // Copy NAL unit
+                 unit.withUnsafeBytes { inRaw in
+                     if let from = inRaw.baseAddress {
+                        // UnsafeRawPointer to UnsafeMutableRawPointer copy
+                        // We need to cast destinations to raw for memcpy or use assign
+                        // But since we have specific pointers let's use memcpy which is available in Darwin
+                        memcpy(outBase + offset, from, len)
+                     }
+                 }
+                 offset += len
+             }
         }
         return out
     }

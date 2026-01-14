@@ -59,6 +59,21 @@ public final class VTRServer {
                 }
             }
             if clientFd < 0 { continue }
+            
+            var noDelay: Int32 = 1
+            _ = setsockopt(clientFd, Int32(IPPROTO_TCP), TCP_NODELAY, &noDelay, 
+                           socklen_t(MemoryLayout.size(ofValue: noDelay)))
+
+            var bufSize: Int32 = 4 * 1024 * 1024
+            _ = setsockopt(clientFd, SOL_SOCKET, SO_SNDBUF, &bufSize, socklen_t(MemoryLayout.size(ofValue: bufSize)))
+            _ = setsockopt(clientFd, SOL_SOCKET, SO_RCVBUF, &bufSize, socklen_t(MemoryLayout.size(ofValue: bufSize)))
+            
+            // TCP_NOTSENT_LOWAT (0x201 on macOS) to minimize buffer bloat latency
+            // Keep unsent buffer size low (16KB) to ensure fresh frames
+            var notSentLowat: Int32 = 16 * 1024
+            // 0x201 is TCP_NOTSENT_LOWAT on Darwin
+            _ = setsockopt(clientFd, Int32(IPPROTO_TCP), 0x201, &notSentLowat, 
+                           socklen_t(MemoryLayout.size(ofValue: notSentLowat)))
 
             logger.info("ACCEPT fd=\(clientFd)")
             if once {

@@ -71,7 +71,7 @@ final class StubCodecSession: CodecSession {
         writer.writeBE(UInt32(annexB.count))
         writer.write(annexB)
 
-        try send(.packet, writer.data)
+        try send(.packet, [writer.data])
     }
 
     func handlePacketMessage(_ payload: Data) throws {
@@ -128,7 +128,7 @@ final class StubCodecSession: CodecSession {
         writer.writeBE(UInt32(uvPlane.count))
         writer.write(uvPlane)
 
-        try send(.frame, writer.data)
+        try send(.frame, [writer.data])
     }
 
     func flush() throws {}

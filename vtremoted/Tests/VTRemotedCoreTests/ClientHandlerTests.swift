@@ -22,6 +22,12 @@ final class ClientHandlerTests: XCTestCase {
         func send(type: VTRMessageType, body: Data) throws {
             sent.append((type, body))
         }
+
+        func sendMessage(type: VTRMessageType, bodyParts: [Data]) throws {
+            var body = Data()
+            for part in bodyParts { body.append(part) }
+            try send(type: type, body: body)
+        }
     }
 
     func testHappyPathEncodeHandshakeAndFlush() {

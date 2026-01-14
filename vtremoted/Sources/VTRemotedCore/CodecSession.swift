@@ -14,7 +14,7 @@ public protocol CodecSession: AnyObject {
     func shutdown()
 }
 
-public typealias MessageSender = (VTRMessageType, Data) throws -> Void
+public typealias MessageSender = (VTRMessageType, [Data]) throws -> Void
 
 public enum CodecSessionFactory {
     public static func make(sender: @escaping MessageSender) -> CodecSession {

@@ -30,70 +30,30 @@
             }
         }
 
-        private let kVTPropertyNotSupportedErr: OSStatus = -12900
+        private class BufferPool {
+            private var buffers: [Data] = []
+            private let lock = NSLock()
 
-        // Some VT constants are missing from older Swift overlays when building outside Xcode.
-        private let vtKeyRateControlMode: CFString = "RateControlMode" as CFString
-        private let vtRateControlModeAverageBitRate: CFString = "AverageBitRate" as CFString
-        private let vtKeyConstantBitRate: CFString = "ConstantBitRate" as CFString
-        private let vtKeyPrioritizeSpeed: CFString = "PrioritizeEncodingSpeedOverQuality" as CFString
-        private let vtKeyEncoderID: CFString = "EncoderID" as CFString
-        private let vtKeySpatialAdaptiveQP: CFString = "SpatialAdaptiveQPLevel" as CFString
-        private let vtKeyAllowOpenGOP: CFString = "AllowOpenGOP" as CFString
-        private let vtKeyMaximizePowerEfficiency: CFString = "MaximizePowerEfficiency" as CFString
-        private let vtKeyReferenceBufferCount: CFString = "ReferenceBufferCount" as CFString
-        private let vtKeyMinAllowedFrameQP: CFString = "MinAllowedFrameQP" as CFString
-        private let vtKeyMaxAllowedFrameQP: CFString = "MaxAllowedFrameQP" as CFString
-        private let vtKeyMaxH264SliceBytes: CFString = "MaxH264SliceBytes" as CFString
-        private let vtKeyH264EntropyMode: CFString = "H264EntropyMode" as CFString
-        private let vtH264EntropyCAVLC: CFString = "CAVLC" as CFString
-        private let vtH264EntropyCABAC: CFString = "CABAC" as CFString
-        private let vtKeyTargetQualityForAlpha: CFString = "TargetQualityForAlpha" as CFString
-        private let vtKeyEnableHWEncoder: CFString = "EnableHardwareAcceleratedVideoEncoder" as CFString
-        private let vtKeyRequireHWEncoder: CFString = "RequireHardwareAcceleratedVideoEncoder" as CFString
-        private let vtKeyLowLatencyRC: CFString = "EnableLowLatencyRateControl" as CFString
+            func get(capacity: Int) -> Data {
+                lock.lock()
+                defer { lock.unlock() }
+                if var buf = buffers.popLast() {
+                    buf.count = 0
+                    buf.reserveCapacity(capacity)
+                    return buf
+                }
+                return Data(capacity: capacity)
+            }
 
-        private let vtProfileH264Baseline13: CFString = "H264_Baseline_1_3" as CFString
-        private let vtProfileH264Baseline30: CFString = "H264_Baseline_3_0" as CFString
-        private let vtProfileH264Baseline31: CFString = "H264_Baseline_3_1" as CFString
-        private let vtProfileH264Baseline32: CFString = "H264_Baseline_3_2" as CFString
-        private let vtProfileH264Baseline40: CFString = "H264_Baseline_4_0" as CFString
-        private let vtProfileH264Baseline41: CFString = "H264_Baseline_4_1" as CFString
-        private let vtProfileH264Baseline42: CFString = "H264_Baseline_4_2" as CFString
-        private let vtProfileH264Baseline50: CFString = "H264_Baseline_5_0" as CFString
-        private let vtProfileH264Baseline51: CFString = "H264_Baseline_5_1" as CFString
-        private let vtProfileH264Baseline52: CFString = "H264_Baseline_5_2" as CFString
-        private let vtProfileH264BaselineAuto: CFString = "H264_Baseline_AutoLevel" as CFString
-        private let vtProfileH264ConstrainedBaselineAuto: CFString = "H264_ConstrainedBaseline_AutoLevel" as CFString
-
-        private let vtProfileH264Main30: CFString = "H264_Main_3_0" as CFString
-        private let vtProfileH264Main31: CFString = "H264_Main_3_1" as CFString
-        private let vtProfileH264Main32: CFString = "H264_Main_3_2" as CFString
-        private let vtProfileH264Main40: CFString = "H264_Main_4_0" as CFString
-        private let vtProfileH264Main41: CFString = "H264_Main_4_1" as CFString
-        private let vtProfileH264Main42: CFString = "H264_Main_4_2" as CFString
-        private let vtProfileH264Main50: CFString = "H264_Main_5_0" as CFString
-        private let vtProfileH264Main51: CFString = "H264_Main_5_1" as CFString
-        private let vtProfileH264Main52: CFString = "H264_Main_5_2" as CFString
-        private let vtProfileH264MainAuto: CFString = "H264_Main_AutoLevel" as CFString
-
-        private let vtProfileH264High30: CFString = "H264_High_3_0" as CFString
-        private let vtProfileH264High31: CFString = "H264_High_3_1" as CFString
-        private let vtProfileH264High32: CFString = "H264_High_3_2" as CFString
-        private let vtProfileH264High40: CFString = "H264_High_4_0" as CFString
-        private let vtProfileH264High41: CFString = "H264_High_4_1" as CFString
-        private let vtProfileH264High42: CFString = "H264_High_4_2" as CFString
-        private let vtProfileH264High50: CFString = "H264_High_5_0" as CFString
-        private let vtProfileH264High51: CFString = "H264_High_5_1" as CFString
-        private let vtProfileH264High52: CFString = "H264_High_5_2" as CFString
-        private let vtProfileH264HighAuto: CFString = "H264_High_AutoLevel" as CFString
-        private let vtProfileH264ConstrainedHighAuto: CFString = "H264_ConstrainedHigh_AutoLevel" as CFString
-        private let vtProfileH264Extended50: CFString = "H264_Extended_5_0" as CFString
-        private let vtProfileH264ExtendedAuto: CFString = "H264_Extended_AutoLevel" as CFString
-
-        private let vtProfileHEVCMainAuto: CFString = "HEVC_Main_AutoLevel" as CFString
-        private let vtProfileHEVCMain10Auto: CFString = "HEVC_Main10_AutoLevel" as CFString
-        private let vtProfileHEVCMain42210Auto: CFString = "HEVC_Main42210_AutoLevel" as CFString
+            func `return`(_ buffer: Data) {
+                lock.lock()
+                defer { lock.unlock() }
+                buffers.append(buffer)
+            }
+        }
+        
+        private let inputBufferPool = BufferPool()
+        private let outputBufferPool = BufferPool()
 
         init(sender: @escaping MessageSender) {
             send = sender
@@ -137,29 +97,6 @@
             let expectedY = max(0, stride0 * height0)
             let expectedUV = max(0, stride1 * height1)
 
-            let yPlane: Data
-            let uvPlane: Data
-            if config.options.wireCompression == 1 {
-                guard let yDecomp = LZ4Codec.decompress(yRaw, expectedSize: expectedY),
-                      let uvDecomp = LZ4Codec.decompress(uvRaw, expectedSize: expectedUV)
-                else {
-                    throw VTRemotedError.protocolViolation("LZ4 decompress failed")
-                }
-                yPlane = yDecomp
-                uvPlane = uvDecomp
-            } else if config.options.wireCompression == 2 {
-                guard let yDecomp = ZstdCodec.decompress(yRaw, expectedSize: expectedY),
-                      let uvDecomp = ZstdCodec.decompress(uvRaw, expectedSize: expectedUV)
-                else {
-                    throw VTRemotedError.protocolViolation("Zstd decompress failed")
-                }
-                yPlane = yDecomp
-                uvPlane = uvDecomp
-            } else {
-                yPlane = yRaw
-                uvPlane = uvRaw
-            }
-
             guard let pool = VTCompressionSessionGetPixelBufferPool(session) else {
                 throw VTRemotedError.videoToolboxUnavailable
             }
@@ -176,27 +113,68 @@
             let rowBytesY = config.width * bytesPerSample
             let rowBytesUV = config.width * bytesPerSample
 
-            yPlane.withUnsafeBytes { yPtr in
-                uvPlane.withUnsafeBytes { uvPtr in
-                    let ySrc = yPtr.baseAddress!.assumingMemoryBound(to: UInt8.self)
-                    let uvSrc = uvPtr.baseAddress!.assumingMemoryBound(to: UInt8.self)
-
-                    if let yDst = CVPixelBufferGetBaseAddressOfPlane(pBuffer, 0) {
-                        let dstStride = CVPixelBufferGetBytesPerRowOfPlane(pBuffer, 0)
-                        let rowBytes = min(rowBytesY, min(stride0, dstStride))
-                        for yIdx in 0 ..< height0 {
-                            memcpy(yDst.advanced(by: yIdx * dstStride), ySrc.advanced(by: yIdx * stride0), rowBytes)
-                        }
+            // Helper to process a plane
+            func processPlane(planeIndex: Int, raw: Data, expectedSize: Int, stride: Int, rowBytes: Int) throws {
+                guard let destBase = CVPixelBufferGetBaseAddressOfPlane(pBuffer, planeIndex) else { return }
+                let destStride = CVPixelBufferGetBytesPerRowOfPlane(pBuffer, planeIndex)
+                
+                // Decompress to temp buffer first (System Memory) to avoid 
+                // reading from WC memory during LZ4 back-references
+                var temp = inputBufferPool.get(capacity: expectedSize)
+                defer { inputBufferPool.return(temp) }
+                
+                let success: Bool
+                if config.options.wireCompression == 1 {
+                    success = temp.withUnsafeMutableBytes { dstPtr in
+                        LZ4Codec.decompress(raw, into: dstPtr.baseAddress!, expectedSize: expectedSize)
                     }
-                    if let uvDst = CVPixelBufferGetBaseAddressOfPlane(pBuffer, 1) {
-                        let dstStride = CVPixelBufferGetBytesPerRowOfPlane(pBuffer, 1)
-                        let rowBytes = min(rowBytesUV, min(stride1, dstStride))
-                        for yIdx in 0 ..< height1 {
-                            memcpy(uvDst.advanced(by: yIdx * dstStride), uvSrc.advanced(by: yIdx * stride1), rowBytes)
+                } else if config.options.wireCompression == 2 {
+                    success = temp.withUnsafeMutableBytes { dstPtr in
+                        ZstdCodec.decompress(raw, into: dstPtr.baseAddress!, expectedSize: expectedSize)
+                    }
+                } else {
+                    temp.append(raw)
+                    success = true
+                }
+                guard success else { throw VTRemotedError.protocolViolation("Decompress failed") }
+                
+                // Copy from System Memory to Video Memory (WC)
+                temp.withUnsafeBytes { srcPtr in
+                    guard let srcBase = srcPtr.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+                    let dstBase = destBase.assumingMemoryBound(to: UInt8.self)
+                    
+                    if stride == destStride, stride == rowBytes {
+                        // Fast path: single contiguous copy
+                        memcpy(dstBase, srcBase, expectedSize)
+                    } else {
+                         // Strided copy
+                        let height = expectedSize / stride
+                        let copyBytes = min(rowBytes, min(stride, destStride))
+                        for row in 0 ..< height {
+                            memcpy(dstBase.advanced(by: row * destStride),
+                                   srcBase.advanced(by: row * stride),
+                                   copyBytes)
                         }
                     }
                 }
             }
+
+            var errors: [Error?] = [nil, nil]
+            DispatchQueue.concurrentPerform(iterations: 2) { plane in
+                do {
+                    if plane == 0 {
+                        try processPlane(planeIndex: 0, raw: yRaw, expectedSize: expectedY, 
+                                         stride: stride0, rowBytes: rowBytesY)
+                    } else {
+                        try processPlane(planeIndex: 1, raw: uvRaw, expectedSize: expectedUV, 
+                                         stride: stride1, rowBytes: rowBytesUV)
+                    }
+                } catch {
+                    errors[plane] = error
+                }
+            }
+            if let err = errors[0] { throw err }
+            if let err = errors[1] { throw err }
 
             // Parse side data (V1 extension)
             var sideData: [Data] = []
@@ -335,43 +313,25 @@
 
             cvPixelFormat = try pickCVPixelFormat(pixelFormat: config.pixelFormat)
 
-            var hasBFrames = config.options.maxBFrames > 0
-            var entropy = config.options.entropy
-            let profile = config.options.profile
-
-            if config.codec == .h264 {
-                if hasBFrames, (profile & 0xFF) == VideoToolboxConstants.AV_PROFILE_H264_BASELINE {
-                    logger.info("WARN baseline profile cannot use B-frames; disabling")
-                    hasBFrames = false
-                }
-                if entropy == 2, (profile & 0xFF) == VideoToolboxConstants.AV_PROFILE_H264_BASELINE {
-                    logger.info("WARN CABAC requires main/high profile; disabling entropy override")
-                    entropy = 0
-                }
-            }
-
-            let profileLevel = try profileLevelString(
-                codec: config.codec,
-                profile: profile,
-                level: config.options.level,
-                pixelFormat: config.pixelFormat,
-                hasBFrames: hasBFrames
-            )
-
+            // Setup session properties
             let encInfo = NSMutableDictionary()
+            
+            // HW Encoder
             if config.options.requireSoftware {
-                encInfo[vtKeyEnableHWEncoder] = kCFBooleanFalse
+                encInfo[VideoToolboxProperties.vtKeyEnableHWEncoder] = kCFBooleanFalse
             } else if !config.options.allowSoftware {
-                encInfo[vtKeyRequireHWEncoder] = kCFBooleanTrue
+                encInfo[VideoToolboxProperties.vtKeyRequireHWEncoder] = kCFBooleanTrue
             } else {
-                encInfo[vtKeyEnableHWEncoder] = kCFBooleanTrue
+                encInfo[VideoToolboxProperties.vtKeyEnableHWEncoder] = kCFBooleanTrue
             }
+            
+            // Low Latency
             if (config.options.flags & VideoToolboxConstants.AV_CODEC_FLAG_LOW_DELAY) != 0,
                config.codec == .h264 || (config.codec == .hevc && isAppleSilicon()) {
                 if config.options.bitrate <= 0 {
                     throw VTRemotedError.protocolViolation("low_delay requires bitrate")
                 }
-                encInfo[vtKeyLowLatencyRC] = kCFBooleanTrue
+                encInfo[VideoToolboxProperties.vtKeyLowLatencyRC] = kCFBooleanTrue
             }
 
             let pbInfo = NSMutableDictionary()
@@ -414,22 +374,103 @@
                 throw VTRemotedError.ioError(code: Int32(status), message: "VTCompressionSessionCreate failed")
             }
 
-            func setProp(_ key: CFString, _ value: CFTypeRef, _ name: String, fatal: Bool = false) throws {
-                let status = VTSessionSetProperty(session,
-                                                  key: key,
-                                                  value: value)
-                if status == kVTPropertyNotSupportedErr {
-                    if fatal { throw VTRemotedError.ioError(code: Int32(status), message: "set \(name) failed") }
-                    logger.info("WARN \(name) not supported")
-                    return
+            try configureProperties(session: session, config: config)
+
+            let preparation = VTCompressionSessionPrepareToEncodeFrames(session)
+            guard preparation == noErr else {
+                throw VTRemotedError.ioError(code: Int32(preparation), message: "PrepareToEncodeFrames failed")
+            }
+
+            if logger.level.rawValue >= LogLevel.debug.rawValue {
+                dumpSessionProperties(session: session)
+            }
+        }
+
+        private func configureProperties(session: VTCompressionSession, config: SessionConfiguration) throws {
+            var hasBFrames = config.options.maxBFrames > 0
+            var entropy = config.options.entropy
+            let profile = config.options.profile
+
+            if config.codec == .h264 {
+                if hasBFrames, (profile & 0xFF) == VideoToolboxConstants.AV_PROFILE_H264_BASELINE {
+                    logger.info("WARN baseline profile cannot use B-frames; disabling")
+                    hasBFrames = false
                 }
-                if status != noErr {
-                    if fatal { throw VTRemotedError.ioError(code: Int32(status), message: "set \(name) failed") }
-                    logger.info("WARN set \(name) failed \(status)")
+                if entropy == 2, (profile & 0xFF) == VideoToolboxConstants.AV_PROFILE_H264_BASELINE {
+                    logger.info("WARN CABAC requires main/high profile; disabling entropy override")
+                    entropy = 0
                 }
             }
 
-            if (config.options.flags & VideoToolboxConstants.AV_CODEC_FLAG_QSCALE) != 0
+            try configureBitrate(session: session, config: config)
+            try configureFrameProperties(session: session, config: config)
+            try configureColors(session: session, config: config)
+            try configureProfileLevel(session: session, config: config, profile: profile, hasBFrames: hasBFrames)
+            try configureH264(session: session, config: config, entropy: entropy)
+
+            // Misc properties
+            if !hasBFrames {
+                try setProp(session, kVTCompressionPropertyKey_AllowFrameReordering, 
+                            kCFBooleanFalse, "allow_reorder", fatal: true)
+            }
+            if config.options.realtime >= 0 {
+                let isRealtime = config.options.realtime != 0 ? kCFBooleanTrue : kCFBooleanFalse
+                try setProp(session, kVTCompressionPropertyKey_RealTime, isRealtime!, "realtime")
+            }
+            if config.options.powerEfficient >= 0 {
+                let powerEfficient = config.options.powerEfficient != 0 ? kCFBooleanTrue : kCFBooleanFalse
+                try setProp(session, VideoToolboxProperties.vtKeyMaximizePowerEfficiency, 
+                            powerEfficient!, "power_efficient")
+            }
+            if config.options.maxReferenceFrames > 0 {
+                var val = Int32(clamping: config.options.maxReferenceFrames)
+                let num = CFNumberCreate(kCFAllocatorDefault, .intType, &val)
+                try setProp(session, VideoToolboxProperties.vtKeyReferenceBufferCount, 
+                            num!, "max_ref_frames", fatal: true)
+            }
+            if config.options.spatialAQ >= 0 {
+                var val: Int32 = config.options.spatialAQ != 0 ?
+                    VideoToolboxConstants.kVTQPModulationLevel_Default :
+                    VideoToolboxConstants.kVTQPModulationLevel_Disable
+                let num = CFNumberCreate(kCFAllocatorDefault, .sInt32Type, &val)
+                try setProp(session, VideoToolboxProperties.vtKeySpatialAdaptiveQP, num!, "spatial_aq")
+            }
+            
+             if config.codec == .hevc, config.options.alphaQuality > 0.0 {
+                var alphaVal = config.options.alphaQuality
+                let num = CFNumberCreate(kCFAllocatorDefault, .doubleType, &alphaVal)
+                _ = VTSessionSetProperty(session, key: VideoToolboxProperties.vtKeyTargetQualityForAlpha, value: num)
+            }
+             
+             // QMin/QMax
+            if config.options.qmin >= 0 {
+                var val = Int32(clamping: config.options.qmin)
+                let num = CFNumberCreate(kCFAllocatorDefault, .intType, &val)
+                try setProp(session, VideoToolboxProperties.vtKeyMinAllowedFrameQP, 
+                            num!, "qmin", fatal: true)
+            }
+            if config.options.qmax >= 0 {
+                var val = Int32(clamping: config.options.qmax)
+                let num = CFNumberCreate(kCFAllocatorDefault, .intType, &val)
+                try setProp(session, VideoToolboxProperties.vtKeyMaxAllowedFrameQP, 
+                            num!, "qmax", fatal: true)
+            }
+
+            // Encoder ID log
+            var value: CFTypeRef?
+            let status = withUnsafeMutablePointer(to: &value) { ptr in
+                VTSessionCopyProperty(session,
+                                      key: VideoToolboxProperties.vtKeyEncoderID,
+                                      allocator: kCFAllocatorDefault,
+                                      valueOut: UnsafeMutableRawPointer(ptr))
+            }
+            if status == noErr, let encoderString = value as? String {
+                logger.debug("DBG EncoderID \(encoderString)")
+            }
+        }
+
+        private func configureBitrate(session: VTCompressionSession, config: SessionConfiguration) throws {
+             if (config.options.flags & VideoToolboxConstants.AV_CODEC_FLAG_QSCALE) != 0
                 || config.options.globalQuality > 0 {
                 if (config.options.flags & VideoToolboxConstants.AV_CODEC_FLAG_QSCALE) != 0, !isAppleSilicon() {
                     throw VTRemotedError.unsupported("qscale")
@@ -439,15 +480,17 @@
                 var quality = Float(config.options.globalQuality) / factor
                 if quality > 1.0 { quality = 1.0 }
                 let qualityNum = CFNumberCreate(kCFAllocatorDefault, .float32Type, &quality)
-                try setProp(kVTCompressionPropertyKey_Quality, qualityNum!, "quality", fatal: true)
+                try setProp(session, kVTCompressionPropertyKey_Quality, qualityNum!, "quality", fatal: true)
             } else if config.options.bitrate > 0 {
                 var br32 = Int32(clamping: config.options.bitrate)
                 let bitrate = CFNumberCreate(kCFAllocatorDefault,
                                              .sInt32Type,
                                              &br32)
                 if config.options.constantBitRate {
-                    let status = VTSessionSetProperty(session, key: vtKeyConstantBitRate, value: bitrate)
-                    if status == kVTPropertyNotSupportedErr {
+                    let status = VTSessionSetProperty(session, 
+                                                      key: VideoToolboxProperties.vtKeyConstantBitRate, 
+                                                      value: bitrate)
+                    if status == VideoToolboxProperties.kVTPropertyNotSupportedErr {
                         throw VTRemotedError.ioError(code: Int32(status), message: "constant_bit_rate not supported")
                     } else if status != noErr {
                         throw VTRemotedError.ioError(code: Int32(status), message: "set ConstantBitRate failed")
@@ -464,7 +507,7 @@
 
             if config.options.prioritizeSpeed >= 0 {
                 let prioritized = config.options.prioritizeSpeed != 0 ? kCFBooleanTrue : kCFBooleanFalse
-                try setProp(vtKeyPrioritizeSpeed, prioritized!, "prio_speed")
+                try setProp(session, VideoToolboxProperties.vtKeyPrioritizeSpeed, prioritized!, "prio_speed")
             }
 
             if config.codec == .h264 || config.codec == .hevc, config.options.maxRate > 0 {
@@ -476,37 +519,31 @@
                     throw VTRemotedError.ioError(code: Int32(status), message: "set DataRateLimits failed")
                 }
             }
+        }
 
-            if config.codec == .hevc, config.options.alphaQuality > 0.0 {
-                var alphaVal = config.options.alphaQuality
-                let num = CFNumberCreate(kCFAllocatorDefault, .doubleType, &alphaVal)
-                _ = VTSessionSetProperty(session, key: vtKeyTargetQualityForAlpha, value: num)
-            }
-
-            if let prof = profileLevel {
-                try setProp(kVTCompressionPropertyKey_ProfileLevel, prof, "profile_level")
-            }
-
+        private func configureFrameProperties(session: VTCompressionSession, config: SessionConfiguration) throws {
             if config.options.gop > 0 {
                 var gopVal = Int32(clamping: config.options.gop)
                 let gopNum = CFNumberCreate(kCFAllocatorDefault, .sInt32Type, &gopVal)
-                try setProp(kVTCompressionPropertyKey_MaxKeyFrameInterval, gopNum!, "gop", fatal: true)
+                try setProp(session, kVTCompressionPropertyKey_MaxKeyFrameInterval, gopNum!, "gop", fatal: true)
             }
 
             if config.options.framesBefore {
-                try setProp(kVTCompressionPropertyKey_MoreFramesBeforeStart, kCFBooleanTrue, "frames_before")
+                try setProp(session, kVTCompressionPropertyKey_MoreFramesBeforeStart, kCFBooleanTrue, "frames_before")
             }
             if config.options.framesAfter {
-                try setProp(kVTCompressionPropertyKey_MoreFramesAfterEnd, kCFBooleanTrue, "frames_after")
+                try setProp(session, kVTCompressionPropertyKey_MoreFramesAfterEnd, kCFBooleanTrue, "frames_after")
             }
 
             if config.options.sarNum > 0, config.options.sarDen > 0 {
                 let par = NSMutableDictionary()
                 par[kCMFormatDescriptionKey_PixelAspectRatioHorizontalSpacing] = NSNumber(value: config.options.sarNum)
                 par[kCMFormatDescriptionKey_PixelAspectRatioVerticalSpacing] = NSNumber(value: config.options.sarDen)
-                try setProp(kVTCompressionPropertyKey_PixelAspectRatio, par, "sar", fatal: true)
+                try setProp(session, kVTCompressionPropertyKey_PixelAspectRatio, par, "sar", fatal: true)
             }
+        }
 
+        private func configureColors(session: VTCompressionSession, config: SessionConfiguration) throws {
             if let trc = mapTransferFunction(config.options.colorTRC) {
                 _ = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_TransferFunction, value: trc)
             }
@@ -521,62 +558,74 @@
                 let num = CFNumberCreate(kCFAllocatorDefault, .float32Type, &gammaVal)
                 _ = VTSessionSetProperty(session, key: kCVImageBufferGammaLevelKey, value: num)
             }
+        }
 
-            if !hasBFrames {
-                try setProp(kVTCompressionPropertyKey_AllowFrameReordering,
-                            kCFBooleanFalse,
-                            "allow_reorder",
-                            fatal: true)
+        private func configureProfileLevel(session: VTCompressionSession, 
+                                           config: SessionConfiguration, 
+                                           profile: Int, 
+                                           hasBFrames: Bool) throws {
+             let profileLevel = try VideoToolboxProperties.profileLevelString(
+                codec: config.codec,
+                profile: profile,
+                level: config.options.level,
+                pixelFormat: config.pixelFormat,
+                hasBFrames: hasBFrames
+            )
+             if let prof = profileLevel {
+                try setProp(session, kVTCompressionPropertyKey_ProfileLevel, prof, "profile_level")
             }
+        }
 
+        private func configureH264(session: VTCompressionSession, config: SessionConfiguration, entropy: Int) throws {
             if config.codec == .h264, entropy != 0 {
-                let ent = entropy == 2 ? vtH264EntropyCABAC : vtH264EntropyCAVLC
-                try setProp(vtKeyH264EntropyMode, ent, "entropy")
-            }
-
-            if config.options.realtime >= 0 {
-                let isRealtime = config.options.realtime != 0 ? kCFBooleanTrue : kCFBooleanFalse
-                try setProp(kVTCompressionPropertyKey_RealTime, isRealtime!, "realtime")
+                let ent = entropy == 2 
+                    ? VideoToolboxProperties.vtH264EntropyCABAC 
+                    : VideoToolboxProperties.vtH264EntropyCAVLC
+                try setProp(session, VideoToolboxProperties.vtKeyH264EntropyMode, ent, "entropy")
             }
 
             if (config.options.flags & VideoToolboxConstants.AV_CODEC_FLAG_CLOSED_GOP) != 0 {
-                try setProp(vtKeyAllowOpenGOP, kCFBooleanFalse, "closed_gop")
-            }
-
-            if config.options.qmin >= 0 {
-                var val = Int32(clamping: config.options.qmin)
-                let num = CFNumberCreate(kCFAllocatorDefault, .intType, &val)
-                try setProp(vtKeyMinAllowedFrameQP, num!, "qmin", fatal: true)
-            }
-            if config.options.qmax >= 0 {
-                var val = Int32(clamping: config.options.qmax)
-                let num = CFNumberCreate(kCFAllocatorDefault, .intType, &val)
-                try setProp(vtKeyMaxAllowedFrameQP, num!, "qmax", fatal: true)
+                try setProp(session, VideoToolboxProperties.vtKeyAllowOpenGOP, kCFBooleanFalse, "closed_gop")
             }
 
             if config.options.maxSliceBytes >= 0, config.codec == .h264 {
                 var val = Int32(clamping: config.options.maxSliceBytes)
                 let num = CFNumberCreate(kCFAllocatorDefault, .intType, &val)
-                try setProp(vtKeyMaxH264SliceBytes, num!, "max_slice_bytes", fatal: true)
+                try setProp(session, VideoToolboxProperties.vtKeyMaxH264SliceBytes, 
+                            num!, "max_slice_bytes", fatal: true)
             }
+        }
 
-            if config.options.powerEfficient >= 0 {
-                let powerEfficient = config.options.powerEfficient != 0 ? kCFBooleanTrue : kCFBooleanFalse
-                try setProp(vtKeyMaximizePowerEfficiency, powerEfficient!, "power_efficient")
+        private func setProp(_ session: VTCompressionSession, _ key: CFString, _ value: CFTypeRef, 
+                             _ name: String, fatal: Bool = false) throws {
+            let status = VTSessionSetProperty(session,
+                                              key: key,
+                                              value: value)
+            if status == VideoToolboxProperties.kVTPropertyNotSupportedErr {
+                if fatal { throw VTRemotedError.ioError(code: Int32(status), message: "set \(name) failed") }
+                logger.info("WARN \(name) not supported")
+                return
             }
-
-            if config.options.maxReferenceFrames > 0 {
-                var val = Int32(clamping: config.options.maxReferenceFrames)
-                let num = CFNumberCreate(kCFAllocatorDefault, .intType, &val)
-                try setProp(vtKeyReferenceBufferCount, num!, "max_ref_frames", fatal: true)
+            if status != noErr {
+                if fatal { throw VTRemotedError.ioError(code: Int32(status), message: "set \(name) failed") }
+                logger.info("WARN set \(name) failed \(status)")
             }
+        }
+        
+        private func dumpSessionProperties(session: VTCompressionSession) {
+            var supported: CFDictionary?
+            let supStatus = VTSessionCopySupportedPropertyDictionary(
+                session,
+                supportedPropertyDictionaryOut: &supported
+            )
+            if supStatus != noErr {
+                logger.debug("DBG VT supported properties unavailable status=\(supStatus)")
+            }
+            let supportedDict = supported as NSDictionary?
 
-            if config.options.spatialAQ >= 0 {
-                var val: Int32 = config.options.spatialAQ != 0 ?
-                    VideoToolboxConstants.kVTQPModulationLevel_Default :
-                    VideoToolboxConstants.kVTQPModulationLevel_Disable
-                let num = CFNumberCreate(kCFAllocatorDefault, .sInt32Type, &val)
-                try setProp(vtKeySpatialAdaptiveQP, num!, "spatial_aq")
+            func describe(_ value: CFTypeRef?) -> String {
+                guard let value else { return "nil" }
+                return CFCopyDescription(value) as String
             }
 
             func copyProp(_ key: CFString) -> (OSStatus, CFTypeRef?) {
@@ -590,62 +639,35 @@
                 return (status, value)
             }
 
-            let (encStatus, encValue) = copyProp(vtKeyEncoderID)
-            if encStatus == noErr, let encoderString = encValue as? String {
-                logger.debug("DBG EncoderID \(encoderString)")
+            func logProp(_ name: String, _ key: CFString) {
+                let supportedStr = (supportedDict?[key] != nil) ? "supported" : "unknown"
+                let (status, val) = copyProp(key)
+                if status == noErr {
+                    logger.debug("DBG VT prop \(name) (\(supportedStr)) = \(describe(val))")
+                } else if status == VideoToolboxProperties.kVTPropertyNotSupportedErr {
+                    logger.debug("DBG VT prop \(name) (\(supportedStr)) = not supported")
+                } else {
+                    logger.debug("DBG VT prop \(name) (\(supportedStr)) read failed \(status)")
+                }
             }
 
-            let preparation = VTCompressionSessionPrepareToEncodeFrames(session)
-            guard preparation == noErr else {
-                throw VTRemotedError.ioError(code: Int32(preparation), message: "PrepareToEncodeFrames failed")
-            }
-
-            if logger.level.rawValue >= LogLevel.debug.rawValue {
-                var supported: CFDictionary?
-                let supStatus = VTSessionCopySupportedPropertyDictionary(
-                    session,
-                    supportedPropertyDictionaryOut: &supported
-                )
-                if supStatus != noErr {
-                    logger.debug("DBG VT supported properties unavailable status=\(supStatus)")
-                }
-                let supportedDict = supported as NSDictionary?
-
-                func describe(_ value: CFTypeRef?) -> String {
-                    guard let value else { return "nil" }
-                    return CFCopyDescription(value) as String
-                }
-
-                func logProp(_ name: String, _ key: CFString) {
-                    let supportedStr = (supportedDict?[key] != nil) ? "supported" : "unknown"
-                    let (status, val) = copyProp(key)
-                    if status == noErr {
-                        logger.debug("DBG VT prop \(name) (\(supportedStr)) = \(describe(val))")
-                    } else if status == kVTPropertyNotSupportedErr {
-                        logger.debug("DBG VT prop \(name) (\(supportedStr)) = not supported")
-                    } else {
-                        logger.debug("DBG VT prop \(name) (\(supportedStr)) read failed \(status)")
-                    }
-                }
-
-                logger.debug("DBG VT property dump post-PrepareToEncodeFrames")
-                logProp("AverageBitRate", kVTCompressionPropertyKey_AverageBitRate)
-                logProp("DataRateLimits", kVTCompressionPropertyKey_DataRateLimits)
-                logProp("ConstantBitRate", vtKeyConstantBitRate)
-                logProp("Quality", kVTCompressionPropertyKey_Quality)
-                logProp("MaxKeyFrameInterval", kVTCompressionPropertyKey_MaxKeyFrameInterval)
-                logProp("AllowFrameReordering", kVTCompressionPropertyKey_AllowFrameReordering)
-                logProp("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel)
-                logProp("RealTime", kVTCompressionPropertyKey_RealTime)
-                logProp("MinAllowedFrameQP", vtKeyMinAllowedFrameQP)
-                logProp("MaxAllowedFrameQP", vtKeyMaxAllowedFrameQP)
-                logProp("MaxH264SliceBytes", vtKeyMaxH264SliceBytes)
-                logProp("H264EntropyMode", vtKeyH264EntropyMode)
-                logProp("AllowOpenGOP", vtKeyAllowOpenGOP)
-                logProp("MaximizePowerEfficiency", vtKeyMaximizePowerEfficiency)
-                logProp("SpatialAdaptiveQP", vtKeySpatialAdaptiveQP)
-                logProp("ReferenceBufferCount", vtKeyReferenceBufferCount)
-            }
+            logger.debug("DBG VT property dump post-PrepareToEncodeFrames")
+            logProp("AverageBitRate", kVTCompressionPropertyKey_AverageBitRate)
+            logProp("DataRateLimits", kVTCompressionPropertyKey_DataRateLimits)
+            logProp("ConstantBitRate", VideoToolboxProperties.vtKeyConstantBitRate)
+            logProp("Quality", kVTCompressionPropertyKey_Quality)
+            logProp("MaxKeyFrameInterval", kVTCompressionPropertyKey_MaxKeyFrameInterval)
+            logProp("AllowFrameReordering", kVTCompressionPropertyKey_AllowFrameReordering)
+            logProp("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel)
+            logProp("RealTime", kVTCompressionPropertyKey_RealTime)
+            logProp("MinAllowedFrameQP", VideoToolboxProperties.vtKeyMinAllowedFrameQP)
+            logProp("MaxAllowedFrameQP", VideoToolboxProperties.vtKeyMaxAllowedFrameQP)
+            logProp("MaxH264SliceBytes", VideoToolboxProperties.vtKeyMaxH264SliceBytes)
+            logProp("H264EntropyMode", VideoToolboxProperties.vtKeyH264EntropyMode)
+            logProp("AllowOpenGOP", VideoToolboxProperties.vtKeyAllowOpenGOP)
+            logProp("MaximizePowerEfficiency", VideoToolboxProperties.vtKeyMaximizePowerEfficiency)
+            logProp("SpatialAdaptiveQP", VideoToolboxProperties.vtKeySpatialAdaptiveQP)
+            logProp("ReferenceBufferCount", VideoToolboxProperties.vtKeyReferenceBufferCount)
         }
 
         private func handleEncodedSampleBuffer(_ sbuf: CMSampleBuffer, context: FrameContext?) {
@@ -697,7 +719,7 @@
             writer.write(annex)
 
             do {
-                try send(.packet, writer.data)
+                try send(.packet, [writer.data])
             } catch {
                 logger.error("send packet failed: \(error)")
             }
@@ -708,6 +730,29 @@
             var data = Data(count: totalLen)
             data.withUnsafeMutableBytes { ptr in
                 _ = CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: totalLen, destination: ptr.baseAddress!)
+            }
+
+            if nalLengthField == 4 {
+                // Optimization: Replace length headers with start codes in-place
+                var index = 0
+                data.withUnsafeMutableBytes { ptr in
+                    let base = ptr.baseAddress!.assumingMemoryBound(to: UInt8.self)
+                    while index + 4 <= totalLen {
+                        var len: UInt32 = 0
+                        len = (UInt32(base[index]) << 24) | 
+                              (UInt32(base[index + 1]) << 16) | 
+                              (UInt32(base[index + 2]) << 8) | 
+                              UInt32(base[index + 3])
+                        
+                        base[index] = 0
+                        base[index + 1] = 0
+                        base[index + 2] = 0
+                        base[index + 3] = 1
+                        
+                        index += 4 + Int(len)
+                    }
+                }
+                return data
             }
 
             // 1. Calculate required size for Annex-B
@@ -878,48 +923,95 @@
                 0
             }
 
-            var writer = ByteWriter()
-            writer.writeBE(UInt64(bitPattern: ptsTicks))
-            writer.writeBE(UInt64(bitPattern: durTicks))
-            writer.writeBE(UInt32(0))
-            writer.write(UInt8(2))
+            CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
 
-            for plane in 0 ..< 2 {
+            var chunks: [Data] = []
+            
+            var meta = ByteWriter()
+            meta.writeBE(UInt64(bitPattern: ptsTicks))
+            meta.writeBE(UInt64(bitPattern: durTicks))
+            meta.writeBE(UInt32(0))
+            meta.write(UInt8(2))
+            chunks.append(meta.data)
+
+            struct PlaneResult {
+                let meta: Data
+                let data: Data
+            }
+            
+            var results = [PlaneResult?](repeating: nil, count: 2)
+            let resultLock = NSLock()
+            var error: Error?
+
+            DispatchQueue.concurrentPerform(iterations: 2) { plane in
+                if error != nil { return }
+                
                 let stride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, plane)
                 let height = CVPixelBufferGetHeightOfPlane(pixelBuffer, plane)
                 let len = stride * height
 
-                writer.writeBE(UInt32(stride))
-                writer.writeBE(UInt32(height))
-
-                let raw = if let base = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, plane) {
-                    Data(bytes: base, count: len)
+                var planeMeta = ByteWriter()
+                planeMeta.writeBE(UInt32(stride))
+                planeMeta.writeBE(UInt32(height))
+                
+                // Always copy to system memory first to avoid reading from WC memory during compression
+                var raw = outputBufferPool.get(capacity: len)
+                defer { outputBufferPool.return(raw) }
+                
+                if let base = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, plane) {
+                    raw.count = len
+                    raw.withUnsafeMutableBytes { dstPtr in
+                        _ = memcpy(dstPtr.baseAddress!, base, len)
+                    }
                 } else {
-                    Data(count: len)
+                    raw.count = len
                 }
-
+                
+                let compressed: Data
                 if config.options.wireCompression == 1 {
-                    guard let compressed = LZ4Codec.compress(raw) else {
-                        logger.error("lz4 compress failed")
+                    if let comp = LZ4Codec.compress(raw) {
+                        compressed = comp
+                    } else {
+                        resultLock.lock()
+                        error = VTRemotedError.protocolViolation("lz4 compress failed")
+                        resultLock.unlock()
                         return
                     }
-                    writer.writeBE(UInt32(compressed.count))
-                    writer.write(compressed)
                 } else if config.options.wireCompression == 2 {
-                    guard let compressed = ZstdCodec.compress(raw) else {
-                        logger.error("zstd compress failed")
+                    if let comp = ZstdCodec.compress(raw) {
+                        compressed = comp
+                    } else {
+                        resultLock.lock()
+                        error = VTRemotedError.protocolViolation("zstd compress failed")
+                        resultLock.unlock()
                         return
                     }
-                    writer.writeBE(UInt32(compressed.count))
-                    writer.write(compressed)
                 } else {
-                    writer.writeBE(UInt32(raw.count))
-                    writer.write(raw)
+                    compressed = raw
                 }
+                
+                planeMeta.writeBE(UInt32(compressed.count))
+                let res = PlaneResult(meta: planeMeta.data, data: compressed)
+                
+                resultLock.lock()
+                results[plane] = res
+                resultLock.unlock()
+            }
+            
+            if let err = error {
+                logger.error("encode frame failed: \(err)")
+                return
             }
 
+            guard let res0 = results[0], let res1 = results[1] else { return }
+            chunks.append(res0.meta)
+            chunks.append(res0.data)
+            chunks.append(res1.meta)
+            chunks.append(res1.data)
+
             do {
-                try send(.frame, writer.data)
+                try send(.frame, chunks)
             } catch {
                 logger.error("send frame failed: \(error)")
             }
@@ -944,14 +1036,6 @@
             #else
                 return false
             #endif
-        }
-
-        private func bitDepthForPixFmt(_ pixelFormat: UInt8) -> Int {
-            switch pixelFormat {
-            case 2: 10
-            case 1: 8
-            default: 0
-            }
         }
 
         private func mapColorPrimaries(_ primaries: Int) -> CFString? {
@@ -1013,124 +1097,6 @@
                 2.8
             default:
                 nil
-            }
-        }
-
-        private func profileLevelString(codec: VideoCodec,
-                                        profile: Int,
-                                        level: Int,
-                                        pixelFormat: UInt8,
-                                        hasBFrames: Bool) throws -> CFString? {
-            switch codec {
-            case .h264:
-                var hProfile = profile
-                if hProfile == VideoToolboxConstants.AV_PROFILE_UNKNOWN, level != 0 {
-                    hProfile = hasBFrames
-                        ? VideoToolboxConstants.AV_PROFILE_H264_MAIN
-                        : VideoToolboxConstants.AV_PROFILE_H264_BASELINE
-                }
-
-                switch hProfile {
-                case VideoToolboxConstants.AV_PROFILE_UNKNOWN:
-                    return nil
-                case VideoToolboxConstants.AV_PROFILE_H264_BASELINE:
-                    return h264BaselineLevel(level)
-                case VideoToolboxConstants.AV_PROFILE_H264_CONSTRAINED_BASELINE:
-                    if level != 0 {
-                        logger.info("WARN Level is auto-selected when constrained-baseline profile is used")
-                    }
-                    return vtProfileH264ConstrainedBaselineAuto
-                case VideoToolboxConstants.AV_PROFILE_H264_MAIN:
-                    return h264MainLevel(level)
-                case VideoToolboxConstants.AV_PROFILE_H264_CONSTRAINED_HIGH:
-                    if level != 0 {
-                        logger.info("WARN Level is auto-selected when constrained-high profile is used")
-                    }
-                    return vtProfileH264ConstrainedHighAuto
-                case VideoToolboxConstants.AV_PROFILE_H264_HIGH:
-                    return h264HighLevel(level)
-                case VideoToolboxConstants.AV_PROFILE_H264_EXTENDED:
-                    switch level {
-                    case 0: return vtProfileH264ExtendedAuto
-                    case 50: return vtProfileH264Extended50
-                    default: break
-                    }
-                default:
-                    break
-                }
-            case .hevc:
-                return hevcProfileLevel(profile: profile, pixelFormat: pixelFormat)
-            }
-
-            throw VTRemotedError.unsupported("invalid profile/level")
-        }
-
-        private func h264BaselineLevel(_ level: Int) -> CFString? {
-            switch level {
-            case 0: vtProfileH264BaselineAuto
-            case 13: vtProfileH264Baseline13
-            case 30: vtProfileH264Baseline30
-            case 31: vtProfileH264Baseline31
-            case 32: vtProfileH264Baseline32
-            case 40: vtProfileH264Baseline40
-            case 41: vtProfileH264Baseline41
-            case 42: vtProfileH264Baseline42
-            case 50: vtProfileH264Baseline50
-            case 51: vtProfileH264Baseline51
-            case 52: vtProfileH264Baseline52
-            default: nil
-            }
-        }
-
-        private func h264MainLevel(_ level: Int) -> CFString? {
-            switch level {
-            case 0: vtProfileH264MainAuto
-            case 30: vtProfileH264Main30
-            case 31: vtProfileH264Main31
-            case 32: vtProfileH264Main32
-            case 40: vtProfileH264Main40
-            case 41: vtProfileH264Main41
-            case 42: vtProfileH264Main42
-            case 50: vtProfileH264Main50
-            case 51: vtProfileH264Main51
-            case 52: vtProfileH264Main52
-            default: nil
-            }
-        }
-
-        private func h264HighLevel(_ level: Int) -> CFString? {
-            switch level {
-            case 0: vtProfileH264HighAuto
-            case 30: vtProfileH264High30
-            case 31: vtProfileH264High31
-            case 32: vtProfileH264High32
-            case 40: vtProfileH264High40
-            case 41: vtProfileH264High41
-            case 42: vtProfileH264High42
-            case 50: vtProfileH264High50
-            case 51: vtProfileH264High51
-            case 52: vtProfileH264High52
-            default: nil
-            }
-        }
-
-        private func hevcProfileLevel(profile: Int, pixelFormat: UInt8) -> CFString? {
-            let bitDepth = bitDepthForPixFmt(pixelFormat)
-            switch profile {
-            case VideoToolboxConstants.AV_PROFILE_UNKNOWN:
-                if bitDepth == 10 { return vtProfileHEVCMain10Auto }
-                return nil
-            case VideoToolboxConstants.AV_PROFILE_HEVC_MAIN:
-                if bitDepth > 0, bitDepth != 8 {
-                    logger.info("WARN main profile with \(bitDepth)-bit input")
-                }
-                return vtProfileHEVCMainAuto
-            case VideoToolboxConstants.AV_PROFILE_HEVC_MAIN_10:
-                return vtProfileHEVCMain10Auto
-            case VideoToolboxConstants.AV_PROFILE_HEVC_REXT:
-                return vtProfileHEVCMain42210Auto
-            default:
-                return nil
             }
         }
 

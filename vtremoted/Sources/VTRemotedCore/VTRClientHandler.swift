@@ -98,13 +98,14 @@ public final class VTRClientHandler: @unchecked Sendable {
         )
 
         let mode = config.mode
-        let session = sessionFactory { [weak self] type, body in
+        let session = sessionFactory { [weak self] type, bodyParts in
             guard let self else { return }
-            stats.bytesOut += Int64(VTRProtocol.headerSize + body.count)
+            let totalCount = bodyParts.reduce(0) { $0 + $1.count }
+            stats.bytesOut += Int64(VTRProtocol.headerSize + totalCount)
             if type == .packet { stats.packetsOut += 1; stats.recordOutput() }
             if type == .frame { stats.framesOut += 1 }
             stats.maybeReport(mode: mode, logger: logger, intervalSeconds: 0.25)
-            try messageIO.send(type: type, body: body)
+            try messageIO.sendMessage(type: type, bodyParts: bodyParts)
         }
         codecSession = session
         configuration = config
