@@ -22,6 +22,9 @@
 #include <fcntl.h>
 #include <netinet/tcp.h>
 #endif
+#if HAVE_PTHREADS
+#include <pthread.h>
+#endif
 #include "avcodec.h"
 #include "codec_internal.h"
 #include "encode.h"
@@ -32,6 +35,8 @@
 #include "libavutil/ffversion.h"
 #include "libavutil/avassert.h"
 #include "libavutil/opt.h"
+#include "libavutil/cpu.h"
+#include "libavutil/thread.h"
 #include "libavutil/mem.h"
 #include "libavutil/pixdesc.h"
 #include "libavutil/time.h"
@@ -75,6 +80,47 @@ static int vtremote_sock_errno(void)
 #endif
 
 #define MIN_HVCC_LENGTH 23
+
+#if HAVE_PTHREADS
+typedef struct LZ4PlaneJob {
+    VTRemoteEncContext *s;
+    const uint8_t *src;
+    int src_size;
+    int plane;
+    size_t out_size;
+    int err;
+} LZ4PlaneJob;
+
+static void *lz4_compress_plane(void *opaque)
+{
+    LZ4PlaneJob *job = opaque;
+    VTRemoteEncContext *s = job->s;
+    size_t bound = (size_t)LZ4_compressBound(job->src_size);
+    if (bound <= 0) {
+        job->err = AVERROR_EXTERNAL;
+        return NULL;
+    }
+    if ((int)bound > s->comp_buf_cap[job->plane]) {
+        uint8_t *tmp = av_realloc(s->comp_buf[job->plane], bound);
+        if (!tmp) {
+            job->err = AVERROR(ENOMEM);
+            return NULL;
+        }
+        s->comp_buf[job->plane] = tmp;
+        s->comp_buf_cap[job->plane] = (int)bound;
+    }
+    int out = LZ4_compress_default((const char *)job->src,
+                                   (char *)s->comp_buf[job->plane],
+                                   job->src_size,
+                                   s->comp_buf_cap[job->plane]);
+    if (out <= 0) {
+        job->err = AVERROR_EXTERNAL;
+        return NULL;
+    }
+    job->out_size = (size_t)out;
+    return NULL;
+}
+#endif
 
 static int vtremote_hevc_extradata_to_annexb(const uint8_t *in, int in_size,
                                              uint8_t **out, int *out_size)
@@ -922,6 +968,15 @@ int ff_vtremote_common_init(AVCodecContext *avctx)
     s->comp_buf[0] = s->comp_buf[1] = NULL;
     s->comp_buf_cap[0] = s->comp_buf_cap[1] = 0;
     s->zstd_cctx = NULL;
+    s->zstd_params_set = 0;
+
+    if (s->zstd_workers < 0) {
+        int cores = av_cpu_count();
+        if (cores > 1)
+            s->zstd_workers = FFMIN(16, cores);
+        else
+            s->zstd_workers = 0;
+    }
 
     if (!s->host) {
         av_log(avctx, AV_LOG_ERROR, "vt_remote_host is required\n");
@@ -1016,15 +1071,66 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame)
 
     int64_t send_start_us = av_gettime_relative();
 
-    if (s->wire_compression == 1 || s->wire_compression == 2) {
+    if (s->wire_compression == 1) {
+#if HAVE_PTHREADS
+        if (av_cpu_count() > 1) {
+            LZ4PlaneJob jobs[2];
+            pthread_t threads[2];
+            int created = 0;
+            int threaded_ok = 1;
+            for (int i = 0; i < 2; i++) {
+                jobs[i].s = s;
+                jobs[i].src = planes[i];
+                jobs[i].src_size = (int)sizes[i];
+                jobs[i].plane = i;
+                jobs[i].out_size = 0;
+                jobs[i].err = 0;
+                if (pthread_create(&threads[i], NULL, lz4_compress_plane, &jobs[i]) != 0) {
+                    threaded_ok = 0;
+                    break;
+                }
+                created++;
+            }
+            if (!threaded_ok) {
+                for (int i = 0; i < created; i++)
+                    pthread_join(threads[i], NULL);
+                goto lz4_serial;
+            }
+            for (int i = 0; i < 2; i++) {
+                pthread_join(threads[i], NULL);
+                if (jobs[i].err)
+                    return jobs[i].err;
+                send_planes[i] = s->comp_buf[i];
+                send_sizes[i] = (uint32_t)jobs[i].out_size;
+            }
+        } else
+#endif
+        {
+lz4_serial:
+            for (int i = 0; i < 2; i++) {
+                int src_size = (int)sizes[i];
+                size_t bound = (size_t)LZ4_compressBound(src_size);
+                if (bound <= 0)
+                    return AVERROR_EXTERNAL;
+                if ((int)bound > s->comp_buf_cap[i]) {
+                    uint8_t *tmp = av_realloc(s->comp_buf[i], bound);
+                    if (!tmp)
+                        return AVERROR(ENOMEM);
+                    s->comp_buf[i] = tmp;
+                    s->comp_buf_cap[i] = (int)bound;
+                }
+                int out = LZ4_compress_default((const char *)planes[i], (char *)s->comp_buf[i],
+                                               src_size, s->comp_buf_cap[i]);
+                if (out <= 0)
+                    return AVERROR_EXTERNAL;
+                send_planes[i] = s->comp_buf[i];
+                send_sizes[i] = (uint32_t)out;
+            }
+        }
+    } else if (s->wire_compression == 2) {
         for (int i = 0; i < 2; i++) {
             int src_size = (int)sizes[i];
-            size_t bound;
-            if (s->wire_compression == 1) {
-                bound = (size_t)LZ4_compressBound(src_size);
-            } else {
-                bound = ZSTD_compressBound(src_size);
-            }
+            size_t bound = ZSTD_compressBound(src_size);
             if (bound <= 0)
                 return AVERROR_EXTERNAL;
             if ((int)bound > s->comp_buf_cap[i]) {
@@ -1034,29 +1140,29 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame)
                 s->comp_buf[i] = tmp;
                 s->comp_buf_cap[i] = (int)bound;
             }
-            
-            size_t out_size = 0;
-            if (s->wire_compression == 1) {
-                int out = LZ4_compress_default((const char *)planes[i], (char *)s->comp_buf[i],
-                                               src_size, s->comp_buf_cap[i]);
-                if (out <= 0) return AVERROR_EXTERNAL;
-                out_size = (size_t)out;
-            } else {
-                if (!s->zstd_cctx) {
-                    s->zstd_cctx = ZSTD_createCCtx();
-                    if (!s->zstd_cctx) return AVERROR(ENOMEM);
-                }
-                size_t out = ZSTD_compressCCtx(s->zstd_cctx, s->comp_buf[i], bound,
-                                               planes[i], src_size, 1); // Level 1
-                if (ZSTD_isError(out)) {
-                    av_log(avctx, AV_LOG_ERROR, "Zstd compress failed: %s\n", ZSTD_getErrorName(out));
-                    return AVERROR_EXTERNAL;
-                }
-                out_size = out;
+            if (!s->zstd_cctx) {
+                s->zstd_cctx = ZSTD_createCCtx();
+                if (!s->zstd_cctx) return AVERROR(ENOMEM);
+                s->zstd_params_set = 0;
             }
-            
+            if (!s->zstd_params_set && s->zstd_workers > 0) {
+                size_t status = ZSTD_CCtx_setParameter(s->zstd_cctx, ZSTD_c_nbWorkers, s->zstd_workers);
+                if (ZSTD_isError(status)) {
+                    av_log(avctx, AV_LOG_WARNING,
+                           "Zstd set workers=%d failed: %s\n",
+                           s->zstd_workers, ZSTD_getErrorName(status));
+                } else {
+                    s->zstd_params_set = 1;
+                }
+            }
+            size_t out = ZSTD_compressCCtx(s->zstd_cctx, s->comp_buf[i], bound,
+                                           planes[i], src_size, 1); // Level 1
+            if (ZSTD_isError(out)) {
+                av_log(avctx, AV_LOG_ERROR, "Zstd compress failed: %s\n", ZSTD_getErrorName(out));
+                return AVERROR_EXTERNAL;
+            }
             send_planes[i] = s->comp_buf[i];
-            send_sizes[i] = (uint32_t)out_size;
+            send_sizes[i] = (uint32_t)out;
         }
     }
 

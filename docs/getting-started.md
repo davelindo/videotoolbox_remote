@@ -59,5 +59,6 @@ ffmpeg -i input.mkv \
 ## Notes
 
 - Wire compression uses **Zstd** by default (~30-40% smaller than LZ4).
+- Zstd runs multithreaded by default (auto workers); tune with `-vt_remote_zstd_workers`.
 - Token auth is optional; add `-vt_remote_token` on the client and `--token` on the server to enforce.
 - The server automatically optimizes VideoToolbox settings for batch encoding throughput.

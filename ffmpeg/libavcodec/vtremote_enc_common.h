@@ -17,6 +17,7 @@ typedef struct VTRemoteEncContext {
     int inflight;
     int log_level;
     int wire_compression;
+    int zstd_workers;
     int codec_id;  /* AVCodecID */
     /* VideoToolbox option mirror (see videotoolboxenc.c) */
     int profile;
@@ -53,6 +54,7 @@ typedef struct VTRemoteEncContext {
     uint8_t *comp_buf[2];
     int comp_buf_cap[2];
     void *zstd_cctx;
+    int zstd_params_set;
     /* stats */
     int64_t start_time_us;
     int64_t frames_sent;
@@ -75,7 +77,8 @@ typedef struct VTRemoteEncContext {
     { "vt_remote_wire_compression", "wire compression", OFFSET(wire_compression), AV_OPT_TYPE_INT, { .i64 = 2 }, 0, 2, ENC|VID, "vt_remote_wire_compression" }, \
         { "none", "no compression", 0, AV_OPT_TYPE_CONST, { .i64 = 0 }, 0, 0, ENC|VID, "vt_remote_wire_compression" }, \
         { "lz4",  "lz4",             0, AV_OPT_TYPE_CONST, { .i64 = 1 }, 0, 0, ENC|VID, "vt_remote_wire_compression" }, \
-        { "zstd", "zstd",            0, AV_OPT_TYPE_CONST, { .i64 = 2 }, 0, 0, ENC|VID, "vt_remote_wire_compression" }
+        { "zstd", "zstd",            0, AV_OPT_TYPE_CONST, { .i64 = 2 }, 0, 0, ENC|VID, "vt_remote_wire_compression" }, \
+    { "vt_remote_zstd_workers", "zstd worker threads (-1=auto, 0=single-thread)", OFFSET(zstd_workers), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, 16, ENC|VID }
 
 #define VTREMOTE_COMMON_VT_OPTIONS \
     { "allow_sw", "Allow software encoding", OFFSET(allow_sw), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, VE }, \

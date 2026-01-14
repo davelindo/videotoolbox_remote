@@ -131,6 +131,9 @@ Client-side options:
 # Wire compression: zstd (default), lz4, or none
 -vt_remote_wire_compression zstd
 
+# Zstd worker threads (-1=auto, 0=single-thread)
+-vt_remote_zstd_workers -1
+
 # For realtime/streaming use cases (disables speed prioritization)
 -realtime 1
 ```
