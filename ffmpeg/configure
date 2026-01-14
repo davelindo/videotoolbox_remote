@@ -6985,17 +6985,22 @@ check_lib android android/native_window.h ANativeWindow_acquire -landroid
 check_lib mediandk "stdint.h media/NdkMediaFormat.h" AMediaFormat_new -lmediandk
 check_lib camera2ndk "stdbool.h stdint.h camera/NdkCameraManager.h" ACameraManager_create -lcamera2ndk
 
-enabled appkit       && check_apple_framework AppKit
-enabled audiotoolbox && check_apple_framework AudioToolbox
-enabled avfoundation && check_apple_framework AVFoundation
-enabled coreimage    && check_apple_framework CoreImage
-enabled metal        && check_apple_framework Metal
-enabled videotoolbox && check_apple_framework VideoToolbox
+if enabled darwin; then
+    enabled appkit       && check_apple_framework AppKit
+    enabled audiotoolbox && check_apple_framework AudioToolbox
+    enabled avfoundation && check_apple_framework AVFoundation
+    enabled coreimage    && check_apple_framework CoreImage
+    enabled metal        && check_apple_framework Metal
+    enabled videotoolbox && check_apple_framework VideoToolbox
 
-check_apple_framework CoreFoundation
-check_apple_framework CoreMedia
-check_apple_framework CoreVideo
-check_apple_framework CoreAudio
+    check_apple_framework CoreFoundation
+    check_apple_framework CoreMedia
+    check_apple_framework CoreVideo
+    check_apple_framework CoreAudio
+else
+    disable appkit audiotoolbox avfoundation coreimage metal videotoolbox
+    disable corefoundation coremedia corevideo coreaudio
+fi
 
 enabled audiotoolbox && {
     check_type AudioToolbox/AudioToolbox.h AudioObjectPropertyAddress
