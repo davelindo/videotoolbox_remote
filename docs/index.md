@@ -39,8 +39,8 @@ title: VideoToolbox Remote
       <p>Use Apple Silicon hardware encode/decode from Linux/Windows or headless servers.</p>
     </div>
     <div class="card">
-      <h3>Protocol is simple</h3>
-      <p>TCP, framed messages, Annex B packets on the wire. Easy to reimplement elsewhere.</p>
+      <h3>Optimized for throughput</h3>
+      <p>Zstd wire compression, pipelined frames, and auto-tuned VideoToolbox settings for maximum speed.</p>
     </div>
   </div>
 

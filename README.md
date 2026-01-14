@@ -107,8 +107,33 @@ Results below use **Zstd** compression (standard default).
 
 If performance is poor:
 
-* Avoid heavy filters on the client side if you’re CPU limited,
-* Prefer a faster network link (2.5GbE/10GbE if you’re doing 4K).
+* Avoid heavy filters on the client side if you're CPU limited,
+* Prefer a faster network link (2.5GbE/10GbE if you're doing 4K).
+
+### Performance tuning options
+
+The server automatically applies optimal settings for batch encoding:
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `RealTime` | `false` | Disabled for maximum throughput |
+| `PrioritizeEncodingSpeedOverQuality` | `true` | Favor speed over compression efficiency |
+| `MaximizePowerEfficiency` | `false` | Disabled for maximum speed |
+| `MaxFrameDelayCount` | `8` | Allow parallel frame encoding |
+| `ExpectedFrameRate` | from client | Helps VideoToolbox optimize |
+
+Client-side options:
+
+```bash
+# Increase in-flight frames for higher throughput (default: 16)
+-vt_remote_inflight 32
+
+# Wire compression: zstd (default), lz4, or none
+-vt_remote_wire_compression zstd
+
+# For realtime/streaming use cases (disables speed prioritization)
+-realtime 1
+```
 
 ---
 

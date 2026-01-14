@@ -410,15 +410,33 @@
                 try setProp(session, kVTCompressionPropertyKey_AllowFrameReordering, 
                             kCFBooleanFalse, "allow_reorder", fatal: true)
             }
+            
+            // Set expected frame rate to help VideoToolbox optimize encoding pipeline
+            if config.frameRate.num > 0 && config.frameRate.den > 0 {
+                var fps = Float(config.frameRate.num) / Float(config.frameRate.den)
+                let fpsNum = CFNumberCreate(kCFAllocatorDefault, .floatType, &fps)
+                try setProp(session, kVTCompressionPropertyKey_ExpectedFrameRate, fpsNum!, "expected_fps")
+            }
+            
+            // Set realtime mode - explicitly disable for batch encoding to maximize throughput
+            let isRealtime: CFBoolean
             if config.options.realtime >= 0 {
-                let isRealtime = config.options.realtime != 0 ? kCFBooleanTrue : kCFBooleanFalse
-                try setProp(session, kVTCompressionPropertyKey_RealTime, isRealtime!, "realtime")
+                isRealtime = config.options.realtime != 0 ? kCFBooleanTrue! : kCFBooleanFalse!
+            } else {
+                // Default: non-realtime for maximum throughput
+                isRealtime = kCFBooleanFalse!
             }
+            try setProp(session, kVTCompressionPropertyKey_RealTime, isRealtime, "realtime")
+            // Power efficiency mode - explicitly disable for batch encoding to maximize speed
+            let powerEfficient: CFBoolean
             if config.options.powerEfficient >= 0 {
-                let powerEfficient = config.options.powerEfficient != 0 ? kCFBooleanTrue : kCFBooleanFalse
-                try setProp(session, VideoToolboxProperties.vtKeyMaximizePowerEfficiency, 
-                            powerEfficient!, "power_efficient")
+                powerEfficient = config.options.powerEfficient != 0 ? kCFBooleanTrue! : kCFBooleanFalse!
+            } else {
+                // Default: disable power efficiency for maximum speed
+                powerEfficient = kCFBooleanFalse!
             }
+            try setProp(session, VideoToolboxProperties.vtKeyMaximizePowerEfficiency, 
+                        powerEfficient, "power_efficient")
             if config.options.maxReferenceFrames > 0 {
                 var val = Int32(clamping: config.options.maxReferenceFrames)
                 let num = CFNumberCreate(kCFAllocatorDefault, .intType, &val)
@@ -502,10 +520,23 @@
                 }
             }
 
+            // Prioritize encoding speed - enable by default for batch encoding unless explicitly disabled
+            // or realtime mode is enabled
+            let shouldPrioritizeSpeed: Bool
             if config.options.prioritizeSpeed >= 0 {
-                let prioritized = config.options.prioritizeSpeed != 0 ? kCFBooleanTrue : kCFBooleanFalse
-                try setProp(session, VideoToolboxProperties.vtKeyPrioritizeSpeed, prioritized!, "prio_speed")
+                shouldPrioritizeSpeed = config.options.prioritizeSpeed != 0
+            } else {
+                // Default: prioritize speed unless realtime mode is explicitly enabled
+                shouldPrioritizeSpeed = config.options.realtime != 1
             }
+            if shouldPrioritizeSpeed {
+                try setProp(session, VideoToolboxProperties.vtKeyPrioritizeSpeed, kCFBooleanTrue, "prio_speed")
+            }
+            
+            // Allow more frames to be queued for encoding (improves throughput at slight latency cost)
+            var maxFrameDelay: Int32 = 8
+            let delayNum = CFNumberCreate(kCFAllocatorDefault, .sInt32Type, &maxFrameDelay)
+            _ = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxFrameDelayCount, value: delayNum!)
 
             if config.codec == .h264 || config.codec == .hevc, config.options.maxRate > 0 {
                 let bytesPerSecond = Int64(config.options.maxRate >> 3)

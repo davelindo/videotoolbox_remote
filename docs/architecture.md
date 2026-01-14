@@ -4,7 +4,7 @@ title: Architecture
 
 # VideoToolbox Remote Architecture (MVP)
 
-Updated: 2026-01-12
+Updated: 2026-01-14
 
 ## Components
 - **Client (FFmpeg)**: encoders/decoders `h264_videotoolbox_remote` / `hevc_videotoolbox_remote`. Responsibilities: demux, decode/encode, filters, audio/subs, mux, rate-control policy, TCP session lifecycle, frame upload, packet reception, timestamp preservation.
@@ -51,6 +51,25 @@ Common:
 - **M1**: `h264_videotoolbox_remote` + real `vtremoted` H.264 (Annex B), full FFmpeg pipeline.
 - **M2**: HEVC path + DTS correctness for B-frames.
 - **M3**: stability/perf (keepalive, inflight tuning, optional wire compression).
+
+## Performance optimizations
+
+The server automatically applies optimal VideoToolbox settings for batch encoding:
+
+| Property | Default | Purpose |
+|----------|---------|---------|
+| `ExpectedFrameRate` | from client | Helps VT optimize encode pipeline |
+| `PrioritizeEncodingSpeedOverQuality` | `true` | Favor speed for batch encoding |
+| `RealTime` | `false` | Maximize throughput over latency |
+| `MaximizePowerEfficiency` | `false` | Maximize speed over power |
+| `MaxFrameDelayCount` | `8` | Allow parallel frame encoding |
+
+These are automatically disabled when `-realtime 1` is passed by the client.
+
+Client-side pipelining:
+- Default `inflight` of 16 frames to hide network latency
+- Non-blocking packet drain to keep pipeline full
+- Zstd wire compression (~30-40% smaller than LZ4)
 
 ## Not in scope (MVP)
 - TLS/mTLS, HandBrake integration, HDR metadata passthrough, multi-server discovery.

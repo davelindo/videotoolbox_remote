@@ -50,7 +50,11 @@ final class ClientHandlerTests: XCTestCase {
         ])
 
         Logger.shared.level = .error
-        let handler = VTRClientHandler(io: fakeIO, expectedToken: "")
+        let handler = VTRClientHandler(
+            io: fakeIO, 
+            expectedToken: "",
+            sessionFactory: { sender in StubCodecSession(sender: sender) }
+        )
         handler.run()
 
         XCTAssertEqual(fakeIO.sent.count, 3)
