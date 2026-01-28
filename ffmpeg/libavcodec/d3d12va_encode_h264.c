@@ -44,6 +44,7 @@ typedef struct D3D12VAEncodeH264Context {
     int qp;
     int profile;
     int level;
+    int deblock;
     int idr_pic_id;
 
     // Writer structures.
@@ -223,6 +224,17 @@ static int d3d12va_encode_h264_init_sequence_params(AVCodecContext *avctx)
         av_log(avctx, AV_LOG_DEBUG, "ROI encoding not supported by hardware for current rate control mode \n");
     }
 
+    // Check motion estimation precision mode support
+    if (ctx->me_precision != D3D12_VIDEO_ENCODER_MOTION_ESTIMATION_PRECISION_MODE_MAXIMUM) {
+        if (!(support.SupportFlags & D3D12_VIDEO_ENCODER_SUPPORT_FLAG_MOTION_ESTIMATION_PRECISION_MODE_LIMIT_AVAILABLE)) {
+            av_log(avctx, AV_LOG_ERROR, "Hardware does not support motion estimation "
+                "precision mode limits.\n");
+            return AVERROR(ENOTSUP);
+        }
+        av_log(avctx, AV_LOG_VERBOSE, "Hardware supports motion estimation "
+            "precision mode limits.\n");
+    }
+
     desc = av_pix_fmt_desc_get(base_ctx->input_frames->sw_format);
     av_assert0(desc);
 
@@ -284,6 +296,23 @@ static int d3d12va_encode_h264_get_encoder_caps(AVCodecContext *avctx)
     if (h264_caps.SupportFlags & D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_SUPPORT_H264_FLAG_CABAC_ENCODING_SUPPORT) {
         config->ConfigurationFlags |= D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_H264_FLAG_ENABLE_CABAC_ENCODING;
         priv->unit_opts.cabac = 1;
+    }
+
+    // Deblocking filter configuration
+    if (priv->deblock == 1) {
+       if (h264_caps.DisableDeblockingFilterSupportedModes & D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_H264_SLICES_DEBLOCKING_MODE_FLAG_0_ALL_LUMA_CHROMA_SLICE_BLOCK_EDGES_ALWAYS_FILTERED) {
+            config->DisableDeblockingFilterConfig = D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_H264_SLICES_DEBLOCKING_MODE_0_ALL_LUMA_CHROMA_SLICE_BLOCK_EDGES_ALWAYS_FILTERED;
+        } else {
+            av_log(avctx, AV_LOG_ERROR, "Requested deblocking filter enable mode not supported by driver.\n");
+            return AVERROR(ENOTSUP);
+        }
+    } else if (priv->deblock == 0) {
+        if (h264_caps.DisableDeblockingFilterSupportedModes & D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_H264_SLICES_DEBLOCKING_MODE_FLAG_1_DISABLE_ALL_SLICE_BLOCK_EDGES) {
+            config->DisableDeblockingFilterConfig = D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_H264_SLICES_DEBLOCKING_MODE_1_DISABLE_ALL_SLICE_BLOCK_EDGES;
+        } else {
+            av_log(avctx, AV_LOG_ERROR, "Requested deblocking filter disable mode not supported by driver.\n");
+            return AVERROR(ENOTSUP);
+        }
     }
 
     base_ctx->surface_width  = FFALIGN(avctx->width,  16);
@@ -609,6 +638,9 @@ static const AVOption d3d12va_encode_h264_options[] = {
     { LEVEL("6.1",  61) },
     { LEVEL("6.2",  62) },
 #undef LEVEL
+
+    { "deblock", "Deblocking filter mode",
+      OFFSET(deblock), AV_OPT_TYPE_BOOL, { .i64 = -1 }, -1, 1, FLAGS },
 
     { NULL },
 };

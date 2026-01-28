@@ -42,14 +42,52 @@ jobs:
     name: Detect changes
     runs-on: ubuntu-latest
     outputs:
-      ffmpeg: ${{ steps.filter.outputs.ffmpeg }}
-      vtremoted: ${{ steps.filter.outputs.vtremoted }}
-      docs: ${{ steps.filter.outputs.docs }}
-      ci: ${{ steps.filter.outputs.ci }}
+      ffmpeg: ${{ github.event_name == 'schedule' && steps.filter_schedule.outputs.ffmpeg || github.event_name == 'schedule' && steps.filter_schedule_fallback.outputs.ffmpeg || steps.filter.outputs.ffmpeg }}
+      vtremoted: ${{ github.event_name == 'schedule' && steps.filter_schedule.outputs.vtremoted || github.event_name == 'schedule' && steps.filter_schedule_fallback.outputs.vtremoted || steps.filter.outputs.vtremoted }}
+      docs: ${{ github.event_name == 'schedule' && steps.filter_schedule.outputs.docs || github.event_name == 'schedule' && steps.filter_schedule_fallback.outputs.docs || steps.filter.outputs.docs }}
+      ci: ${{ github.event_name == 'schedule' && steps.filter_schedule.outputs.ci || github.event_name == 'schedule' && steps.filter_schedule_fallback.outputs.ci || steps.filter.outputs.ci }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Check for nightly tag
+        id: nightly_tag
+        if: github.event_name == 'schedule'
+        run: |
+          if git rev-parse -q --verify "refs/tags/nightly"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: dorny/paths-filter@v3
+        id: filter_schedule
+        if: github.event_name == 'schedule' && steps.nightly_tag.outputs.exists == 'true'
+        with:
+          base: nightly
+          ref: ${{ github.sha }}
+          filters: |
+            ffmpeg:
+              - 'ffmpeg/**'
+              - 'tests/integration/**'
+            vtremoted:
+              - 'vtremoted/**'
+            docs:
+              - 'docs/**'
+              - 'README.md'
+            ci:
+              - '.github/workflows/ci.yml'
+      - name: Assume changes when nightly tag is missing
+        id: filter_schedule_fallback
+        if: github.event_name == 'schedule' && steps.nightly_tag.outputs.exists != 'true'
+        run: |
+          echo "ffmpeg=true" >> "$GITHUB_OUTPUT"
+          echo "vtremoted=true" >> "$GITHUB_OUTPUT"
+          echo "docs=true" >> "$GITHUB_OUTPUT"
+          echo "ci=true" >> "$GITHUB_OUTPUT"
       - uses: dorny/paths-filter@v3
         id: filter
+        if: github.event_name != 'schedule'
         with:
           filters: |
             ffmpeg:
@@ -66,7 +104,7 @@ jobs:
   swift-macos-arm64:
     name: Swift (vtremoted) macOS arm64
     needs: changes
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/') || needs.changes.outputs.vtremoted == 'true' || needs.changes.outputs.ci == 'true'
+    if: (github.event_name == 'schedule' && (needs.changes.outputs.ffmpeg == 'true' || needs.changes.outputs.vtremoted == 'true' || needs.changes.outputs.ci == 'true')) || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/') || needs.changes.outputs.vtremoted == 'true' || needs.changes.outputs.ci == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -104,7 +142,7 @@ jobs:
   ffmpeg-build:
     name: FFmpeg (${{ matrix.label }})
     needs: changes
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/') || needs.changes.outputs.ffmpeg == 'true' || needs.changes.outputs.ci == 'true'
+    if: (github.event_name == 'schedule' && (needs.changes.outputs.ffmpeg == 'true' || needs.changes.outputs.vtremoted == 'true' || needs.changes.outputs.ci == 'true')) || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/') || needs.changes.outputs.ffmpeg == 'true' || needs.changes.outputs.ci == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -241,7 +279,7 @@ jobs:
     name: Publish nightly / release assets
     runs-on: ubuntu-latest
     needs: [changes, swift-macos-arm64, ffmpeg-build]
-    if: github.event_name != 'pull_request' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/'))
+    if: github.event_name != 'pull_request' && ((github.event_name == 'schedule' && (needs.changes.outputs.ffmpeg == 'true' || needs.changes.outputs.vtremoted == 'true' || needs.changes.outputs.ci == 'true')) || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/'))
     steps:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
