@@ -2,124 +2,142 @@
 title: Protocol
 ---
 
-# VideoToolbox Remote Protocol — Version 1 (authoritative)
+# VideoToolbox Remote Protocol
 
-Status: draft locked for MVP (as of 2026-01-12). On-wire bitstream format is **Annex B** (mandatory for v1).
+**Status:** Stable v1.
+**Wire Format:** Annex B (mandatory).
+**Endianness:** Big Endian (Network Byte Order).
 
-## 1. Transport
-- TCP, one connection per encode session.
-- Default port: 5555 (configurable).
-- Length-prefixed binary messages; all integers are **network byte order** (big endian).
-- No TLS in MVP (optional token + trusted LAN); TLS/mTLS reserved for v2.
+## 1. Overview
+The protocol uses a single TCP connection per encode/decode session. It is stateful, starting with a handshake (`HELLO`), configuration (`CONFIGURE`), and then a stream of frames/packets.
 
-## 2. Framing
+### Sequence Flow
 
-```c
-struct MsgHeader {
-    uint32_t magic;   // 'VTR1' = 0x56545231
-    uint16_t version; // 1
-    uint16_t type;    // enum MsgType
-    uint32_t length;  // payload bytes (does NOT include header)
-};
+```mermaid
+sequenceDiagram
+    participant C as FFmpeg (Client)
+    participant S as vtremoted (Server)
+    participant VT as VideoToolbox (Hardware)
+
+    Note over C,S: Handshake
+    C->>S: HELLO (token, codec, client_info)
+    S-->>C: HELLO_ACK (status, caps)
+
+    Note over C,S: Configuration
+    C->>S: CONFIGURE (width, height, fmt)
+    S->>VT: VTCompressionSessionCreate
+    VT-->>S: Session Ready
+    S-->>C: CONFIGURE_ACK (extradata)
+
+    Note over C,S: Streaming (Encode Mode)
+    loop Frames
+        C->>S: FRAME (raw NV12 planes)
+        S->>VT: VTCompressionSessionEncodeFrame
+        VT-->>S: Callback (CMSampleBuffer)
+        S-->>C: PACKET (Annex B encoded)
+    end
+
+    Note over C,S: Teardown
+    C->>S: FLUSH
+    S-->>C: DONE
 ```
 
-Header size: 12 bytes. Every frame carries the header, even for zero-length payloads.
+## 2. Transport & Framing
+*   **Port**: Default `5555`.
+*   **Framing**: All messages share a common 12-byte header.
 
-## 3. Message types (v1)
-Numeric codes are fixed for v1. Future versions must either bump `version` or remain backward compatible.
+### Header Structure
 
-| Type | Code | Direction | Payload |
-| --- | --- | --- | --- |
-| HELLO | 1 | C→S | token (optional), requested_codec, client_name, client_build_id |
-| HELLO_ACK | 2 | S→C | status, server_name, server_version, capabilities, max_sessions, active_sessions |
-| CONFIGURE | 3 | C→S | width, height, pix_fmt, time_base, framerate (opt), options map, extradata |
-| CONFIGURE_ACK | 4 | S→C | status, codec_extradata, reported_pix_fmt, warnings |
-| FRAME | 5 | C→S (encode) / S→C (decode) | pts, duration, flags, planes[] |
-| PACKET | 6 | S→C (encode) / C→S (decode) | pts, dts, duration, flags, data |
-| FLUSH | 7 | C→S | none |
-| DONE | 8 | S→C | none |
-| ERROR | 9 | C↔S | code, message |
-| PING | 10 | C↔S | none |
-| PONG | 11 | C↔S | none |
+| Offset | Type | Name | Value / Description |
+| :--- | :--- | :--- | :--- |
+| 0 | `uint32` | `magic` | `0x56545231` ("VTR1") |
+| 4 | `uint16` | `version` | `1` |
+| 6 | `uint16` | `type` | Enum ID (see below) |
+| 8 | `uint32` | `length` | Payload size in bytes (excluding header) |
 
-`status` in ACKs: `0=ok`, `1=busy`, `2=authfail`, `3=unsupported`, `4=internal`.
+## 3. Message Types
 
-`flags` bitfield (FRAME): bit0=force_keyframe.  
-`flags` bitfield (PACKET): bit0=keyframe.
+| ID | Name | Direction | Payload Description |
+| :--- | :--- | :--- | :--- |
+| `1` | **HELLO** | C → S | Initial handshake with auth token. |
+| `2` | **HELLO_ACK** | S → C | Server acceptance/rejection. |
+| `3` | **CONFIGURE** | C → S | Stream parameters. |
+| `4` | **CONFIGURE_ACK** | S → C | Finalized config & codec extradata. |
+| `5` | **FRAME** | Bidirectional | Raw image data (planes). |
+| `6` | **PACKET** | Bidirectional | Encoded bitstream (Annex B). |
+| `7` | **FLUSH** | C → S | Request to drain pipeline. |
+| `8` | **DONE** | S → C | Pipeline drained signal. |
+| `9` | **ERROR** | Bidirectional | Fatal error info. |
+| `10` | **PING** | Bidirectional | Keepalive. |
+| `11` | **PONG** | Bidirectional | Keepalive response. |
 
-## 4. Payload encoding
+## 4. Payloads
 
-### Strings
-UTF‑8. Prefix with `uint16_t len`, followed by `len` bytes (no NUL).
+### HELLO (Type 1)
 
-### Options map
-`uint16_t count` followed by repeated key/value string pairs.
-Mandatory key: `mode` (`encode` or `decode`).
-Optional key: `wire_compression` (`0`=none, `1`=lz4, `2`=zstd). When set to `1` or `2`, FRAME plane data is compressed. Client default is `zstd` (2) unless overridden.
+| Type | Name | Description |
+| :--- | :--- | :--- |
+| `string` | `token` | Auth token (optional). |
+| `string` | `codec` | Requested codec (e.g., `h264`, `hevc`). |
+| `string` | `client_name` | User-agent string. |
+| `uint32` | `build_id` | Client build version. |
 
-### CONFIGURE extradata
-`uint32_t extradata_len` + `extradata_len` bytes. For decode, send codec config
-records (avcC/hvcC) when available.
+### HELLO_ACK (Type 2)
 
-### Pixel formats (enum)
-`1=NV12`, `2=P010`. NV12 is required for v1; P010 may be rejected with `unsupported`.
+| Type | Name | Description |
+| :--- | :--- | :--- |
+| `uint32` | `status` | `0=OK`, `1=Busy`, `2=AuthFail`. |
+| `string` | `server_name` | Server ID string. |
+| `uint32` | `server_version` | Server build version. |
+| `uint32` | `max_sessions` | Concurrency limit. |
 
-### FRAME planes
-`uint8_t plane_count`, then for each plane: `uint32_t stride`, `uint32_t height`, `uint32_t data_len`, `data`.  
-MVP requires plane_count=2 (NV12).
-If `wire_compression` is active, `data` is compressed and must decompress to `stride * height` bytes for that plane. Zstd (2) is preferred for better compression efficiency.
+### CONFIGURE (Type 3)
 
-### FRAME side data
-Following the planes, `uint8_t side_data_count` (new in v1 late-addition).
-For each side data item:
-- `uint32_t type` (matches `AVFrameSideDataType` enum in FFmpeg, e.g., `A53_CC=2`)
-- `uint32_t size`
-- `data` bytes
+| Type | Name | Description |
+| :--- | :--- | :--- |
+| `uint32` | `width` | Video width. |
+| `uint32` | `height` | Video height. |
+| `uint32` | `pix_fmt` | `1=NV12`, `2=P010`. |
+| `uint32` | `time_base_num` | Timebase numerator. |
+| `uint32` | `time_base_den` | Timebase denominator. |
+| `map` | `options` | Key-value pairs (e.g., `bitrate`). |
+| `bytes` | `extradata` | Header data (decoding only). |
 
-### PACKET data
-- `uint32_t data_len` + `data` (Annex B NAL units).
-- Optional side data is reserved for future versions (length=0 in v1).
+### FRAME (Type 5)
+Used for **sending raw frames** (Encode) or **receiving raw frames** (Decode).
 
-### Extradata in CONFIGURE_ACK
-- H.264: `AVCDecoderConfigurationRecord` (avcC box contents).
-- HEVC: `HEVCDecoderConfigurationRecord` (hvcC box contents).
-- Clients may also extract SPS/PPS(/VPS) from the record to emit Annex B start-code copies if required by the muxer; PACKET data is already Annex B.
+| Type | Name | Description |
+| :--- | :--- | :--- |
+| `int64` | `pts` | Presentation timestamp. |
+| `int64` | `duration` | Frame duration. |
+| `uint32` | `flags` | `Bit 0`: Force Keyframe. |
+| `planes[]` | `planes` | NV12/P010 Plane data. |
 
-## 5. Timing
-- Client supplies `pts` and `duration` per FRAME (int64, in stream timebase).
-- Server emits `pts`, `dts`, `duration` per PACKET derived from CMSampleBuffer timing. **Client must not guess DTS.**
-- Time base is provided in CONFIGURE as `num/den`.
-Decode mode: client supplies `pts`, `dts`, `duration` per PACKET and server emits FRAME timestamps.
+**Plane Data Format**:
+`count` (uint8) followed by: `stride` (u32), `height` (u32), `length` (u32), `bytes`.
 
-## 6. Backpressure & inflight
-- Rely on TCP backpressure.
-- Client must cap inflight frames; recommended default 16, configurable.
-- Server may return `ERROR busy` or `HELLO_ACK busy` if `max_sessions` exceeded.
+### PACKET (Type 6)
+Used for **receiving encoded data** (Encode) or **sending encoded data** (Decode).
 
-## 7. Keepalive / timeouts
-- Optional `PING/PONG`; suggested every 5s idle with a 10s read timeout.
-- If socket errors or timeouts occur, endpoints must free session resources promptly.
+| Type | Name | Description |
+| :--- | :--- | :--- |
+| `int64` | `pts` | Presentation timestamp. |
+| `int64` | `dts` | Decoding timestamp. |
+| `int64` | `duration` | Packet duration. |
+| `uint32` | `flags` | `Bit 0`: Is Keyframe. |
+| `bytes` | `data` | **Annex B** NAL units. |
 
-## 8. Error codes (ERROR message)
-`1=authfail`, `2=busy`, `3=unsupported`, `4=bad_request`, `5=internal`, `6=timeout`, `7=protocol_violation`.
+## 5. Security & Error Handling
+*   **Authentication**: Simple token matching in `HELLO`.
+*   **Timeouts**: 10s read timeout suggested. Send `PING` every 5s if idle.
+*   **Errors**: Connection is closed immediately after sending an `ERROR` message.
 
-## 9. Versioning rules
-- Any change to framing or field order/meaning must bump `version`.
-- Backward-compatible extensions (e.g., new optional flags) must not break v1 parsers and must be documented here.
+### Error Codes
 
-## 10. Security
-- MVP: pre-shared token in HELLO. If server is configured with a token, reject on mismatch. If server has no token configured, accept any token (including empty).
-- No compression bombs: enforce reasonable maxima (e.g., token ≤256 bytes, planes data_len bounds vs. configured width/height).
-
-## 11. Bitstream format (locked)
-- Wire PACKET payloads are **Annex B** start-code prefixed NAL units for both H.264 and HEVC.
-- Extradata remains avcC/hvcC so containers that need configuration records are satisfied.
-- Servers MUST convert VideoToolbox length-prefixed output to Annex B before sending.
-
-## 12. Compliance checklist (MVP)
-- HELLO/HELLO_ACK implemented with token + codec negotiation.
-- CONFIGURE/CONFIGURE_ACK roundtrip returns extradata and coerced pix_fmt if needed.
-- FRAME → PACKET path handles NV12 planes.
-- FLUSH drains delayed frames; DONE terminates stream.
-- ERROR is sent on fatal issues; connection closes after fatal errors.
-- PING/PONG supported for keepalive.
+| Code | Meaning |
+| :--- | :--- |
+| `1` | Auth Failure |
+| `2` | Server Busy (Max Sessions) |
+| `3` | Unsupported Configuration |
+| `4` | Bad Request (Protocol Violation) |
+| `5` | Internal Server Error |

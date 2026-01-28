@@ -1,0 +1,61 @@
+---
+layout: null
+permalink: /llms.txt
+---
+# VideoToolbox Remote (`videotoolbox_remote`) Briefing
+
+**Goal**: Offload FFmpeg H.264/HEVC encoding/decoding to a remote macOS machine (Apple Silicon/T2).
+
+## Core Architecture
+- **Server (`vtremoted`)**: Swift daemon running on macOS. Wraps `VideoToolbox` API.
+    - Listens on TCP (default 5555).
+    - Receives raw frames (NV12/P010), encodes via hardware, returns Annex B NALs.
+- **Client (`ffmpeg`)**: C fork of FFmpeg.
+    - Implements `h264_videotoolbox_remote` and `hevc_videotoolbox_remote` codecs.
+    - Handles connection management, frame transmission, and packet reception.
+
+## Repository Structure
+- `/vtremoted`: SwiftPM project (Server).
+    - `Sources/vtremoted/`: Daemon logic (`main.swift`, `Server.swift`).
+    - `Sources/VideoToolboxRemote/`: Core logic wrapping VTCompressionSession.
+- `/ffmpeg`: FFmpeg upstream fork (Client).
+    - `libavcodec/vtremote*`: Protocol handling and codec implementation.
+- `/docs`: Jekyll documentation (Protocol spec, Architecture).
+
+## Quick Start for Agents
+
+### 1. Build Server (macOS)
+```bash
+cd vtremoted
+swift build -c release
+# Binary: .build/release/vtremoted
+```
+
+### 2. Build Client (Linux/Mac/Windows)
+Requires `liblz4`, `libzstd`.
+```bash
+cd ffmpeg
+./configure --enable-videotoolbox-remote --enable-liblz4 --enable-libzstd
+make -j$(nproc)
+```
+
+### 3. Usage (Encoding)
+```bash
+./ffmpeg -i input.mp4 \
+  -c:v h264_videotoolbox_remote \
+  -vt_remote_host <MAC_IP>:5555 \
+  -b:v 5M \
+  output.mp4
+```
+
+## Protocol Overview (v1)
+- **Transport**: TCP, persistent connection.
+- **Handshake**: `HELLO` -> `HELLO_ACK`.
+- **Config**: `CONFIGURE` (res/fps) -> `CONFIGURE_ACK` (extradata/sps/pps).
+- **Loop**: `FRAME` (PixelBuffer) <-> `PACKET` (Encoded Bytes).
+- **Framing**: 12-byte header (`magic`, `version`, `type`, `length`).
+
+## Key Constraints
+- Server **MUST** run on macOS with hardware encoding support.
+- Network latency matters; use wired LAN.
+- Default compression is Zstd.

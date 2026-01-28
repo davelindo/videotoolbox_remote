@@ -4,7 +4,7 @@ title: Getting Started
 
 # Getting Started
 
-This guide aims for "I have a Mac + another machine, and I want remote H.264/HEVC working."
+Follow these steps to set up the macOS server and build the FFmpeg client.
 
 ## Step 1 — Prepare the Mac (server)
 

@@ -1,6 +1,9 @@
 title: VideoToolbox Remote
 description: Remote VideoToolbox encode/decode for FFmpeg
 markdown: kramdown
+kramdown:
+  input: GFM
+  hard_wrap: false
 baseurl: "/videotoolbox_remote"
 url: "https://davelindo.github.io"
 defaults:
