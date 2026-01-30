@@ -17,8 +17,19 @@ endif
 OBJC ?= $(CC)
 OBJCC ?= $(CXX)
 SDKROOT ?= $(shell xcrun --sdk macosx --show-sdk-path 2>/dev/null)
-MACOSX_DEPLOYMENT_TARGET ?= $(shell sw_vers -productVersion 2>/dev/null | awk -F. '{print $$1"."$$2}')
+MACOSX_SDK_VERSION := $(shell xcrun --sdk macosx --show-sdk-version 2>/dev/null)
+MACOSX_DEPLOYMENT_TARGET ?= $(if $(MACOSX_SDK_VERSION),$(MACOSX_SDK_VERSION),$(shell sw_vers -productVersion 2>/dev/null | awk -F. '{print $$1"."$$2}'))
 endif
+
+ifeq ($(IS_DARWIN),Darwin)
+FFMPEG_CC := $(shell xcrun -f clang 2>/dev/null || echo clang)
+FFMPEG_CXX := $(shell xcrun -f clang++ 2>/dev/null || echo clang++)
+else
+FFMPEG_CC ?= $(CC)
+FFMPEG_CXX ?= $(CXX)
+endif
+FFMPEG_OBJC := $(FFMPEG_CC)
+FFMPEG_OBJCC := $(FFMPEG_CXX)
 
 ifeq ($(IS_DARWIN),Darwin)
 FFMPEG_CONFIGURE_FLAGS ?= --enable-videotoolbox --enable-videotoolbox-remote --enable-libzstd --disable-debug --disable-response-files
@@ -33,53 +44,61 @@ VTREMOTED_TOKEN ?=
 VTREMOTED_SYSTEM ?=
 
 .PHONY: build build-ffmpeg build-vtremoted install install-ffmpeg install-vtremoted clean clean-ffmpeg clean-vtremoted
+.SILENT: build-ffmpeg
 
 build: build-ffmpeg build-vtremoted
 
 build-ffmpeg:
 	cd $(FFMPEG_DIR) && \
 	config_flags="$(FFMPEG_CONFIGURE_FLAGS)"; \
+	sdkroot="$(SDKROOT)"; \
+	cc="$(FFMPEG_CC)"; \
+	cxx="$(FFMPEG_CXX)"; \
+	objc="$(FFMPEG_OBJC)"; \
+	objcc="$(FFMPEG_OBJCC)"; \
 	if [ "$(IS_DARWIN)" = "Darwin" ]; then \
+		if [ -z "$$sdkroot" ]; then \
+			sdkroot=$$(xcrun --sdk macosx --show-sdk-path 2>/dev/null); \
+		fi; \
 		if ! printf "%s" "$$config_flags" | grep -qE '(^|[[:space:]])--(enable|disable)-videotoolbox($|[[:space:]])'; then \
 			config_flags="$$config_flags --enable-videotoolbox"; \
 		fi; \
-		if ! printf "%s" "$$config_flags" | grep -q -- "--sysroot="; then \
-			if [ -n "$(SDKROOT)" ]; then \
-				config_flags="$$config_flags --sysroot=$(SDKROOT)"; \
-			else \
-				echo "ERROR: SDKROOT is empty; run 'xcrun --sdk macosx --show-sdk-path' or set SDKROOT" >&2; \
-				exit 1; \
-			fi; \
+		if [ -n "$$sdkroot" ] && ! printf "%s" "$$config_flags" | grep -q -- "--sysroot="; then \
+			config_flags="$$config_flags --sysroot=$$sdkroot"; \
 		fi; \
-		sysroot_flag="-isysroot $(SDKROOT)"; \
-		framework_flag="-F$(SDKROOT)/System/Library/Frameworks"; \
+		sysroot_flag="-isysroot $$sdkroot"; \
+		framework_flag="-F$$sdkroot/System/Library/Frameworks"; \
 		cppflags="$(CPPFLAGS)"; \
 		cflags="$(CFLAGS)"; \
 		objcflags="$(OBJCFLAGS)"; \
 		ldflags="$(LDFLAGS)"; \
-		if ! printf "%s" "$$cppflags" | grep -q -- "-isysroot"; then \
-			cppflags="$$cppflags $$sysroot_flag"; \
-		fi; \
-		if ! printf "%s" "$$cflags" | grep -q -- "-isysroot"; then \
-			cflags="$$cflags $$sysroot_flag"; \
-		fi; \
-		if ! printf "%s" "$$objcflags" | grep -q -- "-isysroot"; then \
-			objcflags="$$objcflags $$sysroot_flag"; \
-		fi; \
-		if ! printf "%s" "$$ldflags" | grep -q -- "-isysroot"; then \
-			ldflags="$$ldflags $$sysroot_flag"; \
-		fi; \
-		if ! printf "%s" "$$cppflags" | grep -q -- "-F"; then \
-			cppflags="$$cppflags $$framework_flag"; \
-		fi; \
-		if ! printf "%s" "$$cflags" | grep -q -- "-F"; then \
-			cflags="$$cflags $$framework_flag"; \
-		fi; \
-		if ! printf "%s" "$$objcflags" | grep -q -- "-F"; then \
-			objcflags="$$objcflags $$framework_flag"; \
-		fi; \
-		if ! printf "%s" "$$ldflags" | grep -q -- "-F"; then \
-			ldflags="$$ldflags $$framework_flag"; \
+		if [ -n "$$sdkroot" ]; then \
+			if ! printf "%s" "$$cppflags" | grep -q -- "-isysroot"; then \
+				cppflags="$$cppflags $$sysroot_flag"; \
+			fi; \
+			if ! printf "%s" "$$cflags" | grep -q -- "-isysroot"; then \
+				cflags="$$cflags $$sysroot_flag"; \
+			fi; \
+			if ! printf "%s" "$$objcflags" | grep -q -- "-isysroot"; then \
+				objcflags="$$objcflags $$sysroot_flag"; \
+			fi; \
+			if ! printf "%s" "$$ldflags" | grep -q -- "-isysroot"; then \
+				ldflags="$$ldflags $$sysroot_flag"; \
+			fi; \
+			if ! printf "%s" "$$cppflags" | grep -q -- "-F"; then \
+				cppflags="$$cppflags $$framework_flag"; \
+			fi; \
+			if ! printf "%s" "$$cflags" | grep -q -- "-F"; then \
+				cflags="$$cflags $$framework_flag"; \
+			fi; \
+			if ! printf "%s" "$$objcflags" | grep -q -- "-F"; then \
+				objcflags="$$objcflags $$framework_flag"; \
+			fi; \
+			if ! printf "%s" "$$ldflags" | grep -q -- "-F"; then \
+				ldflags="$$ldflags $$framework_flag"; \
+			fi; \
+		else \
+			echo "WARN: SDKROOT not set; building without explicit sysroot (install Xcode for local VideoToolbox)" >&2; \
 		fi; \
 	fi; \
 	need_config=0; \
@@ -93,7 +112,7 @@ build-ffmpeg:
 	fi; \
 	if [ "$$need_config" = "1" ]; then \
 		echo "Reconfiguring ffmpeg (FFMPEG_CONFIGURATION mismatch or missing)"; \
-		env darwin=yes CC="$(CC)" CXX="$(CXX)" OBJC="$(OBJC)" OBJCC="$(OBJCC)" SDKROOT="$(SDKROOT)" MACOSX_DEPLOYMENT_TARGET="$(MACOSX_DEPLOYMENT_TARGET)" \
+		env darwin=yes CC="$$cc" CXX="$$cxx" OBJC="$$objc" OBJCC="$$objcc" SDKROOT="$$sdkroot" MACOSX_DEPLOYMENT_TARGET="$(MACOSX_DEPLOYMENT_TARGET)" \
 		CPPFLAGS="$$cppflags" CFLAGS="$$cflags" OBJCFLAGS="$$objcflags" LDFLAGS="$$ldflags" \
 		./configure $$config_flags; \
 	fi
