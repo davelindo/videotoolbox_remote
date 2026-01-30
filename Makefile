@@ -80,7 +80,7 @@ build-ffmpeg:
 			config_flags="$$config_flags --host-cc=$$cc"; \
 		fi; \
 		if ! printf "%s" "$$config_flags" | grep -q -- "--host-cflags="; then \
-			config_flags="$$config_flags --host-cflags=$$sysroot_flag"; \
+			config_flags="$$config_flags --host-cflags=\"$$sysroot_flag\""; \
 		fi; \
 		cppflags="$(CPPFLAGS)"; \
 		cflags="$(CFLAGS)"; \
