@@ -74,13 +74,13 @@ build-ffmpeg:
 		if [ -n "$$sdkroot" ] && ! printf "%s" "$$config_flags" | grep -q -- "--sysroot="; then \
 			config_flags="$$config_flags --sysroot=$$sdkroot"; \
 		fi; \
-		sysroot_flag="-isysroot $$sdkroot"; \
+		sysroot_flag="-isysroot$$sdkroot"; \
 		framework_flag="-F$$sdkroot/System/Library/Frameworks"; \
 		if ! printf "%s" "$$config_flags" | grep -q -- "--host-cc="; then \
 			config_flags="$$config_flags --host-cc=$$cc"; \
 		fi; \
 		if ! printf "%s" "$$config_flags" | grep -q -- "--host-cflags="; then \
-			config_flags="$$config_flags --host-cflags=\"$$sysroot_flag\""; \
+			config_flags="$$config_flags --host-cflags=$$sysroot_flag"; \
 		fi; \
 		cppflags="$(CPPFLAGS)"; \
 		cflags="$(CFLAGS)"; \
