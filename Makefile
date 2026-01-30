@@ -145,7 +145,16 @@ build-ffmpeg:
 
 build-vtremoted:
 ifeq ($(IS_DARWIN),Darwin)
-	@cd $(VTREMOTED_DIR) && swift build -c release
+	@cd $(VTREMOTED_DIR) && \
+	path="$$PATH"; \
+	if [ -n "$(PKG_CONFIG)" ]; then \
+		pkg_dir=$$(dirname "$(PKG_CONFIG)"); \
+		case ":$$path:" in *":$$pkg_dir:"*) ;; *) path="$$pkg_dir:$$path";; esac; \
+	fi; \
+	env_sdkroot=""; \
+	if [ -n "$(SDKROOT)" ]; then env_sdkroot="SDKROOT=$(SDKROOT)"; fi; \
+	$$env_sdkroot PKG_CONFIG="$(PKG_CONFIG)" PKG_CONFIG_PATH="$(PKG_CONFIG_PATH)" PATH="$$path" \
+		swift build -c release
 else
 	@echo "Skipping vtremoted build (not macOS)"
 endif
