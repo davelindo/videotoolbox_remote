@@ -45,6 +45,13 @@ typedef struct VTRemoteEncContext {
     int connected;
     int flushing;
     int done;
+    /* send queue for non-blocking writes */
+    struct VTRemoteSendBuf *send_queue;
+    int send_q_size;
+    int send_q_head;
+    int send_q_tail;
+    int send_q_count;
+    int queued_frames;
     /* inflight frame accounting */
     int inflight_frames;
     /* simple packet ring buffer */
@@ -72,6 +79,14 @@ typedef struct VTRemoteEncContext {
     int64_t last_dts;
 } VTRemoteEncContext;
 
+typedef struct VTRemoteSendBuf {
+    uint8_t *data;
+    int size;
+    int offset;
+    int is_frame;
+    int64_t enqueue_us;
+} VTRemoteSendBuf;
+
 #define VTREMOTE_BASE_OPTIONS \
     { "vt_remote_host", "VideoToolbox remote server host:port", OFFSET(host), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, ENC|VID }, \
     { "vt_remote_token", "authentication token (optional)", OFFSET(token), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, ENC|VID }, \
@@ -82,7 +97,7 @@ typedef struct VTRemoteEncContext {
         { "none", "no compression", 0, AV_OPT_TYPE_CONST, { .i64 = 0 }, 0, 0, ENC|VID, "vt_remote_wire_compression" }, \
         { "lz4",  "lz4",             0, AV_OPT_TYPE_CONST, { .i64 = 1 }, 0, 0, ENC|VID, "vt_remote_wire_compression" }, \
         { "zstd", "zstd",            0, AV_OPT_TYPE_CONST, { .i64 = 2 }, 0, 0, ENC|VID, "vt_remote_wire_compression" }, \
-    { "vt_remote_zstd_level", "zstd compression level (wire compression)", OFFSET(zstd_level), AV_OPT_TYPE_INT, { .i64 = 1 }, 1, 22, ENC|VID }, \
+    { "vt_remote_zstd_level", "zstd compression level (wire compression)", OFFSET(zstd_level), AV_OPT_TYPE_INT, { .i64 = 1 }, -5, 22, ENC|VID }, \
     { "vt_remote_zstd_workers", "zstd worker threads (0=single-threaded)", OFFSET(zstd_workers), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 64, ENC|VID }
 
 #define VTREMOTE_COMMON_VT_OPTIONS \

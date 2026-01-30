@@ -76,6 +76,10 @@ static int vtremote_sock_errno(void)
 
 #define MIN_HVCC_LENGTH 23
 
+#ifndef MSG_DONTWAIT
+#define MSG_DONTWAIT 0
+#endif
+
 static int vtremote_hevc_extradata_to_annexb(const uint8_t *in, int in_size,
                                              uint8_t **out, int *out_size)
 {
@@ -182,6 +186,18 @@ static int configure_zstd_ctx(AVCodecContext *avctx, VTRemoteEncContext *s, int 
         s->zstd_cctx = ZSTD_createCCtx();
         if (!s->zstd_cctx)
             return AVERROR(ENOMEM);
+        {
+            size_t zrc = ZSTD_CCtx_setParameter(s->zstd_cctx, ZSTD_c_checksumFlag, 0);
+            if (ZSTD_isError(zrc)) {
+                av_log(avctx, AV_LOG_WARNING, "Zstd checksumFlag not supported: %s\n", ZSTD_getErrorName(zrc));
+            }
+        }
+        {
+            size_t zrc = ZSTD_CCtx_setParameter(s->zstd_cctx, ZSTD_c_contentSizeFlag, 0);
+            if (ZSTD_isError(zrc)) {
+                av_log(avctx, AV_LOG_WARNING, "Zstd contentSizeFlag not supported: %s\n", ZSTD_getErrorName(zrc));
+            }
+        }
     }
     if (s->zstd_workers > 0) {
         job_size = src_size / s->zstd_workers;
@@ -368,7 +384,7 @@ static const char *codec_name_for_id(int codec_id)
     }
 }
 
-static int vtremote_send_msg(VTRemoteEncContext *s, int msg_type, VTRemoteWBuf *payload)
+static int vtremote_send_msg_blocking(VTRemoteEncContext *s, int msg_type, VTRemoteWBuf *payload)
 {
     if (!s)
         return AVERROR(EINVAL);
@@ -393,6 +409,103 @@ static int vtremote_send_msg(VTRemoteEncContext *s, int msg_type, VTRemoteWBuf *
             return ret;
     }
     s->bytes_sent += VTREMOTE_HEADER_SIZE + payload_size;
+    return 0;
+}
+
+static int vtremote_sendq_enqueue(VTRemoteEncContext *s, int msg_type, VTRemoteWBuf *payload, int is_frame)
+{
+    if (!s || !s->send_queue)
+        return AVERROR(EINVAL);
+    if (s->send_q_count >= s->send_q_size)
+        return AVERROR(EAGAIN);
+    if (is_frame && (s->queued_frames + s->inflight_frames) >= s->inflight)
+        return AVERROR(EAGAIN);
+
+    const uint32_t payload_size = payload ? (uint32_t)payload->size : 0;
+    const int total_size = VTREMOTE_HEADER_SIZE + (int)payload_size;
+    uint8_t *buf = av_malloc(total_size);
+    if (!buf)
+        return AVERROR(ENOMEM);
+
+    VTRemoteMsgHeader hdr = {
+        .magic   = VTREMOTE_PROTO_MAGIC,
+        .version = VTREMOTE_PROTO_VERSION,
+        .type    = msg_type,
+        .length  = payload_size,
+    };
+    int ret = vtremote_write_header(buf, VTREMOTE_HEADER_SIZE, &hdr);
+    if (ret < 0) {
+        av_free(buf);
+        return ret;
+    }
+    if (payload_size)
+        memcpy(buf + VTREMOTE_HEADER_SIZE, payload->data, payload_size);
+
+    VTRemoteSendBuf *slot = &s->send_queue[s->send_q_tail];
+    slot->data = buf;
+    slot->size = total_size;
+    slot->offset = 0;
+    slot->is_frame = is_frame;
+    slot->enqueue_us = av_gettime_relative();
+    s->send_q_tail = (s->send_q_tail + 1) % s->send_q_size;
+    s->send_q_count++;
+    if (is_frame)
+        s->queued_frames++;
+    return 0;
+}
+
+static int vtremote_sendq_pump(AVCodecContext *avctx, int blocking)
+{
+    VTRemoteEncContext *s = avctx->priv_data;
+    int flags = blocking ? 0 : MSG_DONTWAIT;
+    while (s->send_q_count > 0) {
+        VTRemoteSendBuf *slot = &s->send_queue[s->send_q_head];
+        while (slot->offset < slot->size) {
+            int r = (int)send(s->fd, slot->data + slot->offset, slot->size - slot->offset, flags);
+            if (r < 0) {
+                int err = vtremote_sock_errno();
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+                if (err == WSAEINTR)
+                    continue;
+                if (!blocking && err == WSAEWOULDBLOCK)
+                    return AVERROR(EAGAIN);
+#endif
+                if (err == EINTR)
+                    continue;
+                if (!blocking && (err == EAGAIN || err == EWOULDBLOCK))
+                    return AVERROR(EAGAIN);
+                return AVERROR(err);
+            }
+            if (r == 0)
+                return AVERROR(EPIPE);
+            slot->offset += r;
+            s->bytes_sent += r;
+        }
+
+        if (slot->is_frame) {
+            s->inflight_frames++;
+            if (s->inflight_frames > s->max_inflight)
+                s->max_inflight = s->inflight_frames;
+            s->frames_sent++;
+            if (slot->enqueue_us > 0) {
+                int64_t send_elapsed_us = av_gettime_relative() - slot->enqueue_us;
+                if (send_elapsed_us > 0) {
+                    s->send_time_us += send_elapsed_us;
+                    s->send_frames++;
+                }
+            }
+            if (s->queued_frames > 0)
+                s->queued_frames--;
+        }
+
+        av_freep(&slot->data);
+        slot->size = 0;
+        slot->offset = 0;
+        slot->is_frame = 0;
+        slot->enqueue_us = 0;
+        s->send_q_head = (s->send_q_head + 1) % s->send_q_size;
+        s->send_q_count--;
+    }
     return 0;
 }
 
@@ -469,7 +582,8 @@ static int vtremote_drain_available_packets(AVCodecContext *avctx)
         case VTREMOTE_MSG_PING:
         {
             VTRemoteWBuf empty = {0};
-            vtremote_send_msg(s, VTREMOTE_MSG_PONG, &empty);
+            vtremote_sendq_enqueue(s, VTREMOTE_MSG_PONG, &empty, 0);
+            vtremote_sendq_pump(avctx, 0);
             av_free(payload);
             break;
         }
@@ -631,7 +745,7 @@ static int vtremote_handshake(AVCodecContext *avctx)
     vtremote_wbuf_init(&payload);
     vtremote_payload_hello(&payload, s->token, codec_name_for_id(s->codec_id),
                           "ffmpeg-vtremote", FFMPEG_VERSION);
-    int ret = vtremote_send_msg(s, VTREMOTE_MSG_HELLO, &payload);
+    int ret = vtremote_send_msg_blocking(s, VTREMOTE_MSG_HELLO, &payload);
     vtremote_wbuf_free(&payload);
     if (ret < 0) {
         VTR_CLOSE_SOCKET(fd);
@@ -906,7 +1020,7 @@ static int vtremote_handshake(AVCodecContext *avctx)
                               fr.num, fr.den,
                               opt_count ? opts : NULL, opt_count,
                               NULL, 0);
-    ret = vtremote_send_msg(s, VTREMOTE_MSG_CONFIGURE, &cfg);
+    ret = vtremote_send_msg_blocking(s, VTREMOTE_MSG_CONFIGURE, &cfg);
 cfg_fail:
     for (int i = 0; i < opt_count; i++)
         av_freep(&opts[i].value);
@@ -1001,6 +1115,12 @@ int ff_vtremote_common_init(AVCodecContext *avctx)
     s->zstd_last_level = -1;
     s->zstd_last_workers = -1;
     s->zstd_last_job_size = -1;
+    s->send_queue = NULL;
+    s->send_q_size = 0;
+    s->send_q_head = 0;
+    s->send_q_tail = 0;
+    s->send_q_count = 0;
+    s->queued_frames = 0;
 
     if (!s->host) {
         av_log(avctx, AV_LOG_ERROR, "vt_remote_host is required\n");
@@ -1016,9 +1136,24 @@ int ff_vtremote_common_init(AVCodecContext *avctx)
     if (ret < 0)
         return ret;
 
+    s->send_q_size = FFMAX(4, s->inflight * 2);
+    s->send_queue = av_calloc(s->send_q_size, sizeof(*s->send_queue));
+    if (!s->send_queue)
+        return AVERROR(ENOMEM);
+
     ret = vtremote_handshake(avctx);
     if (ret < 0)
         vtremote_net_close();
+        if (s->send_queue) {
+            for (int i = 0; i < s->send_q_size; i++)
+                av_freep(&s->send_queue[i].data);
+            av_freep(&s->send_queue);
+            s->send_q_size = 0;
+            s->send_q_head = 0;
+            s->send_q_tail = 0;
+            s->send_q_count = 0;
+            s->queued_frames = 0;
+        }
     return ret;
 }
 
@@ -1041,6 +1176,11 @@ int ff_vtremote_common_close(AVCodecContext *avctx)
     if (s->zstd_cctx) {
         ZSTD_freeCCtx(s->zstd_cctx);
         s->zstd_cctx = NULL;
+    }
+    if (s->send_queue) {
+        for (int i = 0; i < s->send_q_size; i++)
+            av_freep(&s->send_queue[i].data);
+        av_freep(&s->send_queue);
     }
     if (vtremote_log_enabled(s, AV_LOG_INFO) && s->start_time_us > 0) {
         int64_t elapsed_us = av_gettime_relative() - s->start_time_us;
@@ -1066,13 +1206,17 @@ int ff_vtremote_common_close(AVCodecContext *avctx)
 int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame)
 {
     VTRemoteEncContext *s = avctx->priv_data;
+    int ret;
     if (!s->connected)
         return AVERROR(EPIPE);
 
     if (!frame) {
         s->flushing = 1;
         VTRemoteWBuf empty = {0};
-        return vtremote_send_msg(s, VTREMOTE_MSG_FLUSH, &empty);
+        ret = vtremote_sendq_enqueue(s, VTREMOTE_MSG_FLUSH, &empty, 0);
+        if (ret < 0)
+            return ret;
+        return vtremote_sendq_pump(avctx, 1);
     }
 
     if (frame->format != AV_PIX_FMT_NV12 &&
@@ -1080,6 +1224,10 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame)
         frame->format != AV_PIX_FMT_P010) {
         av_log(avctx, AV_LOG_ERROR, "VTRemote supports NV12/P010 only\n");
         return AVERROR(EINVAL);
+    }
+    if (s->send_q_count >= s->send_q_size ||
+        (s->queued_frames + s->inflight_frames) >= s->inflight) {
+        return AVERROR(EAGAIN);
     }
     if (s->codec_id == AV_CODEC_ID_H264 && frame->format != AV_PIX_FMT_NV12) {
         av_log(avctx, AV_LOG_ERROR, "H.264 VTRemote only supports NV12\n");
@@ -1092,8 +1240,6 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame)
     uint32_t sizes[2] = { strides[0] * heights[0], strides[1] * heights[1] };
     const uint8_t *send_planes[2] = { planes[0], planes[1] };
     uint32_t send_sizes[2] = { sizes[0], sizes[1] };
-
-    int64_t send_start_us = av_gettime_relative();
 
     if (s->wire_compression == 1 || s->wire_compression == 2) {
         if (s->wire_compression == 2) {
@@ -1157,25 +1303,17 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame)
 
     VTRemoteWBuf *payload = &s->frame_buf;
     vtremote_wbuf_reset(payload);
-    int ret = vtremote_payload_frame(payload, frame->pts, frame->duration, frame->pict_type == AV_PICTURE_TYPE_I,
+    ret = vtremote_payload_frame(payload, frame->pts, frame->duration, frame->pict_type == AV_PICTURE_TYPE_I,
                                     2, send_planes, strides, heights, send_sizes,
                                     sd_count > 0 ? sd : NULL, (uint8_t)sd_count);
     if (ret < 0)
         return ret;
-    ret = vtremote_send_msg(s, VTREMOTE_MSG_FRAME, payload);
-    if (ret == 0)
-        s->inflight_frames++;
-    if (s->inflight_frames > s->max_inflight)
-        s->max_inflight = s->inflight_frames;
-    if (ret == 0)
-        s->frames_sent++;
-    {
-        int64_t send_elapsed_us = av_gettime_relative() - send_start_us;
-        if (send_elapsed_us > 0) {
-            s->send_time_us += send_elapsed_us;
-            s->send_frames++;
-        }
-    }
+    ret = vtremote_sendq_enqueue(s, VTREMOTE_MSG_FRAME, payload, 1);
+    if (ret < 0)
+        return ret;
+    ret = vtremote_sendq_pump(avctx, 0);
+    if (ret == AVERROR(EAGAIN))
+        ret = 0;
     return ret;
 }
 
@@ -1233,7 +1371,8 @@ int ff_vtremote_common_receive_packet(AVCodecContext *avctx, AVPacket *pkt)
         case VTREMOTE_MSG_PING:
         {
             VTRemoteWBuf empty = {0};
-            vtremote_send_msg(s, VTREMOTE_MSG_PONG, &empty);
+            vtremote_sendq_enqueue(s, VTREMOTE_MSG_PONG, &empty, 0);
+            vtremote_sendq_pump(avctx, 0);
             av_free(payload);
             break;
         }
@@ -1274,6 +1413,10 @@ int ff_vtremote_encode(AVCodecContext *avctx, AVPacket *pkt, const AVFrame *fram
      * Pipelining optimization: Try to drain any available packets first (non-blocking).
      * This allows us to keep the pipeline full while receiving encoded data.
      */
+    ret = vtremote_sendq_pump(avctx, 0);
+    if (ret < 0 && ret != AVERROR(EAGAIN))
+        return ret;
+
     ret = vtremote_drain_available_packets(avctx);
     if (ret < 0 && ret != AVERROR(EAGAIN))
         return ret;
@@ -1297,12 +1440,24 @@ int ff_vtremote_encode(AVCodecContext *avctx, AVPacket *pkt, const AVFrame *fram
     /* If we have a frame and haven't hit the inflight limit, send it */
     if (frame && s->inflight_frames < s->inflight) {
         ret = ff_vtremote_common_send_frame(avctx, frame);
+        if (ret == AVERROR(EAGAIN)) {
+            int pump = vtremote_sendq_pump(avctx, 1);
+            if (pump < 0 && pump != AVERROR(EAGAIN))
+                return pump;
+            ret = ff_vtremote_common_send_frame(avctx, frame);
+        }
+        if (ret == AVERROR(EAGAIN)) {
+            if (got_packet)
+                *got_packet = 0;
+            return AVERROR(EAGAIN);
+        }
         if (ret < 0 && ret != AVERROR_EOF)
             return ret;
     }
 
     /* If we have a frame but hit the inflight limit, we must wait for a packet */
     if (frame && s->inflight_frames >= s->inflight) {
+        vtremote_sendq_pump(avctx, 1);
         /* Block until we get at least one packet */
         ret = ff_vtremote_common_receive_packet(avctx, pkt);
         if (ret >= 0) {

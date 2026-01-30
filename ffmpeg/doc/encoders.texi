@@ -47,7 +47,7 @@ Max in-flight frames (default 16).
 @item vt_remote_wire_compression
 Wire compression mode (none/lz4/zstd; default zstd).
 @item vt_remote_zstd_level
-zstd compression level for wire compression (default 1).
+zstd compression level for wire compression (default 1). Negative values enable fast modes.
 @item vt_remote_zstd_workers
 zstd worker threads for wire compression (default 0 = single-threaded).
 @item vt_remote_log_level
