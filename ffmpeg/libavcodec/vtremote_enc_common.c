@@ -1080,8 +1080,28 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame)
                     s->zstd_cctx = ZSTD_createCCtx();
                     if (!s->zstd_cctx) return AVERROR(ENOMEM);
                 }
-                size_t out = ZSTD_compressCCtx(s->zstd_cctx, s->comp_buf[i], bound,
-                                               planes[i], src_size, 1); // Level 1
+                {
+                    size_t zrc = ZSTD_CCtx_reset(s->zstd_cctx, ZSTD_reset_session_only);
+                    if (ZSTD_isError(zrc)) {
+                        av_log(avctx, AV_LOG_ERROR, "Zstd reset failed: %s\n", ZSTD_getErrorName(zrc));
+                        return AVERROR_EXTERNAL;
+                    }
+                }
+                {
+                    size_t zrc = ZSTD_CCtx_setParameter(s->zstd_cctx, ZSTD_c_compressionLevel, s->zstd_level);
+                    if (ZSTD_isError(zrc)) {
+                        av_log(avctx, AV_LOG_ERROR, "Zstd level set failed: %s\n", ZSTD_getErrorName(zrc));
+                        return AVERROR_EXTERNAL;
+                    }
+                }
+                if (s->zstd_workers > 0) {
+                    size_t zrc = ZSTD_CCtx_setParameter(s->zstd_cctx, ZSTD_c_nbWorkers, s->zstd_workers);
+                    if (ZSTD_isError(zrc)) {
+                        av_log(avctx, AV_LOG_WARNING, "Zstd workers not supported: %s\n", ZSTD_getErrorName(zrc));
+                    }
+                }
+                size_t out = ZSTD_compress2(s->zstd_cctx, s->comp_buf[i], bound,
+                                            planes[i], src_size);
                 if (ZSTD_isError(out)) {
                     av_log(avctx, AV_LOG_ERROR, "Zstd compress failed: %s\n", ZSTD_getErrorName(out));
                     return AVERROR_EXTERNAL;
