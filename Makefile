@@ -80,6 +80,9 @@ build-ffmpeg:
 		fi; \
 		sysroot_flag="-isysroot$$sdkroot"; \
 		framework_flag="-F$$sdkroot/System/Library/Frameworks"; \
+		if [ -x /opt/homebrew/bin/pkg-config ] && ! printf "%s" "$$config_flags" | grep -q -- "--pkg-config="; then \
+			config_flags="$$config_flags --pkg-config=/opt/homebrew/bin/pkg-config"; \
+		fi; \
 		if ! printf "%s" "$$config_flags" | grep -q -- "--host-cc="; then \
 			config_flags="$$config_flags --host-cc=$$cc"; \
 		fi; \
