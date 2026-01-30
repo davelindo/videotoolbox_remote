@@ -113,19 +113,33 @@ public final class VTRClientHandler: @unchecked Sendable {
         codecSession = session
         configuration = config
 
-        let extradata = try session.configure(config)
-        let resp = ConfigureAckResponse(status: 0, extradata: extradata, pixelFormat: config.pixelFormat, warnings: 0)
-        let body = resp.encode()
-        stats.bytesOut += Int64(VTRProtocol.headerSize + body.count)
-        try messageIO.send(type: .configureAck, body: body)
+        do {
+            let extradata = try session.configure(config)
+            let resp = ConfigureAckResponse(
+                status: 0,
+                extradata: extradata,
+                pixelFormat: config.pixelFormat,
+                warnings: 0
+            )
+            let body = resp.encode()
+            stats.bytesOut += Int64(VTRProtocol.headerSize + body.count)
+            try messageIO.send(type: .configureAck, body: body)
 
-        logger.info(
-            "CONFIGURE ok mode=\(config.mode.rawValue) codec=\(config.codec.rawValue) " +
-                "\(config.width)x\(config.height) " +
-                "pixfmt=\(config.pixelFormat) tb=\(config.timebase.num)/\(config.timebase.den) " +
-                "br=\(config.options.bitrate) " +
-                "gop=\(config.options.gop) wc=\(config.options.wireCompression)"
-        )
+            logger.info(
+                "CONFIGURE ok mode=\(config.mode.rawValue) codec=\(config.codec.rawValue) " +
+                    "\(config.width)x\(config.height) " +
+                    "pixfmt=\(config.pixelFormat) tb=\(config.timebase.num)/\(config.timebase.den) " +
+                    "br=\(config.options.bitrate) " +
+                    "gop=\(config.options.gop) wc=\(config.options.wireCompression)"
+            )
+        } catch {
+            logger.error("CONFIGURE failed mode=\(config.mode.rawValue) codec=\(config.codec.rawValue) error=\(error)")
+            let err = ErrorResponse(code: 1, message: "configure failed: \(error)")
+            let body = err.encode()
+            stats.bytesOut += Int64(VTRProtocol.headerSize + body.count)
+            try messageIO.send(type: .error, body: body)
+            throw error
+        }
     }
 
     private func mainLoop() throws {
@@ -166,7 +180,6 @@ public final class VTRClientHandler: @unchecked Sendable {
                 inputBufferPool.return(payload)
             default:
                 inputBufferPool.return(payload)
-                break
             }
         }
     }

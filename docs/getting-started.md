@@ -11,15 +11,16 @@ Follow these steps to set up the macOS server and build the FFmpeg client.
 Install dependencies and build:
 
 ```bash
+git clone https://github.com/davelindo/videotoolbox_remote.git
+cd videotoolbox_remote
 brew install lz4 zstd pkg-config
-cd vtremoted
-swift build -c release
+make build-vtremoted
 ```
 
 Run it:
 
 ```bash
-.build/release/vtremoted --listen 0.0.0.0:5555 --log-level 1
+vtremoted/.build/release/vtremoted --listen 0.0.0.0:5555 --log-level 1
 ```
 
 Optionally install as a service:
@@ -33,18 +34,11 @@ Optionally install as a service:
 Install `libzstd` + `liblz4` + `pkg-config` for your OS, then:
 
 ```bash
-cd ffmpeg
-./configure ... --enable-libzstd --enable-liblz4 \
-  --enable-videotoolbox-remote
-make -j
+git clone https://github.com/davelindo/videotoolbox_remote.git
+cd videotoolbox_remote
+make build-ffmpeg
 ```
 
-Verify the codecs:
-
-```bash
-./ffmpeg -encoders | grep videotoolbox_remote
-./ffmpeg -decoders | grep videotoolbox_remote
-```
 
 ## Step 3 — Encode remotely
 

@@ -15,10 +15,11 @@ title: Troubleshooting
 - Prefer wired LAN; raw frames are large.
 - Wire compression uses **Zstd** by default (~30-40% smaller than LZ4).
 - Avoid heavy client-side filters if CPU bound.
-- For maximum throughput, ensure the server has these defaults (automatic):
-  - `RealTime=false` (batch encoding)
-  - `PrioritizeEncodingSpeedOverQuality=true`
+- For maximum throughput, the server forces:
+  - `RealTime=false` (unless `-realtime 1` is passed)
   - `MaximizePowerEfficiency=false`
+- For benchmarks, use a release server build:
+  `vtremoted/.build/release/vtremoted`
 - Increase in-flight frames if you have spare bandwidth:
   ```bash
   -vt_remote_inflight 32
@@ -31,6 +32,26 @@ title: Troubleshooting
   - `--enable-videotoolbox-remote`
 - Confirm Zstd/LZ4 was enabled:
   - `--enable-libzstd --enable-liblz4`
+
+## macOS build fails: VideoToolbox deps not satisfied
+
+If you see:
+
+```
+ERROR: videotoolbox requested, but not all dependencies are satisfied
+```
+
+Ensure Xcode is installed and run:
+
+```bash
+SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" make build-ffmpeg
+```
+
+Also verify your active toolchain:
+
+```bash
+xcode-select -p
+```
 
 ## Decode/encode errors
 

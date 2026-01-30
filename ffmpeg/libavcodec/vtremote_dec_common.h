@@ -16,12 +16,18 @@ typedef struct VTRemoteDecContext {
     int timeout_ms;
     int log_level;
     int wire_compression;
+    int decode_async;
+    int decode_reorder_depth;
     int codec_id;
     int fd;
     int connected;
     int flushing;
     int done;
     VTRemoteWBuf pkt_buf;
+    uint8_t *rx_buf;
+    int rx_buf_cap;
+    int rx_buf_len;
+    int64_t last_frame_pts;
     uint8_t *comp_buf[2];
     int comp_buf_cap[2];
     void *zstd_dctx;
@@ -40,7 +46,9 @@ typedef struct VTRemoteDecContext {
     { "vt_remote_wire_compression", "wire compression", OFFSET(wire_compression), AV_OPT_TYPE_INT, { .i64 = 2 }, 0, 2, DEC|VID, "vt_remote_wire_compression" }, \
         { "none", "no compression", 0, AV_OPT_TYPE_CONST, { .i64 = 0 }, 0, 0, DEC|VID, "vt_remote_wire_compression" }, \
         { "lz4",  "lz4",             0, AV_OPT_TYPE_CONST, { .i64 = 1 }, 0, 0, DEC|VID, "vt_remote_wire_compression" }, \
-        { "zstd", "zstd",            0, AV_OPT_TYPE_CONST, { .i64 = 2 }, 0, 0, DEC|VID, "vt_remote_wire_compression" }
+        { "zstd", "zstd",            0, AV_OPT_TYPE_CONST, { .i64 = 2 }, 0, 0, DEC|VID, "vt_remote_wire_compression" }, \
+    { "vt_remote_decode_async", "allow async decode on server (may reorder frames)", OFFSET(decode_async), AV_OPT_TYPE_BOOL, { .i64 = 1 }, 0, 1, DEC|VID }, \
+    { "vt_remote_decode_reorder_depth", "frames to buffer for PTS reordering when async decode enabled (-1=server default)", OFFSET(decode_reorder_depth), AV_OPT_TYPE_INT, { .i64 = 2 }, -1, 64, DEC|VID }
 
 int ff_vtremote_dec_init(AVCodecContext *avctx);
 int ff_vtremote_dec_close(AVCodecContext *avctx);

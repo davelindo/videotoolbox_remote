@@ -22,9 +22,13 @@
         private var warmupPending = false
         private let warmupSemaphore = DispatchSemaphore(value: 0)
         private var forceKeyframeNext = false
-        
+
         /// Tracks DTS/PTS for monotonicity and duplicate detection
         private let timestampTracker = TimestampTracker()
+        private let callbackLock = NSLock()
+        private var decodeAsyncEnabled = false
+        private var decodeReorderDepth = 0
+        private var decodeReorderBuffer: DecodeReorderBuffer<[Data]>?
 
         private class FrameContext {
             let sideData: [Data]
@@ -32,7 +36,6 @@
                 self.sideData = sideData
             }
         }
-
         private let inputBufferPool = BufferPool()
         private let outputBufferPool = BufferPool()
 
@@ -42,13 +45,26 @@
 
         func configure(_ configuration: SessionConfiguration) throws -> Data {
             config = configuration
-            timestampTracker.reset()
+            decodeAsyncEnabled = false
+            decodeReorderDepth = 0
+            decodeReorderBuffer = nil
             switch configuration.mode {
             case .encode:
+                let enforceMonotonicPts = configuration.options.maxBFrames <= 0
+                timestampTracker.reset(enforceMonotonicPts: enforceMonotonicPts)
                 try setupEncoder(configuration)
                 try warmup()
-                return encoderExtradata ?? Data()
+                let extra = encoderExtradata ?? Data()
+                logger.info("CONFIGURE returning extradata size=\(extra.count)")
+                return extra
             case .decode:
+                timestampTracker.reset()
+                decodeAsyncEnabled = configuration.options.decodeAsync != 0
+                if decodeAsyncEnabled {
+                    let depth = configuration.options.decodeReorderDepth
+                    decodeReorderDepth = depth >= 0 ? depth : 2
+                    decodeReorderBuffer = DecodeReorderBuffer(depth: decodeReorderDepth)
+                }
                 try setupDecoder(configuration)
                 return Data()
             }
@@ -98,7 +114,13 @@
             let rowBytesUV = config.width * bytesPerSample
 
             // Helper to process a plane with zero-copy source access
-            func processPlane(planeIndex: Int, rawRange: Range<Int>, expectedSize: Int, stride: Int, rowBytes: Int) throws {
+            func processPlane(
+                planeIndex: Int,
+                rawRange: Range<Int>,
+                expectedSize: Int,
+                stride: Int,
+                rowBytes: Int
+            ) throws {
                 guard let destBase = CVPixelBufferGetBaseAddressOfPlane(pBuffer, planeIndex) else { return }
                 let destStride = CVPixelBufferGetBytesPerRowOfPlane(pBuffer, planeIndex)
 
@@ -177,11 +199,21 @@
             DispatchQueue.concurrentPerform(iterations: 2) { plane in
                 do {
                     if plane == 0 {
-                        try processPlane(planeIndex: 0, rawRange: yRange, expectedSize: expectedY, 
-                                         stride: stride0, rowBytes: rowBytesY)
+                        try processPlane(
+                            planeIndex: 0,
+                            rawRange: yRange,
+                            expectedSize: expectedY,
+                            stride: stride0,
+                            rowBytes: rowBytesY
+                        )
                     } else {
-                        try processPlane(planeIndex: 1, rawRange: uvRange, expectedSize: expectedUV, 
-                                         stride: stride1, rowBytes: rowBytesUV)
+                        try processPlane(
+                            planeIndex: 1,
+                            rawRange: uvRange,
+                            expectedSize: expectedUV,
+                            stride: stride1,
+                            rowBytes: rowBytesUV
+                        )
                     }
                 } catch {
                     errors[plane] = error
@@ -284,12 +316,20 @@
             )
             guard status == noErr, let sampleBuffer = sample else { return }
 
+            var decodeFlags: VTDecodeFrameFlags = []
+            if decodeAsyncEnabled {
+                // kVTDecodeFrame_EnableAsynchronousDecompression (1<<0)
+                decodeFlags = VTDecodeFrameFlags(rawValue: 1 << 0)
+            }
             status = VTDecompressionSessionDecodeFrame(session,
                                                        sampleBuffer: sampleBuffer,
-                                                       flags: [],
+                                                       flags: decodeFlags,
                                                        frameRefcon: nil,
                                                        infoFlagsOut: nil)
-            if status == noErr {
+            guard status == noErr else {
+                throw VTRemotedError.ioError(code: Int32(status), message: "VTDecompressionSessionDecodeFrame failed")
+            }
+            if !decodeAsyncEnabled {
                 _ = VTDecompressionSessionWaitForAsynchronousFrames(session)
             }
         }
@@ -301,6 +341,7 @@
             if let session = decompressionSession {
                 _ = VTDecompressionSessionFinishDelayedFrames(session)
                 _ = VTDecompressionSessionWaitForAsynchronousFrames(session)
+                flushDecodedFrames()
             }
         }
 
@@ -310,6 +351,11 @@
             }
             if let session = decompressionSession {
                 VTDecompressionSessionInvalidate(session)
+            }
+            if decodeAsyncEnabled {
+                callbackLock.lock()
+                decodeReorderBuffer = nil
+                callbackLock.unlock()
             }
         }
 
@@ -398,6 +444,8 @@
             if logger.level.rawValue >= LogLevel.debug.rawValue {
                 dumpSessionProperties(session: session)
             }
+
+            try warmup()
         }
 
         private func configureProperties(session: VTCompressionSession, config: SessionConfiguration) throws {
@@ -423,42 +471,55 @@
             try configureH264(session: session, config: config, entropy: entropy)
 
             // Misc properties
-            if !hasBFrames {
-                try setProp(session, kVTCompressionPropertyKey_AllowFrameReordering, 
-                            kCFBooleanFalse, "allow_reorder", fatal: true)
-            }
-            
+
             // Set expected frame rate to help VideoToolbox optimize encoding pipeline
             if config.frameRate.num > 0 && config.frameRate.den > 0 {
                 var fps = Float(config.frameRate.num) / Float(config.frameRate.den)
                 let fpsNum = CFNumberCreate(kCFAllocatorDefault, .floatType, &fps)
-                try setProp(session, kVTCompressionPropertyKey_ExpectedFrameRate, fpsNum!, "expected_fps")
+                try setProp(
+                    session,
+                    kVTCompressionPropertyKey_ExpectedFrameRate,
+                    fpsNum!,
+                    "expected_fps"
+                )
             }
-            
-            // Set realtime mode - explicitly disable for batch encoding to maximize throughput
+
+            // Realtime mode - match ffmpeg default (False)
             let isRealtime: CFBoolean
             if config.options.realtime >= 0 {
                 isRealtime = config.options.realtime != 0 ? kCFBooleanTrue! : kCFBooleanFalse!
             } else {
-                // Default: non-realtime for maximum throughput
                 isRealtime = kCFBooleanFalse!
             }
             try setProp(session, kVTCompressionPropertyKey_RealTime, isRealtime, "realtime")
-            // Power efficiency mode - explicitly disable for batch encoding to maximize speed
-            let powerEfficient: CFBoolean
+
+            // Power efficiency mode
             if config.options.powerEfficient >= 0 {
-                powerEfficient = config.options.powerEfficient != 0 ? kCFBooleanTrue! : kCFBooleanFalse!
+                let powerEfficient = config.options.powerEfficient != 0 ? kCFBooleanTrue! : kCFBooleanFalse!
+                try setProp(
+                    session,
+                    VideoToolboxProperties.vtKeyMaximizePowerEfficiency,
+                    powerEfficient,
+                    "power_efficient"
+                )
             } else {
-                // Default: disable power efficiency for maximum speed
-                powerEfficient = kCFBooleanFalse!
+                try setProp(
+                    session,
+                    VideoToolboxProperties.vtKeyMaximizePowerEfficiency,
+                    kCFBooleanFalse,
+                    "power_efficient"
+                )
             }
-            try setProp(session, VideoToolboxProperties.vtKeyMaximizePowerEfficiency, 
-                        powerEfficient, "power_efficient")
             if config.options.maxReferenceFrames > 0 {
                 var val = Int32(clamping: config.options.maxReferenceFrames)
                 let num = CFNumberCreate(kCFAllocatorDefault, .intType, &val)
-                try setProp(session, VideoToolboxProperties.vtKeyReferenceBufferCount, 
-                            num!, "max_ref_frames", fatal: true)
+                try setProp(
+                    session,
+                    VideoToolboxProperties.vtKeyReferenceBufferCount,
+                    num!,
+                    "max_ref_frames",
+                    fatal: true
+                )
             }
             if config.options.spatialAQ >= 0 {
                 var val: Int32 = config.options.spatialAQ != 0 ?
@@ -467,25 +528,35 @@
                 let num = CFNumberCreate(kCFAllocatorDefault, .sInt32Type, &val)
                 try setProp(session, VideoToolboxProperties.vtKeySpatialAdaptiveQP, num!, "spatial_aq")
             }
-            
-             if config.codec == .hevc, config.options.alphaQuality > 0.0 {
+
+            if config.codec == .hevc, config.options.alphaQuality > 0.0 {
                 var alphaVal = config.options.alphaQuality
                 let num = CFNumberCreate(kCFAllocatorDefault, .doubleType, &alphaVal)
                 try setProp(session, VideoToolboxProperties.vtKeyTargetQualityForAlpha, num!, "alpha_quality")
             }
-             
-             // QMin/QMax
+
+            // QMin/QMax
             if config.options.qmin >= 0 {
                 var val = Int32(clamping: config.options.qmin)
                 let num = CFNumberCreate(kCFAllocatorDefault, .intType, &val)
-                try setProp(session, VideoToolboxProperties.vtKeyMinAllowedFrameQP, 
-                            num!, "qmin", fatal: true)
+                try setProp(
+                    session,
+                    VideoToolboxProperties.vtKeyMinAllowedFrameQP,
+                    num!,
+                    "qmin",
+                    fatal: true
+                )
             }
             if config.options.qmax >= 0 {
                 var val = Int32(clamping: config.options.qmax)
                 let num = CFNumberCreate(kCFAllocatorDefault, .intType, &val)
-                try setProp(session, VideoToolboxProperties.vtKeyMaxAllowedFrameQP, 
-                            num!, "qmax", fatal: true)
+                try setProp(
+                    session,
+                    VideoToolboxProperties.vtKeyMaxAllowedFrameQP,
+                    num!,
+                    "qmax",
+                    fatal: true
+                )
             }
 
             // Encoder ID log
@@ -502,7 +573,7 @@
         }
 
         private func configureBitrate(session: VTCompressionSession, config: SessionConfiguration) throws {
-             if (config.options.flags & VideoToolboxConstants.AV_CODEC_FLAG_QSCALE) != 0
+            if (config.options.flags & VideoToolboxConstants.AV_CODEC_FLAG_QSCALE) != 0
                 || config.options.globalQuality > 0 {
                 if (config.options.flags & VideoToolboxConstants.AV_CODEC_FLAG_QSCALE) != 0, !isAppleSilicon() {
                     throw VTRemotedError.unsupported("qscale")
@@ -519,8 +590,8 @@
                                              .sInt32Type,
                                              &br32)
                 if config.options.constantBitRate {
-                    let status = VTSessionSetProperty(session, 
-                                                      key: VideoToolboxProperties.vtKeyConstantBitRate, 
+                    let status = VTSessionSetProperty(session,
+                                                      key: VideoToolboxProperties.vtKeyConstantBitRate,
                                                       value: bitrate)
                     if status == VideoToolboxProperties.kVTPropertyNotSupportedErr {
                         throw VTRemotedError.ioError(code: Int32(status), message: "constant_bit_rate not supported")
@@ -537,23 +608,16 @@
                 }
             }
 
-            // Prioritize encoding speed - enable by default for batch encoding unless explicitly disabled
-            // or realtime mode is enabled
-            let shouldPrioritizeSpeed: Bool
+            // Prioritize encoding speed - only set if explicitly requested
             if config.options.prioritizeSpeed >= 0 {
-                shouldPrioritizeSpeed = config.options.prioritizeSpeed != 0
-            } else {
-                // Default: prioritize speed unless realtime mode is explicitly enabled
-                shouldPrioritizeSpeed = config.options.realtime != 1
+                let shouldPrioritizeSpeed = config.options.prioritizeSpeed != 0
+                try setProp(
+                    session,
+                    VideoToolboxProperties.vtKeyPrioritizeSpeed,
+                    shouldPrioritizeSpeed ? kCFBooleanTrue : kCFBooleanFalse,
+                    "prio_speed"
+                )
             }
-            if shouldPrioritizeSpeed {
-                try setProp(session, VideoToolboxProperties.vtKeyPrioritizeSpeed, kCFBooleanTrue, "prio_speed")
-            }
-            
-            // Allow more frames to be queued for encoding (improves throughput at slight latency cost)
-            var maxFrameDelay: Int32 = 8
-            let delayNum = CFNumberCreate(kCFAllocatorDefault, .sInt32Type, &maxFrameDelay)
-            try setProp(session, kVTCompressionPropertyKey_MaxFrameDelayCount, delayNum!, "max_frame_delay")
 
             if config.codec == .h264 || config.codec == .hevc, config.options.maxRate > 0 {
                 let bytesPerSecond = Int64(config.options.maxRate >> 3)
@@ -567,6 +631,21 @@
         }
 
         private func configureFrameProperties(session: VTCompressionSession, config: SessionConfiguration) throws {
+            // Respect max_b_frames by explicitly toggling frame reordering and delay.
+            if config.options.maxBFrames >= 0 {
+                let allowReorder = config.options.maxBFrames > 0
+                try setProp(session,
+                            kVTCompressionPropertyKey_AllowFrameReordering,
+                            allowReorder ? kCFBooleanTrue! : kCFBooleanFalse!,
+                            "allow_frame_reordering")
+                var delay = Int32(clamping: max(0, config.options.maxBFrames))
+                let num = CFNumberCreate(kCFAllocatorDefault, .intType, &delay)
+                try setProp(session,
+                            kVTCompressionPropertyKey_MaxFrameDelayCount,
+                            num!,
+                            "max_frame_delay")
+            }
+
             if config.options.gop > 0 {
                 var gopVal = Int32(clamping: config.options.gop)
                 let gopNum = CFNumberCreate(kCFAllocatorDefault, .sInt32Type, &gopVal)
@@ -716,6 +795,8 @@
         }
 
         private func handleEncodedSampleBuffer(_ sbuf: CMSampleBuffer, context: FrameContext?) {
+            callbackLock.lock()
+            defer { callbackLock.unlock() }
             guard let config else { return }
             guard let block = CMSampleBufferGetDataBuffer(sbuf) else { return }
 
@@ -748,12 +829,21 @@
             // Get DTS from VideoToolbox, falling back to PTS when invalid (common when B-frames disabled)
             let rawDts = CMSampleBufferGetDecodeTimeStamp(sbuf)
             let dtsTime: CMTime = (rawDts.isValid && rawDts.isNumeric) ? rawDts : pts
-            let rawDtsTicks = config.timebase.ticks(from: RationalTime(value: dtsTime.value, timescale: dtsTime.timescale))
-            
-            // Process timestamps to ensure monotonicity and skip duplicates
+            let rawDtsTicks = config.timebase.ticks(
+                from: RationalTime(
+                    value: dtsTime.value,
+                    timescale: dtsTime.timescale
+                )
+            )
+
+            // Process timestamps to ensure monotonicity.
             let result = timestampTracker.process(ptsTicks: ptsTicks, dtsTicks: rawDtsTicks)
-            guard case .emit(let dtsTicks) = result else {
-                return // Skip duplicate PTS
+            let adjustedPtsTicks: Int64
+            let dtsTicks: Int64
+            switch result {
+            case .emit(let ptsValue, let dtsValue, _):
+                adjustedPtsTicks = ptsValue
+                dtsTicks = dtsValue
             }
             
             let dur = sbuf.duration.isNumeric ? sbuf.duration : .invalid
@@ -764,7 +854,7 @@
             let isKey = (attachments as? [[NSObject: Any]])?.first?[kCMSampleAttachmentKey_NotSync as NSObject] == nil
 
             var writer = ByteWriter()
-            writer.writeBE(UInt64(bitPattern: ptsTicks))
+            writer.writeBE(UInt64(bitPattern: adjustedPtsTicks))
             writer.writeBE(UInt64(bitPattern: dtsTicks))
             writer.writeBE(UInt64(bitPattern: durTicks))
             writer.writeBE(UInt32(isKey ? 1 : 0))
@@ -889,6 +979,63 @@
             _ = warmupSemaphore.wait(timeout: .now() + 1.0)
         }
 
+        private func makeDecodedFrameMeta(ptsTicks: Int64, durTicks: Int64) -> Data {
+            var meta = ByteWriter()
+            meta.writeBE(UInt64(bitPattern: ptsTicks))
+            meta.writeBE(UInt64(bitPattern: durTicks))
+            meta.writeBE(UInt32(0))
+            meta.write(UInt8(2))
+            return meta.data
+        }
+
+        private func sendDecodedFrames(_ frames: [ReorderedDecodedFrame<[Data]>]) {
+            for frame in frames {
+                var chunks = frame.payload
+                if frame.clamped {
+                    logger.info(
+                        "WARN decode async late frame pts=\(frame.originalPtsTicks) " +
+                            "clamped=\(frame.ptsTicks) depth=\(decodeReorderDepth)"
+                    )
+                    if !chunks.isEmpty {
+                        chunks[0] = makeDecodedFrameMeta(ptsTicks: frame.ptsTicks, durTicks: frame.durTicks)
+                    }
+                }
+                do {
+                    try send(.frame, chunks)
+                } catch {
+                    logger.error("send frame failed: \(error)")
+                }
+            }
+        }
+
+        private func enqueueDecodedFrame(ptsTicks: Int64, durTicks: Int64, chunks: [Data]) {
+            callbackLock.lock()
+            let frames: [ReorderedDecodedFrame<[Data]>]
+            if !decodeAsyncEnabled {
+                let frame = ReorderedDecodedFrame(originalPtsTicks: ptsTicks,
+                                                  ptsTicks: ptsTicks,
+                                                  durTicks: durTicks,
+                                                  payload: chunks,
+                                                  clamped: false)
+                frames = [frame]
+            } else {
+                if decodeReorderBuffer == nil {
+                    decodeReorderBuffer = DecodeReorderBuffer(depth: decodeReorderDepth)
+                }
+                frames = decodeReorderBuffer?.enqueue(ptsTicks: ptsTicks, durTicks: durTicks, payload: chunks) ?? []
+            }
+            callbackLock.unlock()
+            sendDecodedFrames(frames)
+        }
+
+        private func flushDecodedFrames() {
+            guard decodeAsyncEnabled else { return }
+            callbackLock.lock()
+            let frames = decodeReorderBuffer?.flush() ?? []
+            callbackLock.unlock()
+            sendDecodedFrames(frames)
+        }
+
         // MARK: - Decoder
 
         private func setupDecoder(_ config: SessionConfiguration) throws {
@@ -959,6 +1106,16 @@
             guard status == noErr, let session = decompressionSessionPtr else {
                 throw VTRemotedError.ioError(code: Int32(status), message: "VTDecompressionSessionCreate failed")
             }
+            
+            // Apply RealTime property
+            let isRealtime: CFBoolean
+            if config.options.realtime >= 0 {
+                isRealtime = (config.options.realtime != 0) ? kCFBooleanTrue! : kCFBooleanFalse!
+            } else {
+                isRealtime = kCFBooleanFalse!
+            }
+            _ = VTSessionSetProperty(session, key: kVTDecompressionPropertyKey_RealTime, value: isRealtime)
+            
             decompressionSession = session
         }
 
@@ -980,13 +1137,7 @@
             defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
 
             var chunks: [Data] = []
-            
-            var meta = ByteWriter()
-            meta.writeBE(UInt64(bitPattern: ptsTicks))
-            meta.writeBE(UInt64(bitPattern: durTicks))
-            meta.writeBE(UInt32(0))
-            meta.write(UInt8(2))
-            chunks.append(meta.data)
+            chunks.append(makeDecodedFrameMeta(ptsTicks: ptsTicks, durTicks: durTicks))
 
             struct PlaneResult {
                 let meta: Data
@@ -1063,11 +1214,7 @@
             chunks.append(res1.meta)
             chunks.append(res1.data)
 
-            do {
-                try send(.frame, chunks)
-            } catch {
-                logger.error("send frame failed: \(error)")
-            }
+            enqueueDecodedFrame(ptsTicks: ptsTicks, durTicks: durTicks, chunks: chunks)
         }
 
         // MARK: - Helpers

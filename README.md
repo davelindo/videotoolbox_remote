@@ -11,16 +11,23 @@ This project offloads **VideoToolbox encode/decode** to a **macOS daemon** while
 #clone repo
 git clone https://github.com/davelindo/videotoolbox_remote.git
 cd videotoolbox_remote
-#build
+#build (macOS server + local ffmpeg)
 make build
 sudo make install
-#encode
+
+#run server on the Mac
+vtremoted --listen 0.0.0.0:5555 --log-level 1
+
+#encode from client
 ffmpeg -i input.mkv \
   -c:v h264_videotoolbox_remote -vt_remote_host macmini.local:5555 \
   -b:v 6000k -g 240 \
   -c:a copy -c:s copy \
   output.mkv
 ```
+
+If you're building the client on Linux/Windows, configure FFmpeg with
+`--enable-videotoolbox-remote --enable-liblz4 --enable-libzstd`.
 
 ## Who is this for?
 
@@ -79,7 +86,7 @@ Use **1 GbE minimum** and **2.5 GbE+ recommended** if you want headroom for mult
 or harder‑to‑compress content.
 
 Measured from `vtremoted` session summaries using `tests/integration/bench_vtremote.sh`
-(`testsrc2`, 5s, `-b:v 10M`, GOP 120, loopback). Values below are computed as
+(`testsrc2`, 5s, `-b:v 10M`, `-maxrate 10M`, `-bufsize 20M`, GOP 120, loopback). Values below are computed as
 `bytes_on_wire / media_duration`. The summary log reports **throughput while encoding**,
 which can be much higher than real‑time if the Mac encodes faster than 1×.
 2K/4K rows use **DCI framing** (2048×1080 / 4096×2160).
@@ -112,15 +119,17 @@ If performance is poor:
 
 ### Performance tuning options
 
-The server automatically applies optimal settings for batch encoding:
+Server defaults (when the client doesn't override):
 
 | Setting | Default | Effect |
 |---------|---------|--------|
-| `RealTime` | `false` | Disabled for maximum throughput |
-| `PrioritizeEncodingSpeedOverQuality` | `true` | Favor speed over compression efficiency |
-| `MaximizePowerEfficiency` | `false` | Disabled for maximum speed |
-| `MaxFrameDelayCount` | `8` | Allow parallel frame encoding |
+| `RealTime` | `false` (forced when unset) | Maximize throughput |
+| `PrioritizeEncodingSpeedOverQuality` | unset | Uses VideoToolbox default unless explicitly set |
+| `MaximizePowerEfficiency` | `false` (forced when unset) | Maximize speed |
+| `MaxFrameDelayCount` | from `-bf` when set | Enables/limits frame reordering |
 | `ExpectedFrameRate` | from client | Helps VideoToolbox optimize |
+
+Remote decode defaults to **async** with a reorder depth of **2**. See `docs/async_decode.md` for details and overrides.
 
 Client-side options:
 

@@ -16,11 +16,14 @@ public final class VTRWireConnection: @unchecked Sendable {
         sendLock.lock()
         defer { sendLock.unlock() }
         let totalLen = bodyParts.reduce(0) { $0 + $1.count }
-        let header = VTRMessageHeader(type: type.rawValue, length: UInt32(totalLen)).encoded()
-        
+        let header = VTRMessageHeader(
+            type: type.rawValue,
+            length: UInt32(totalLen)
+        ).encoded()
+
         var chunks = [header]
         chunks.append(contentsOf: bodyParts)
-        
+
         try POSIXIO.writev(fd: fileDescriptor, parts: chunks)
     }
 
@@ -33,7 +36,10 @@ public final class VTRWireConnection: @unchecked Sendable {
         return try VTRMessageHeader.decode(headerBuf)
     }
 
-    public func readMessage(pool: BufferPool? = nil, timeoutSeconds: Int = 10) throws -> (header: VTRMessageHeader, body: Data) {
+    public func readMessage(
+        pool: BufferPool? = nil,
+        timeoutSeconds: Int = 10
+    ) throws -> (header: VTRMessageHeader, body: Data) {
         let header = try readHeader(timeoutSeconds: timeoutSeconds)
 
         if header.length > 0 {

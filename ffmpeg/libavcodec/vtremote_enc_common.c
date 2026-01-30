@@ -835,11 +835,33 @@ static int vtremote_handshake(AVCodecContext *avctx)
     }
     VTRemoteWBuf cfg;
     vtremote_wbuf_init(&cfg);
+    AVRational tb = avctx->time_base;
+    if (tb.num <= 0 || tb.den <= 0 ||
+        (tb.num == 1 && tb.den == 1 &&
+         avctx->framerate.num > 0 && avctx->framerate.den > 0)) {
+        if (avctx->pkt_timebase.num > 0 && avctx->pkt_timebase.den > 0) {
+            tb = avctx->pkt_timebase;
+        } else if (avctx->framerate.num > 0 && avctx->framerate.den > 0) {
+            tb = av_inv_q(avctx->framerate);
+        } else {
+            tb = (AVRational){1, 1};
+        }
+    }
+
+    AVRational fr = avctx->framerate;
+    if (fr.num <= 0 || fr.den <= 0) {
+        if (tb.num > 0 && tb.den > 0 && !(tb.num == 1 && tb.den == 1)) {
+            fr = av_inv_q(tb);
+        } else {
+            fr = (AVRational){0, 0};
+        }
+    }
+
     vtremote_payload_configure(&cfg,
                               avctx->width, avctx->height,
                               wire_pix_fmt,
-                              avctx->time_base.num, avctx->time_base.den,
-                              avctx->framerate.num, avctx->framerate.den,
+                              tb.num, tb.den,
+                              fr.num, fr.den,
                               opt_count ? opts : NULL, opt_count,
                               NULL, 0);
     ret = vtremote_send_msg(s, VTREMOTE_MSG_CONFIGURE, &cfg);
@@ -898,6 +920,17 @@ static int enqueue_packet(AVCodecContext *avctx, const uint8_t *payload, int pay
     dst->dts = view.dts;
     dst->duration = view.duration;
     dst->flags = (view.flags & 1) ? AV_PKT_FLAG_KEY : 0;
+    if (dst->dts == AV_NOPTS_VALUE)
+        dst->dts = dst->pts;
+    if (dst->dts != AV_NOPTS_VALUE) {
+        if (s->last_dts != AV_NOPTS_VALUE && dst->dts <= s->last_dts)
+            dst->dts = s->last_dts + 1;
+        s->last_dts = dst->dts;
+    }
+    if (dst->pts == AV_NOPTS_VALUE)
+        dst->pts = dst->dts;
+    if (dst->pts != AV_NOPTS_VALUE && dst->dts != AV_NOPTS_VALUE && dst->pts < dst->dts)
+        dst->pts = dst->dts;
     if (s->pkt_q_count < s->pkt_q_size)
         s->pkt_q_count++;
     else
@@ -918,6 +951,7 @@ int ff_vtremote_common_init(AVCodecContext *avctx)
     s->bytes_sent = 0;
     s->bytes_recv = 0;
     s->max_inflight = 0;
+    s->last_dts = AV_NOPTS_VALUE;
     vtremote_wbuf_init(&s->frame_buf);
     s->comp_buf[0] = s->comp_buf[1] = NULL;
     s->comp_buf_cap[0] = s->comp_buf_cap[1] = 0;

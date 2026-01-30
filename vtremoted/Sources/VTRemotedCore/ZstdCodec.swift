@@ -86,7 +86,11 @@ public enum ZstdCodec {
     }
 
     /// Zero-copy decompression from raw buffer pointer
-    public static func decompressRaw(_ src: UnsafeRawBufferPointer, into dst: UnsafeMutableRawPointer, expectedSize: Int) -> Bool {
+    public static func decompressRaw(
+        _ src: UnsafeRawBufferPointer,
+        into dst: UnsafeMutableRawPointer,
+        expectedSize: Int
+    ) -> Bool {
         guard expectedSize > 0 else { return true }
         guard let srcBase = src.baseAddress else { return false }
         let decoded = ZSTD_decompress(

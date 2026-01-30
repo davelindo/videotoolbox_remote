@@ -17,6 +17,7 @@
 #include <netdb.h>
 #include <unistd.h>
 #include <sys/time.h>
+#include <poll.h>
 #endif
 #include "avcodec.h"
 #include "codec_internal.h"
@@ -129,6 +130,26 @@ static int read_full(int fd, uint8_t *buf, int size)
         got += r;
     }
     return 0;
+}
+
+/* Wait for the socket to become readable (ms timeout). */
+static int wait_readable(int fd, int timeout_ms)
+{
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+    fd_set readfds;
+    struct timeval tv;
+    FD_ZERO(&readfds);
+    FD_SET(fd, &readfds);
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    return select(fd + 1, &readfds, NULL, NULL, &tv);
+#else
+    struct pollfd pfd;
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    return poll(&pfd, 1, timeout_ms);
+#endif
 }
 
 static int connect_hostport(const char *hostport, int timeout_ms)
@@ -259,6 +280,86 @@ static int vtremote_read_msg(VTRemoteDecContext *s, VTRemoteMsgHeader *hdr, uint
     }
     *payload = buf;
     s->bytes_recv += VTREMOTE_HEADER_SIZE + hdr->length;
+    return 0;
+}
+
+static int vtremote_rxbuf_grow(VTRemoteDecContext *s, int need)
+{
+    if (!s)
+        return AVERROR(EINVAL);
+    if (s->rx_buf_cap - s->rx_buf_len >= need)
+        return 0;
+    int new_cap = s->rx_buf_cap > 0 ? s->rx_buf_cap : 4096;
+    while (new_cap - s->rx_buf_len < need)
+        new_cap *= 2;
+    uint8_t *tmp = av_realloc(s->rx_buf, new_cap);
+    if (!tmp)
+        return AVERROR(ENOMEM);
+    s->rx_buf = tmp;
+    s->rx_buf_cap = new_cap;
+    return 0;
+}
+
+static int vtremote_read_msg_nonblocking(VTRemoteDecContext *s, VTRemoteMsgHeader *hdr, uint8_t **payload)
+{
+    if (!s || !hdr || !payload)
+        return AVERROR(EINVAL);
+    *payload = NULL;
+
+    // Try to read some bytes without blocking.
+    uint8_t tmp[4096];
+    for (;;) {
+        int r = (int)recv(s->fd, tmp, sizeof(tmp), MSG_DONTWAIT);
+        if (r < 0) {
+            int err = vtremote_sock_errno();
+            if (err == EAGAIN || err == EWOULDBLOCK
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+                || err == WSAEWOULDBLOCK
+#endif
+            ) {
+                break;
+            }
+            if (err == EINTR)
+                continue;
+            return AVERROR(err);
+        }
+        if (r == 0)
+            return AVERROR_EOF;
+        int ret = vtremote_rxbuf_grow(s, r);
+        if (ret < 0)
+            return ret;
+        memcpy(s->rx_buf + s->rx_buf_len, tmp, r);
+        s->rx_buf_len += r;
+        s->bytes_recv += r;
+        if (r < (int)sizeof(tmp))
+            break;
+    }
+
+    if (s->rx_buf_len < VTREMOTE_HEADER_SIZE)
+        return AVERROR(EAGAIN);
+
+    int ret = vtremote_read_header(s->rx_buf, VTREMOTE_HEADER_SIZE, hdr);
+    if (ret < 0)
+        return ret;
+    if (hdr->length > INT_MAX - VTREMOTE_HEADER_SIZE)
+        return AVERROR(ENOMEM);
+
+    int total = VTREMOTE_HEADER_SIZE + (int)hdr->length;
+    if (s->rx_buf_len < total)
+        return AVERROR(EAGAIN);
+
+    if (hdr->length > 0) {
+        uint8_t *buf = av_malloc(hdr->length);
+        if (!buf)
+            return AVERROR(ENOMEM);
+        memcpy(buf, s->rx_buf + VTREMOTE_HEADER_SIZE, hdr->length);
+        *payload = buf;
+    }
+
+    int remaining = s->rx_buf_len - total;
+    if (remaining > 0)
+        memmove(s->rx_buf, s->rx_buf + total, remaining);
+    s->rx_buf_len = remaining;
     return 0;
 }
 
@@ -414,6 +515,16 @@ static int vtremote_handshake(AVCodecContext *avctx)
         ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "color_trc", tmp);
         if (ret < 0) goto cfg_fail;
     }
+    tmp = av_asprintf("%d", s->decode_async);
+    if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
+    ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "decode_async", tmp);
+    if (ret < 0) goto cfg_fail;
+    if (s->decode_async && s->decode_reorder_depth >= 0) {
+        tmp = av_asprintf("%d", s->decode_reorder_depth);
+        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
+        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "decode_reorder_depth", tmp);
+        if (ret < 0) goto cfg_fail;
+    }
 
     int wire_pix_fmt = 0;
     switch (avctx->pix_fmt) {
@@ -430,12 +541,23 @@ static int vtremote_handshake(AVCodecContext *avctx)
         goto cfg_fail;
     }
 
+    AVRational tb = avctx->time_base;
+    if (tb.num <= 0 || tb.den <= 0 || (tb.num == 1 && tb.den == 1)) {
+        if (avctx->pkt_timebase.num > 0 && avctx->pkt_timebase.den > 0) {
+            tb = avctx->pkt_timebase;
+        } else if (avctx->framerate.num > 0 && avctx->framerate.den > 0) {
+            tb = av_inv_q(avctx->framerate);
+        } else {
+            tb = (AVRational){1, 1};
+        }
+    }
+
     VTRemoteWBuf cfg;
     vtremote_wbuf_init(&cfg);
     vtremote_payload_configure(&cfg,
                               avctx->width, avctx->height,
                               wire_pix_fmt,
-                              avctx->time_base.num, avctx->time_base.den,
+                              tb.num, tb.den,
                               avctx->framerate.num, avctx->framerate.den,
                               opt_count ? opts : NULL, opt_count,
                               avctx->extradata, avctx->extradata_size);
@@ -490,6 +612,10 @@ int ff_vtremote_dec_init(AVCodecContext *avctx)
     s->comp_buf[0] = s->comp_buf[1] = NULL;
     s->comp_buf_cap[0] = s->comp_buf_cap[1] = 0;
     s->zstd_dctx = NULL;
+    s->rx_buf = NULL;
+    s->rx_buf_cap = 0;
+    s->rx_buf_len = 0;
+    s->last_frame_pts = AV_NOPTS_VALUE;
 
     if (!s->host) {
         av_log(avctx, AV_LOG_ERROR, "vt_remote_host is required\n");
@@ -522,6 +648,7 @@ int ff_vtremote_dec_close(AVCodecContext *avctx)
     vtremote_wbuf_free(&s->pkt_buf);
     av_freep(&s->comp_buf[0]);
     av_freep(&s->comp_buf[1]);
+    av_freep(&s->rx_buf);
     if (s->zstd_dctx) {
         ZSTD_freeDCtx(s->zstd_dctx);
         s->zstd_dctx = NULL;
@@ -548,11 +675,13 @@ static int fill_frame_from_view(AVCodecContext *avctx, AVFrame *frame, const VTR
     frame->format = avctx->pix_fmt;
     frame->width = avctx->width;
     frame->height = avctx->height;
-    frame->pts = view->pts;
-    frame->duration = view->duration;
     int ret = ff_get_buffer(avctx, frame, 0);
     if (ret < 0)
         return ret;
+    // ff_get_buffer overwrites timestamps based on last packet; restore from view.
+    frame->pts = view->pts;
+    frame->duration = view->duration;
+    frame->pkt_dts = frame->pts;
     for (int i = 0; i < 2; i++) {
         const uint8_t *src = view->planes[i].data;
         int src_stride = view->planes[i].stride;
@@ -575,6 +704,23 @@ static int fill_frame_from_view(AVCodecContext *avctx, AVFrame *frame, const VTR
     }
     
     return 0;
+}
+
+static void enforce_monotonic_pts(VTRemoteDecContext *s, AVFrame *frame)
+{
+    if (!s || !frame)
+        return;
+    int64_t pts = frame->pts;
+    if (pts == AV_NOPTS_VALUE)
+        pts = frame->pkt_dts;
+    if (pts == AV_NOPTS_VALUE) {
+        pts = (s->last_frame_pts == AV_NOPTS_VALUE) ? 0 : s->last_frame_pts + 1;
+    }
+    if (s->last_frame_pts != AV_NOPTS_VALUE && pts <= s->last_frame_pts)
+        pts = s->last_frame_pts + 1;
+    frame->pts = pts;
+    frame->pkt_dts = pts;
+    s->last_frame_pts = pts;
 }
 
 static int decompress_frame(VTRemoteDecContext *s, const VTRemoteFrameView *in, VTRemoteFrameView *out)
@@ -649,6 +795,97 @@ int ff_vtremote_decode(AVCodecContext *avctx, AVFrame *frame, int *got_frame, AV
             return ret;
     }
 
+    if (s->decode_async) {
+        for (;;) {
+            VTRemoteMsgHeader hdr;
+            uint8_t *payload = NULL;
+            int ret;
+            if (s->flushing) {
+                /* During flush, block until we receive a frame or DONE. */
+                ret = vtremote_read_msg(s, &hdr, &payload);
+            } else {
+                ret = vtremote_read_msg_nonblocking(s, &hdr, &payload);
+            }
+            if (ret == AVERROR(EAGAIN) && !s->flushing) {
+                int64_t backlog = s->packets_sent - s->frames_recv;
+                int depth = s->decode_reorder_depth >= 0 ? s->decode_reorder_depth : 8;
+                int limit = FFMAX(2, depth + 2);
+                if (backlog > limit) {
+                    int ready = wait_readable(s->fd, 2);
+                    if (ready > 0)
+                        ret = vtremote_read_msg_nonblocking(s, &hdr, &payload);
+                }
+            }
+            if (ret == AVERROR(EAGAIN)) {
+                if (got_frame)
+                    *got_frame = 0;
+                return 0;
+            }
+            if (ret < 0)
+                return ret;
+
+            switch (hdr.type) {
+            case VTREMOTE_MSG_FRAME:
+            {
+                VTRemoteFrameView view;
+                ret = vtremote_parse_frame(payload, hdr.length, &view);
+                if (ret < 0) {
+                    av_free(payload);
+                    return ret;
+                }
+                if (s->wire_compression == 1 || s->wire_compression == 2) {
+                    VTRemoteFrameView dec_view;
+                    ret = decompress_frame(s, &view, &dec_view);
+                    if (ret < 0) {
+                        av_free(payload);
+                        return ret;
+                    }
+                    ret = fill_frame_from_view(avctx, frame, &dec_view);
+                } else {
+                    ret = fill_frame_from_view(avctx, frame, &view);
+                }
+            av_free(payload);
+            if (ret < 0)
+                return ret;
+            if (s->decode_async)
+                enforce_monotonic_pts(s, frame);
+            s->frames_recv++;
+            if (got_frame)
+                *got_frame = 1;
+            return 0;
+            }
+            case VTREMOTE_MSG_DONE:
+                av_free(payload);
+                s->done = 1;
+                return AVERROR_EOF;
+            case VTREMOTE_MSG_PING:
+            {
+                VTRemoteWBuf empty = {0};
+                vtremote_send_msg(s, VTREMOTE_MSG_PONG, &empty);
+                av_free(payload);
+                break;
+            }
+            case VTREMOTE_MSG_ERROR:
+            {
+                uint32_t code = 0;
+                VTRemoteRBuf er;
+                vtremote_rbuf_init(&er, payload, hdr.length);
+                vtremote_rbuf_read_u32(&er, &code);
+                const uint8_t *msg = NULL; int mlen = 0;
+                if (vtremote_rbuf_read_str(&er, &msg, &mlen) == 0)
+                    av_log(avctx, AV_LOG_ERROR, "vtremote server error %u: %.*s\n", code, mlen, msg);
+                else
+                    av_log(avctx, AV_LOG_ERROR, "vtremote server error %u\n", code);
+                av_free(payload);
+                return AVERROR(EIO);
+            }
+            default:
+                av_free(payload);
+                break;
+            }
+        }
+    }
+
     for (;;) {
         VTRemoteMsgHeader hdr;
         uint8_t *payload = NULL;
@@ -684,6 +921,8 @@ int ff_vtremote_decode(AVCodecContext *avctx, AVFrame *frame, int *got_frame, AV
             av_free(payload);
             if (ret < 0)
                 return ret;
+            if (s->decode_async)
+                enforce_monotonic_pts(s, frame);
             s->frames_recv++;
             if (got_frame)
                 *got_frame = 1;

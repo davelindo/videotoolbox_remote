@@ -34,9 +34,9 @@ ffmpeg -i input.mkv \
 ```
 
 ## Features
-*   **Zero-Copy Networking**: Optimized TCP streams with Zstd compression.
+*   **Efficient Transport**: Framed TCP streams with Zstd/LZ4 compression.
 *   **Drop-in Compatibility**: Works with standard FFmpeg filters and containers.
-*   **Native Quality**: Identical encoding results to a local Mac.
+*   **Native VideoToolbox**: Uses Apple’s hardware pipeline; results match local settings when configured identically.
 
 ## Documentation
 *   [Getting Started](getting-started.html) - Installation and setup.

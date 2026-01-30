@@ -66,6 +66,8 @@ public struct SessionOptions: Equatable, Sendable {
     public var sarDen: Int
     public var a53CC: Int
     public var wireCompression: Int
+    public var decodeAsync: Int
+    public var decodeReorderDepth: Int
 
     public init(options: [String: String]) {
         func int(_ key: String, _ def: Int) -> Int { Int(options[key] ?? "") ?? def }
@@ -104,5 +106,7 @@ public struct SessionOptions: Equatable, Sendable {
         sarDen = int("sar_den", 0)
         a53CC = int("a53_cc", -1)
         wireCompression = int("wire_compression", 0)
+        decodeAsync = int("decode_async", 1)
+        decodeReorderDepth = int("decode_reorder_depth", 2)
     }
 }

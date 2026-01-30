@@ -276,8 +276,8 @@ final class IntegrationTests: XCTestCase {
         
         // Verify DTS is strictly monotonically increasing
         XCTAssertEqual(dtsValues.count, 3, "Should have 3 DTS values")
-        for i in 1 ..< dtsValues.count {
-            XCTAssertGreaterThan(dtsValues[i], dtsValues[i - 1],
+        for idx in 1 ..< dtsValues.count {
+            XCTAssertGreaterThan(dtsValues[idx], dtsValues[idx - 1],
                 "DTS must be strictly monotonically increasing. Got: \(dtsValues)")
         }
     }

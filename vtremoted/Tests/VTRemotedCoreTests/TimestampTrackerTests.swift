@@ -7,52 +7,64 @@ final class TimestampTrackerTests: XCTestCase {
         let tracker = TimestampTracker()
         
         // Normal sequence: PTS 0, 1, 2, 3
-        for i: Int64 in 0..<4 {
-            let result = tracker.process(ptsTicks: i, dtsTicks: i)
-            guard case .emit(let dts) = result else {
-                XCTFail("Expected emit for PTS \(i)")
+        for tick: Int64 in 0..<4 {
+            let result = tracker.process(ptsTicks: tick, dtsTicks: tick)
+            guard case .emit(let pts, let dts, let adjusted) = result else {
+                XCTFail("Expected emit for PTS \(tick)")
                 return
             }
-            XCTAssertEqual(dts, i, "DTS should equal PTS for normal sequence")
+            XCTAssertEqual(pts, tick)
+            XCTAssertFalse(adjusted)
+            XCTAssertEqual(dts, tick, "DTS should equal PTS for normal sequence")
         }
     }
     
-    func testDuplicatePTSSkipped() {
+    func testDuplicatePTSAdjusted() {
         let tracker = TimestampTracker()
         
         // First frame
         let result1 = tracker.process(ptsTicks: 100, dtsTicks: 100)
-        guard case .emit(let dts1) = result1 else {
+        guard case .emit(let pts1, let dts1, let adjusted1) = result1 else {
             XCTFail("Expected emit for first frame")
             return
         }
+        XCTAssertEqual(pts1, 100)
+        XCTAssertFalse(adjusted1)
         XCTAssertEqual(dts1, 100)
         
-        // Duplicate PTS should be skipped
+        // Duplicate PTS should be adjusted upward to keep monotonicity
         let result2 = tracker.process(ptsTicks: 100, dtsTicks: 100)
-        guard case .skip = result2 else {
-            XCTFail("Expected skip for duplicate PTS")
+        guard case .emit(let pts2, let dts2, let adjusted2) = result2 else {
+            XCTFail("Expected emit for duplicate PTS")
             return
         }
+        XCTAssertEqual(pts2, 101)
+        XCTAssertTrue(adjusted2)
+        XCTAssertEqual(dts2, 101)
         
-        // Third duplicate should also be skipped
+        // Third duplicate should also be adjusted
         let result3 = tracker.process(ptsTicks: 100, dtsTicks: 100)
-        guard case .skip = result3 else {
-            XCTFail("Expected skip for duplicate PTS")
+        guard case .emit(let pts3, let dts3, let adjusted3) = result3 else {
+            XCTFail("Expected emit for duplicate PTS")
             return
         }
+        XCTAssertEqual(pts3, 102)
+        XCTAssertTrue(adjusted3)
+        XCTAssertEqual(dts3, 102)
     }
     
-    func testDTSClampedToPTS() {
+    func testDTSMonotonicityMayAdjustPTS() {
         let tracker = TimestampTracker()
         
-        // DTS > PTS should be clamped
+        // DTS > PTS should bump PTS when enforcing monotonic PTS.
         let result = tracker.process(ptsTicks: 100, dtsTicks: 200)
-        guard case .emit(let dts) = result else {
+        guard case .emit(let pts, let dts, let adjusted) = result else {
             XCTFail("Expected emit")
             return
         }
-        XCTAssertEqual(dts, 100, "DTS should be clamped to PTS")
+        XCTAssertEqual(dts, 200)
+        XCTAssertEqual(pts, 200)
+        XCTAssertTrue(adjusted)
     }
     
     func testDTSMonotonicityEnforced() {
@@ -63,7 +75,7 @@ final class TimestampTrackerTests: XCTestCase {
         
         // Second frame with same DTS (should be incremented)
         let result = tracker.process(ptsTicks: 101, dtsTicks: 100)
-        guard case .emit(let dts) = result else {
+        guard case .emit(_, let dts, _) = result else {
             XCTFail("Expected emit")
             return
         }
@@ -81,10 +93,12 @@ final class TimestampTrackerTests: XCTestCase {
         
         // After reset, same PTS should not be skipped
         let result = tracker.process(ptsTicks: 100, dtsTicks: 100)
-        guard case .emit(let dts) = result else {
+        guard case .emit(let pts, let dts, let adjusted) = result else {
             XCTFail("Expected emit after reset")
             return
         }
+        XCTAssertEqual(pts, 100)
+        XCTAssertFalse(adjusted)
         XCTAssertEqual(dts, 100)
     }
     
@@ -95,13 +109,29 @@ final class TimestampTrackerTests: XCTestCase {
         _ = tracker.process(ptsTicks: 10, dtsTicks: 10)
         
         // Second frame with lower PTS (edge case)
-        // DTS should be max(lastDTS+1, PTS) but clamped to PTS
+        // DTS should advance; PTS should be adjusted upward.
         let result = tracker.process(ptsTicks: 5, dtsTicks: 5)
-        guard case .emit(let dts) = result else {
+        guard case .emit(let pts, let dts, let adjusted) = result else {
             XCTFail("Expected emit")
             return
         }
-        // Can't maintain monotonicity without exceeding PTS, so DTS = PTS
-        XCTAssertEqual(dts, 5)
+        XCTAssertEqual(pts, 11, "PTS should be adjusted to maintain monotonicity")
+        XCTAssertEqual(dts, 11)
+        XCTAssertTrue(adjusted)
+    }
+
+    func testAllowsPTSRegressionWhenDisabled() {
+        let tracker = TimestampTracker()
+        tracker.reset(enforceMonotonicPts: false)
+
+        _ = tracker.process(ptsTicks: 10, dtsTicks: 10)
+        let result = tracker.process(ptsTicks: 5, dtsTicks: 5)
+        guard case .emit(let pts, let dts, let adjusted) = result else {
+            XCTFail("Expected emit")
+            return
+        }
+        XCTAssertEqual(pts, 5)
+        XCTAssertFalse(adjusted)
+        XCTAssertEqual(dts, 11)
     }
 }

@@ -64,6 +64,7 @@ typedef struct VTRemoteEncContext {
     int64_t recv_wait_us;
     int64_t recv_calls;
     int max_inflight;
+    int64_t last_dts;
 } VTRemoteEncContext;
 
 #define VTREMOTE_BASE_OPTIONS \

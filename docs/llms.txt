@@ -16,8 +16,8 @@ permalink: /llms.txt
 
 ## Repository Structure
 - `/vtremoted`: SwiftPM project (Server).
-    - `Sources/vtremoted/`: Daemon logic (`main.swift`, `Server.swift`).
-    - `Sources/VideoToolboxRemote/`: Core logic wrapping VTCompressionSession.
+    - `Sources/vtremoted/`: Daemon entrypoint.
+    - `Sources/VTRemotedCore/`: Core logic wrapping VideoToolbox.
 - `/ffmpeg`: FFmpeg upstream fork (Client).
     - `libavcodec/vtremote*`: Protocol handling and codec implementation.
 - `/docs`: Jekyll documentation (Protocol spec, Architecture).
@@ -37,6 +37,11 @@ Requires `liblz4`, `libzstd`.
 cd ffmpeg
 ./configure --enable-videotoolbox-remote --enable-liblz4 --enable-libzstd
 make -j$(nproc)
+```
+
+On macOS (for local + remote codecs), use:
+```bash
+make build-ffmpeg
 ```
 
 ### 3. Usage (Encoding)
@@ -59,3 +64,4 @@ make -j$(nproc)
 - Server **MUST** run on macOS with hardware encoding support.
 - Network latency matters; use wired LAN.
 - Default compression is Zstd.
+- Remote decode defaults to async with reorder depth 2 (see `docs/async_decode.md`).

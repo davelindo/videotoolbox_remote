@@ -103,6 +103,11 @@ sequenceDiagram
 | `map` | `options` | Key-value pairs (e.g., `bitrate`). |
 | `bytes` | `extradata` | Header data (decoding only). |
 
+Notes:
+- `options` is a passthrough map of codec options from FFmpeg (e.g., bitrate,
+  GOP, realtime, decode_async). The server applies only the options it
+  recognizes; unknown keys are ignored.
+
 ### FRAME (Type 5)
 Used for **sending raw frames** (Encode) or **receiving raw frames** (Decode).
 

@@ -11,7 +11,8 @@ final class StubCodecSession: CodecSession {
 
     func configure(_ configuration: SessionConfiguration) throws -> Data {
         config = configuration
-        timestampTracker.reset()
+        let enforceMonotonicPts = configuration.options.maxBFrames <= 0
+        timestampTracker.reset(enforceMonotonicPts: enforceMonotonicPts)
         return Data()
     }
 
@@ -64,14 +65,18 @@ final class StubCodecSession: CodecSession {
         var annexB = Data([0x00, 0x00, 0x00, 0x01])
         annexB.append(digest)
 
-        // Process timestamps to ensure monotonicity and skip duplicates
+        // Process timestamps to ensure monotonicity.
         let result = timestampTracker.process(ptsTicks: pts, dtsTicks: pts)
-        guard case .emit(let dts) = result else {
-            return // Skip duplicate PTS
+        let adjustedPts: Int64
+        let dts: Int64
+        switch result {
+        case .emit(let ptsValue, let dtsValue, _):
+            adjustedPts = ptsValue
+            dts = dtsValue
         }
 
         var writer = ByteWriter()
-        writer.writeBE(UInt64(bitPattern: pts))
+        writer.writeBE(UInt64(bitPattern: adjustedPts))
         writer.writeBE(UInt64(bitPattern: dts))
         writer.writeBE(UInt64(bitPattern: dur))
         let isKey = (flags & 1) != 0

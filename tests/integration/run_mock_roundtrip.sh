@@ -6,7 +6,8 @@ set -euo pipefail
 # - python3 available
 # - ffmpeg binary built in ../ffmpeg/ffmpeg with h264_videotoolbox_remote enabled
 
-FFMPEG_BIN=${FFMPEG_BIN:-../ffmpeg/ffmpeg}
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+FFMPEG_BIN="${FFMPEG_BIN:-${ROOT}/ffmpeg/ffmpeg}"
 SERVER_TOKEN=${SERVER_TOKEN:-}
 SERVER_ADDR=${SERVER_ADDR:-}
 

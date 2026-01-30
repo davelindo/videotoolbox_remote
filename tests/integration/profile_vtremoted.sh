@@ -7,20 +7,23 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FFMPEG_BIN="${FFMPEG:-${ROOT}/ffmpeg/ffmpeg}"
 VTREMOTED_BIN="${VTREMOTED:-${ROOT}/vtremoted/.build/release/vtremoted}"
 PORT="${VTREMOTE_PORT:-5555}"
+source "${ROOT}/tests/integration/vtremoted_common.sh"
 
 if [[ ! -x "$VTREMOTED_BIN" ]]; then
     # Fallback to debug build if release not found
     VTREMOTED_BIN="${ROOT}/vtremoted/.build/debug/vtremoted"
 fi
 
-echo "Starting vtremoted on port ${PORT}..."
-"$VTREMOTED_BIN" --listen "127.0.0.1:${PORT}" > /tmp/vtremoted_profile.log 2>&1 &
-VTREMOTED_PID=$!
+VTREMOTED="$VTREMOTED_BIN"
+VTREMOTE_PORT="$PORT"
+echo "Starting vtremoted on port ${VTREMOTE_PORT}..."
+vtremote_start_server /tmp/vtremoted_profile.log
+VTREMOTED_PID="${VTREMOTE_SERVER_PID:-}"
 echo "vtremoted PID: ${VTREMOTED_PID}"
 
 cleanup() {
     echo "Stopping vtremoted..."
-    kill "$VTREMOTED_PID" 2>/dev/null || true
+    vtremote_stop_server
 }
 trap cleanup EXIT
 
