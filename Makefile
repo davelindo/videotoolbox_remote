@@ -29,7 +29,7 @@ FFMPEG_CC ?= $(CC)
 FFMPEG_CXX ?= $(CXX)
 endif
 FFMPEG_OBJC := $(FFMPEG_CC)
-FFMPEG_OBJCC := $(FFMPEG_CXX)
+FFMPEG_OBJCC := $(FFMPEG_CC)
 
 ifeq ($(IS_DARWIN),Darwin)
 FFMPEG_CONFIGURE_FLAGS ?= --enable-videotoolbox --enable-videotoolbox-remote --enable-libzstd --disable-debug --disable-response-files
@@ -54,9 +54,17 @@ build-ffmpeg:
 	sdkroot="$(SDKROOT)"; \
 	cc="$(FFMPEG_CC)"; \
 	cxx="$(FFMPEG_CXX)"; \
-	objc="$(FFMPEG_OBJC)"; \
 	objcc="$(FFMPEG_OBJCC)"; \
 	if [ "$(IS_DARWIN)" = "Darwin" ]; then \
+		if ! printf "%s" "$$config_flags" | grep -q -- "--cc="; then \
+			config_flags="$$config_flags --cc=$$cc"; \
+		fi; \
+		if ! printf "%s" "$$config_flags" | grep -q -- "--cxx="; then \
+			config_flags="$$config_flags --cxx=$$cxx"; \
+		fi; \
+		if ! printf "%s" "$$config_flags" | grep -q -- "--objcc="; then \
+			config_flags="$$config_flags --objcc=$$objcc"; \
+		fi; \
 		if [ -z "$$sdkroot" ]; then \
 			sdkroot=$$(xcrun --sdk macosx --show-sdk-path 2>/dev/null); \
 		fi; \
@@ -112,7 +120,7 @@ build-ffmpeg:
 	fi; \
 	if [ "$$need_config" = "1" ]; then \
 		echo "Reconfiguring ffmpeg (FFMPEG_CONFIGURATION mismatch or missing)"; \
-		env darwin=yes CC="$$cc" CXX="$$cxx" OBJC="$$objc" OBJCC="$$objcc" SDKROOT="$$sdkroot" MACOSX_DEPLOYMENT_TARGET="$(MACOSX_DEPLOYMENT_TARGET)" \
+		env darwin=yes CC="$$cc" CXX="$$cxx" OBJCC="$$objcc" SDKROOT="$$sdkroot" MACOSX_DEPLOYMENT_TARGET="$(MACOSX_DEPLOYMENT_TARGET)" \
 		CPPFLAGS="$$cppflags" CFLAGS="$$cflags" OBJCFLAGS="$$objcflags" LDFLAGS="$$ldflags" \
 		./configure $$config_flags; \
 	fi
