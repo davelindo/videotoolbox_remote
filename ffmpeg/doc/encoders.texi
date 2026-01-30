@@ -45,7 +45,11 @@ Socket timeout in milliseconds (default 5000).
 @item vt_remote_inflight
 Max in-flight frames (default 16).
 @item vt_remote_wire_compression
-Wire compression mode (none/lz4; default lz4).
+Wire compression mode (none/lz4/zstd; default zstd).
+@item vt_remote_zstd_level
+zstd compression level for wire compression (default 1).
+@item vt_remote_zstd_workers
+zstd worker threads for wire compression (default 0 = single-threaded).
 @item vt_remote_log_level
 Remote encoder log level (default info).
 @end table

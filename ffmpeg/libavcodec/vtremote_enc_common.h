@@ -19,6 +19,9 @@ typedef struct VTRemoteEncContext {
     int wire_compression;
     int zstd_level;
     int zstd_workers;
+    int zstd_last_level;
+    int zstd_last_workers;
+    int zstd_last_job_size;
     int codec_id;  /* AVCodecID */
     /* VideoToolbox option mirror (see videotoolboxenc.c) */
     int profile;

@@ -43,7 +43,7 @@ Pre-shared authentication token (optional).
 @item vt_remote_timeout_ms
 Socket timeout in milliseconds (default 5000).
 @item vt_remote_wire_compression
-Wire compression mode (none/lz4; default lz4).
+Wire compression mode (none/lz4/zstd; default zstd).
 @item vt_remote_log_level
 Remote decoder log level (default info).
 @end table

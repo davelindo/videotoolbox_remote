@@ -175,6 +175,48 @@ static void configure_socket_buffers(int fd)
     setsockopt(fd, SOL_SOCKET, SO_RCVBUF, VTR_SOCKOPT_ARG &bufsize, sizeof(bufsize));
 }
 
+static int configure_zstd_ctx(AVCodecContext *avctx, VTRemoteEncContext *s, int src_size)
+{
+    int job_size = 0;
+    if (!s->zstd_cctx) {
+        s->zstd_cctx = ZSTD_createCCtx();
+        if (!s->zstd_cctx)
+            return AVERROR(ENOMEM);
+    }
+    if (s->zstd_workers > 0) {
+        job_size = src_size / s->zstd_workers;
+        if (job_size < (1 << 20))
+            job_size = 1 << 20;
+    }
+    if (s->zstd_last_level != s->zstd_level) {
+        size_t zrc = ZSTD_CCtx_setParameter(s->zstd_cctx, ZSTD_c_compressionLevel, s->zstd_level);
+        if (ZSTD_isError(zrc)) {
+            av_log(avctx, AV_LOG_ERROR, "Zstd level set failed: %s\n", ZSTD_getErrorName(zrc));
+            return AVERROR_EXTERNAL;
+        }
+        s->zstd_last_level = s->zstd_level;
+    }
+    if (s->zstd_last_workers != s->zstd_workers) {
+        size_t zrc = ZSTD_CCtx_setParameter(s->zstd_cctx, ZSTD_c_nbWorkers, s->zstd_workers);
+        if (ZSTD_isError(zrc)) {
+            av_log(avctx, AV_LOG_WARNING, "Zstd workers not supported: %s\n", ZSTD_getErrorName(zrc));
+        }
+        s->zstd_last_workers = s->zstd_workers;
+        s->zstd_last_job_size = -1;
+    }
+    if (s->zstd_workers > 0 && job_size > 0 && job_size != s->zstd_last_job_size) {
+        size_t zrc = ZSTD_CCtx_setParameter(s->zstd_cctx, ZSTD_c_jobSize, job_size);
+        if (ZSTD_isError(zrc)) {
+            av_log(avctx, AV_LOG_WARNING, "Zstd jobSize not supported: %s\n", ZSTD_getErrorName(zrc));
+        } else {
+            s->zstd_last_job_size = job_size;
+        }
+    } else if (s->zstd_workers == 0) {
+        s->zstd_last_job_size = 0;
+    }
+    return 0;
+}
+
 static int write_full(int fd, const uint8_t *buf, int size)
 {
     int sent = 0;
@@ -956,6 +998,9 @@ int ff_vtremote_common_init(AVCodecContext *avctx)
     s->comp_buf[0] = s->comp_buf[1] = NULL;
     s->comp_buf_cap[0] = s->comp_buf_cap[1] = 0;
     s->zstd_cctx = NULL;
+    s->zstd_last_level = -1;
+    s->zstd_last_workers = -1;
+    s->zstd_last_job_size = -1;
 
     if (!s->host) {
         av_log(avctx, AV_LOG_ERROR, "vt_remote_host is required\n");
@@ -1051,6 +1096,11 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame)
     int64_t send_start_us = av_gettime_relative();
 
     if (s->wire_compression == 1 || s->wire_compression == 2) {
+        if (s->wire_compression == 2) {
+            int zret = configure_zstd_ctx(avctx, s, (int)sizes[0]);
+            if (zret < 0)
+                return zret;
+        }
         for (int i = 0; i < 2; i++) {
             int src_size = (int)sizes[i];
             size_t bound;
@@ -1076,30 +1126,6 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame)
                 if (out <= 0) return AVERROR_EXTERNAL;
                 out_size = (size_t)out;
             } else {
-                if (!s->zstd_cctx) {
-                    s->zstd_cctx = ZSTD_createCCtx();
-                    if (!s->zstd_cctx) return AVERROR(ENOMEM);
-                }
-                {
-                    size_t zrc = ZSTD_CCtx_reset(s->zstd_cctx, ZSTD_reset_session_only);
-                    if (ZSTD_isError(zrc)) {
-                        av_log(avctx, AV_LOG_ERROR, "Zstd reset failed: %s\n", ZSTD_getErrorName(zrc));
-                        return AVERROR_EXTERNAL;
-                    }
-                }
-                {
-                    size_t zrc = ZSTD_CCtx_setParameter(s->zstd_cctx, ZSTD_c_compressionLevel, s->zstd_level);
-                    if (ZSTD_isError(zrc)) {
-                        av_log(avctx, AV_LOG_ERROR, "Zstd level set failed: %s\n", ZSTD_getErrorName(zrc));
-                        return AVERROR_EXTERNAL;
-                    }
-                }
-                if (s->zstd_workers > 0) {
-                    size_t zrc = ZSTD_CCtx_setParameter(s->zstd_cctx, ZSTD_c_nbWorkers, s->zstd_workers);
-                    if (ZSTD_isError(zrc)) {
-                        av_log(avctx, AV_LOG_WARNING, "Zstd workers not supported: %s\n", ZSTD_getErrorName(zrc));
-                    }
-                }
                 size_t out = ZSTD_compress2(s->zstd_cctx, s->comp_buf[i], bound,
                                             planes[i], src_size);
                 if (ZSTD_isError(out)) {
