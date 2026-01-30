@@ -169,8 +169,8 @@ static void configure_socket_buffers(int fd)
     int nodelay = 1;
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, VTR_SOCKOPT_ARG &nodelay, sizeof(nodelay));
 
-    /* 4MB buffers to handle 4K+ frames without blocking */
-    int bufsize = 4 * 1024 * 1024;
+    /* 16MB buffers to sustain multi-gigabit links */
+    int bufsize = 16 * 1024 * 1024;
     setsockopt(fd, SOL_SOCKET, SO_SNDBUF, VTR_SOCKOPT_ARG &bufsize, sizeof(bufsize));
     setsockopt(fd, SOL_SOCKET, SO_RCVBUF, VTR_SOCKOPT_ARG &bufsize, sizeof(bufsize));
 }

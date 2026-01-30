@@ -82,6 +82,15 @@ static int set_socket_timeout(int fd, int timeout_ms)
     return 0;
 }
 
+/* Configure socket for high-throughput video streaming */
+static void configure_socket_buffers(int fd)
+{
+    /* 16MB buffers to sustain multi-gigabit links */
+    int bufsize = 16 * 1024 * 1024;
+    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, VTR_SOCKOPT_ARG &bufsize, sizeof(bufsize));
+    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, VTR_SOCKOPT_ARG &bufsize, sizeof(bufsize));
+}
+
 static int write_full(int fd, const uint8_t *buf, int size)
 {
     int sent = 0;
@@ -182,6 +191,7 @@ static int connect_hostport(const char *hostport, int timeout_ms)
         if (fd < 0)
             continue;
         set_socket_timeout(fd, timeout_ms);
+        configure_socket_buffers(fd);
         if (connect(fd, rp->ai_addr, rp->ai_addrlen) == 0)
             break;
         VTR_CLOSE_SOCKET(fd);
