@@ -1142,7 +1142,7 @@ int ff_vtremote_common_init(AVCodecContext *avctx)
         return AVERROR(ENOMEM);
 
     ret = vtremote_handshake(avctx);
-    if (ret < 0)
+    if (ret < 0) {
         vtremote_net_close();
         if (s->send_queue) {
             for (int i = 0; i < s->send_q_size; i++)
@@ -1154,6 +1154,7 @@ int ff_vtremote_common_init(AVCodecContext *avctx)
             s->send_q_count = 0;
             s->queued_frames = 0;
         }
+    }
     return ret;
 }
 
