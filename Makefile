@@ -151,10 +151,10 @@ ifeq ($(IS_DARWIN),Darwin)
 		pkg_dir=$$(dirname "$(PKG_CONFIG)"); \
 		case ":$$path:" in *":$$pkg_dir:"*) ;; *) path="$$pkg_dir:$$path";; esac; \
 	fi; \
-	env_sdkroot=""; \
-	if [ -n "$(SDKROOT)" ]; then env_sdkroot="SDKROOT=$(SDKROOT)"; fi; \
-	$$env_sdkroot PKG_CONFIG="$(PKG_CONFIG)" PKG_CONFIG_PATH="$(PKG_CONFIG_PATH)" PATH="$$path" \
-		swift build -c release
+	if [ -n "$(SDKROOT)" ]; then export SDKROOT="$(SDKROOT)"; fi; \
+	if [ -n "$(PKG_CONFIG)" ]; then export PKG_CONFIG="$(PKG_CONFIG)"; fi; \
+	if [ -n "$(PKG_CONFIG_PATH)" ]; then export PKG_CONFIG_PATH="$(PKG_CONFIG_PATH)"; fi; \
+	PATH="$$path" swift build -c release
 else
 	@echo "Skipping vtremoted build (not macOS)"
 endif
