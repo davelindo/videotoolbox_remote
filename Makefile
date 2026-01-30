@@ -19,6 +19,10 @@ OBJCC ?= $(CXX)
 SDKROOT ?= $(shell xcrun --sdk macosx --show-sdk-path 2>/dev/null)
 MACOSX_SDK_VERSION := $(shell xcrun --sdk macosx --show-sdk-version 2>/dev/null)
 MACOSX_DEPLOYMENT_TARGET ?= $(if $(MACOSX_SDK_VERSION),$(MACOSX_SDK_VERSION),$(shell sw_vers -productVersion 2>/dev/null | awk -F. '{print $$1"."$$2}'))
+ifneq ($(wildcard /opt/homebrew/bin/pkg-config),)
+PKG_CONFIG ?= /opt/homebrew/bin/pkg-config
+PKG_CONFIG_PATH ?= /opt/homebrew/lib/pkgconfig:/opt/homebrew/share/pkgconfig
+endif
 endif
 
 ifeq ($(IS_DARWIN),Darwin)
@@ -127,6 +131,7 @@ build-ffmpeg:
 	if [ "$$need_config" = "1" ]; then \
 		echo "Reconfiguring ffmpeg (FFMPEG_CONFIGURATION mismatch or missing)"; \
 		env darwin=yes CC="$$cc" CXX="$$cxx" OBJCC="$$objcc" SDKROOT="$$sdkroot" MACOSX_DEPLOYMENT_TARGET="$(MACOSX_DEPLOYMENT_TARGET)" \
+		PKG_CONFIG="$(PKG_CONFIG)" PKG_CONFIG_PATH="$(PKG_CONFIG_PATH)" \
 		CPPFLAGS="$$cppflags" CFLAGS="$$cflags" OBJCFLAGS="$$objcflags" LDFLAGS="$$ldflags" \
 		./configure $$config_flags; \
 	fi
