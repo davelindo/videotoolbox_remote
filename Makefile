@@ -89,6 +89,9 @@ build-ffmpeg:
 		if ! printf "%s" "$$config_flags" | grep -q -- "--host-cflags="; then \
 			config_flags="$$config_flags --host-cflags=$$sysroot_flag"; \
 		fi; \
+		if ! printf "%s" "$$config_flags" | grep -q -- "--host-ldflags="; then \
+			config_flags="$$config_flags --host-ldflags=$$sysroot_flag"; \
+		fi; \
 		cppflags="$(CPPFLAGS)"; \
 		cflags="$(CFLAGS)"; \
 		objcflags="$(OBJCFLAGS)"; \
