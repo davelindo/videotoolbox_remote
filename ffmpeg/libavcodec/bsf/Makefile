@@ -50,5 +50,6 @@ OBJS-$(CONFIG_VP9_SUPERFRAME_BSF)         += bsf/vp9_superframe.o
 OBJS-$(CONFIG_VP9_SUPERFRAME_SPLIT_BSF)   += bsf/vp9_superframe_split.o
 OBJS-$(CONFIG_VVC_METADATA_BSF)           += bsf/h266_metadata.o
 OBJS-$(CONFIG_VVC_MP4TOANNEXB_BSF)        += bsf/vvc_mp4toannexb.o
+OBJS-$(CONFIG_VTREMOTE_TRANSCODE_BSF)    += bsf/vtremote_transcode.o
 
 libavcodec/bsf/%.o: CPPFLAGS += -I$(SRC_PATH)/libavcodec/

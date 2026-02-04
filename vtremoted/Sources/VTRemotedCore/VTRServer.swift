@@ -30,6 +30,11 @@ public final class VTRServer {
         var yes: Int32 = 1
         _ = setsockopt(socketFd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout.size(ofValue: yes)))
 
+        // Set large buffers on listening socket BEFORE listen() for correct TCP Window Scale negotiation
+        var bufSize: Int32 = 16 * 1024 * 1024
+        _ = setsockopt(socketFd, SOL_SOCKET, SO_SNDBUF, &bufSize, socklen_t(MemoryLayout.size(ofValue: bufSize)))
+        _ = setsockopt(socketFd, SOL_SOCKET, SO_RCVBUF, &bufSize, socklen_t(MemoryLayout.size(ofValue: bufSize)))
+
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = port.bigEndian
@@ -63,6 +68,12 @@ public final class VTRServer {
             var noDelay: Int32 = 1
             _ = setsockopt(clientFd, Int32(IPPROTO_TCP), TCP_NODELAY, &noDelay, 
                            socklen_t(MemoryLayout.size(ofValue: noDelay)))
+
+#if !os(Linux)
+            var noSigPipe: Int32 = 1
+            _ = setsockopt(clientFd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe,
+                           socklen_t(MemoryLayout.size(ofValue: noSigPipe)))
+#endif
 
             var bufSize: Int32 = 16 * 1024 * 1024
             _ = setsockopt(clientFd, SOL_SOCKET, SO_SNDBUF, &bufSize, socklen_t(MemoryLayout.size(ofValue: bufSize)))

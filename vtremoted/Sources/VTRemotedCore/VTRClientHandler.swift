@@ -97,7 +97,10 @@ public final class VTRClientHandler: @unchecked Sendable {
                 "\(config.width)x\(config.height) " +
                 "pix=\(config.pixelFormat) tb=\(config.timebase.num)/\(config.timebase.den) " +
                 "fr=\(config.frameRate.num)/\(config.frameRate.den) br=\(config.options.bitrate) " +
-                "gop=\(config.options.gop) wc=\(config.options.wireCompression)"
+                "gop=\(config.options.gop) wc=\(config.options.wireCompression)" +
+                (config.mode == .transcode
+                    ? " out=\(config.outputWidth)x\(config.outputHeight) scale=\(config.scaleMode.rawValue) out_codec=\(config.outputCodec.rawValue)"
+                    : "")
         )
 
         let mode = config.mode
@@ -130,7 +133,10 @@ public final class VTRClientHandler: @unchecked Sendable {
                     "\(config.width)x\(config.height) " +
                     "pixfmt=\(config.pixelFormat) tb=\(config.timebase.num)/\(config.timebase.den) " +
                     "br=\(config.options.bitrate) " +
-                    "gop=\(config.options.gop) wc=\(config.options.wireCompression)"
+                    "gop=\(config.options.gop) wc=\(config.options.wireCompression)" +
+                    (config.mode == .transcode
+                        ? " out=\(config.outputWidth)x\(config.outputHeight) scale=\(config.scaleMode.rawValue) out_codec=\(config.outputCodec.rawValue)"
+                        : "")
             )
         } catch {
             logger.error("CONFIGURE failed mode=\(config.mode.rawValue) codec=\(config.codec.rawValue) error=\(error)")
@@ -169,9 +175,15 @@ public final class VTRClientHandler: @unchecked Sendable {
             case .flush:
                 try codecSession.flush()
                 try messageIO.send(type: .done, body: Data())
-                let msg = configuration.mode == .encode
-                    ? "DONE client=\(clientName) frames=\(stats.framesIn) packets=\(stats.packetsOut)"
-                    : "DONE client=\(clientName) packets=\(stats.packetsIn) frames=\(stats.framesOut)"
+                let msg: String
+                switch configuration.mode {
+                case .encode:
+                    msg = "DONE client=\(clientName) frames=\(stats.framesIn) packets=\(stats.packetsOut)"
+                case .decode:
+                    msg = "DONE client=\(clientName) packets=\(stats.packetsIn) frames=\(stats.framesOut)"
+                case .transcode:
+                    msg = "DONE client=\(clientName) packets=\(stats.packetsIn) packets_out=\(stats.packetsOut)"
+                }
                 logger.info(msg)
                 inputBufferPool.return(payload)
                 return

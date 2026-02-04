@@ -293,86 +293,6 @@ static int vtremote_read_msg(VTRemoteDecContext *s, VTRemoteMsgHeader *hdr, uint
     return 0;
 }
 
-static int vtremote_rxbuf_grow(VTRemoteDecContext *s, int need)
-{
-    if (!s)
-        return AVERROR(EINVAL);
-    if (s->rx_buf_cap - s->rx_buf_len >= need)
-        return 0;
-    int new_cap = s->rx_buf_cap > 0 ? s->rx_buf_cap : 4096;
-    while (new_cap - s->rx_buf_len < need)
-        new_cap *= 2;
-    uint8_t *tmp = av_realloc(s->rx_buf, new_cap);
-    if (!tmp)
-        return AVERROR(ENOMEM);
-    s->rx_buf = tmp;
-    s->rx_buf_cap = new_cap;
-    return 0;
-}
-
-static int vtremote_read_msg_nonblocking(VTRemoteDecContext *s, VTRemoteMsgHeader *hdr, uint8_t **payload)
-{
-    if (!s || !hdr || !payload)
-        return AVERROR(EINVAL);
-    *payload = NULL;
-
-    // Try to read some bytes without blocking.
-    uint8_t tmp[4096];
-    for (;;) {
-        int r = (int)recv(s->fd, tmp, sizeof(tmp), MSG_DONTWAIT);
-        if (r < 0) {
-            int err = vtremote_sock_errno();
-            if (err == EAGAIN || err == EWOULDBLOCK
-#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
-                || err == WSAEWOULDBLOCK
-#endif
-            ) {
-                break;
-            }
-            if (err == EINTR)
-                continue;
-            return AVERROR(err);
-        }
-        if (r == 0)
-            return AVERROR_EOF;
-        int ret = vtremote_rxbuf_grow(s, r);
-        if (ret < 0)
-            return ret;
-        memcpy(s->rx_buf + s->rx_buf_len, tmp, r);
-        s->rx_buf_len += r;
-        s->bytes_recv += r;
-        if (r < (int)sizeof(tmp))
-            break;
-    }
-
-    if (s->rx_buf_len < VTREMOTE_HEADER_SIZE)
-        return AVERROR(EAGAIN);
-
-    int ret = vtremote_read_header(s->rx_buf, VTREMOTE_HEADER_SIZE, hdr);
-    if (ret < 0)
-        return ret;
-    if (hdr->length > INT_MAX - VTREMOTE_HEADER_SIZE)
-        return AVERROR(ENOMEM);
-
-    int total = VTREMOTE_HEADER_SIZE + (int)hdr->length;
-    if (s->rx_buf_len < total)
-        return AVERROR(EAGAIN);
-
-    if (hdr->length > 0) {
-        uint8_t *buf = av_malloc(hdr->length);
-        if (!buf)
-            return AVERROR(ENOMEM);
-        memcpy(buf, s->rx_buf + VTREMOTE_HEADER_SIZE, hdr->length);
-        *payload = buf;
-    }
-
-    int remaining = s->rx_buf_len - total;
-    if (remaining > 0)
-        memmove(s->rx_buf, s->rx_buf + total, remaining);
-    s->rx_buf_len = remaining;
-    return 0;
-}
-
 static int vtremote_handle_hello_ack(AVCodecContext *avctx, const uint8_t *payload, int len)
 {
     VTRemoteRBuf r;
@@ -814,17 +734,17 @@ int ff_vtremote_decode(AVCodecContext *avctx, AVFrame *frame, int *got_frame, AV
                 /* During flush, block until we receive a frame or DONE. */
                 ret = vtremote_read_msg(s, &hdr, &payload);
             } else {
-                ret = vtremote_read_msg_nonblocking(s, &hdr, &payload);
-            }
-            if (ret == AVERROR(EAGAIN) && !s->flushing) {
                 int64_t backlog = s->packets_sent - s->frames_recv;
                 int depth = s->decode_reorder_depth >= 0 ? s->decode_reorder_depth : 8;
                 int limit = FFMAX(2, depth + 2);
-                if (backlog > limit) {
-                    int ready = wait_readable(s->fd, 2);
-                    if (ready > 0)
-                        ret = vtremote_read_msg_nonblocking(s, &hdr, &payload);
+                int timeout_ms = backlog > limit ? 2 : 0;
+                int ready = wait_readable(s->fd, timeout_ms);
+                if (ready <= 0) {
+                    if (got_frame)
+                        *got_frame = 0;
+                    return 0;
                 }
+                ret = vtremote_read_msg(s, &hdr, &payload);
             }
             if (ret == AVERROR(EAGAIN)) {
                 if (got_frame)

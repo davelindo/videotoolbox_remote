@@ -8,13 +8,24 @@ public enum VideoCodec: String, Sendable {
 public enum SessionMode: String, Sendable {
     case encode
     case decode
+    case transcode
+}
+
+public enum TranscodeScaleMode: String, Sendable {
+    case stretch
+    case aspect
+    case aspectFill
 }
 
 public struct SessionConfiguration: Sendable {
     public var codec: VideoCodec
+    public var outputCodec: VideoCodec
     public var mode: SessionMode
     public var width: Int
     public var height: Int
+    public var outputWidth: Int
+    public var outputHeight: Int
+    public var scaleMode: TranscodeScaleMode
     public var pixelFormat: UInt8
     public var timebase: Timebase
     public var frameRate: (num: Int, den: Int)
@@ -24,8 +35,51 @@ public struct SessionConfiguration: Sendable {
     public init(codec: VideoCodec, request: ConfigureRequest) throws {
         self.codec = codec
         mode = SessionMode(rawValue: request.options["mode"] ?? "encode") ?? .encode
+        if let outCodecRaw = request.options["out_codec"] {
+            guard let parsed = VideoCodec(rawValue: outCodecRaw) else {
+                throw VTRemotedError.unsupported("out_codec=\(outCodecRaw)")
+            }
+            outputCodec = parsed
+        } else {
+            outputCodec = codec
+        }
         width = request.width
         height = request.height
+        let outWidthOpt = request.options["out_width"]
+        let outHeightOpt = request.options["out_height"]
+        let scaleModeOpt = request.options["scale_mode"]
+        if mode == .transcode {
+            if outWidthOpt != nil || outHeightOpt != nil {
+                guard let outWidthVal = Int(outWidthOpt ?? ""), outWidthVal > 0,
+                      let outHeightVal = Int(outHeightOpt ?? ""), outHeightVal > 0 else {
+                    throw VTRemotedError.unsupported("out_width/out_height must be positive")
+                }
+                outputWidth = outWidthVal
+                outputHeight = outHeightVal
+            } else {
+                outputWidth = width
+                outputHeight = height
+            }
+
+            let scaleRaw = (scaleModeOpt ?? "stretch").lowercased()
+            switch scaleRaw {
+            case "stretch", "resize", "scale":
+                scaleMode = .stretch
+            case "aspect", "fit", "letterbox":
+                scaleMode = .aspect
+            case "aspect_fill", "aspectfill", "fill", "crop":
+                scaleMode = .aspectFill
+            default:
+                throw VTRemotedError.unsupported("scale_mode=\(scaleRaw)")
+            }
+        } else {
+            if outWidthOpt != nil || outHeightOpt != nil || scaleModeOpt != nil {
+                throw VTRemotedError.unsupported("scale options require transcode mode")
+            }
+            outputWidth = width
+            outputHeight = height
+            scaleMode = .stretch
+        }
         pixelFormat = request.pixelFormat
         timebase = request.timebase
         frameRate = request.frameRate
