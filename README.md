@@ -24,6 +24,13 @@ ffmpeg -i input.mkv \
   -b:v 6000k -g 240 \
   -c:a copy -c:s copy \
   output.mkv
+
+#transcode from client (packet in/out, explicit)
+ffmpeg -i input.mkv \
+  -c:v hevc_videotoolbox -vt_remote_transcode -vt_remote_host macmini.local:5555 \
+  -b:v 6000k -g 240 \
+  -c:a copy -c:s copy \
+  output.mkv
 ```
 
 If you're building the client on Linux/Windows, configure FFmpeg with
@@ -44,6 +51,14 @@ This is *not* a good fit if:
 - You do not have a good grasp of FFmpeg.
 
 ---
+
+## Modes (explicit)
+
+- Remote encode: use `h264_videotoolbox_remote` / `hevc_videotoolbox_remote` with `-vt_remote_host`.
+- Remote decode: use `h264_videotoolbox_remote` / `hevc_videotoolbox_remote` as the decoder.
+- Remote transcode (packet in/out): add `-vt_remote_transcode` to a standard VideoToolbox encode command. Requires H.264/HEVC input and no filters.
+
+Note: `-vt_remote_host` does not change local `*_videotoolbox` behavior by itself. You must explicitly choose the remote codec or `-vt_remote_transcode`.
 
 ## How it works (mental model)
 
@@ -68,13 +83,24 @@ flowchart LR
   end
   C2a -- "Annex B packets<br/>VTRemote TCP (+Zstd)" --> S2a
   S2a -- "raw NV12/P010 frames<br/>VTRemote TCP (+Zstd)" --> C2a
+
+  %% Transcode path (packet in/out)
+  subgraph C3["FFmpeg client"]
+    C3a["demux -> mux (stream copy)"]
+  end
+  subgraph S3["vtremoted (macOS)"]
+    S3a["VTDecompressionSession -> VTCompressionSession"]
+  end
+  C3a -- "Annex B packets<br/>VTRemote TCP" --> S3a
+  S3a -- "Annex B packets<br/>VTRemote TCP" --> C3a
 ```
 
 ---
 
 ## Performance notes
 
-Remote VideoToolbox means you are sending/receiving video frames over the network.
+Remote VideoToolbox means you are sending/receiving video frames over the network for encode/decode.
+Transcode mode keeps compressed packets on the wire, which reduces bandwidth and client CPU compared to raw-frame transport.
 For high resolutions / high FPS, a **wired LAN** is recommended.
 
 ### Required wire bandwidth for real‑time (Zstd on)

@@ -8,7 +8,7 @@ This tree holds VideoToolbox Remote integration tests and benchmarks.
 - `check_pts_dts.sh`: ffprobe-based validator that fails if video packets have `pts < dts`, non-monotonic DTS, missing keyframes, or (optionally) if the average keyframe interval deviates from an expected GOP.
 - `check_frame_packet_count.sh`: validates that decoded frame count equals packet count (guards against warmup/extra packets).
 - `check_bitrate.sh`: validates average bitrate within a tolerance window (guards against broken rate-control).
-- `bench_vtremote.sh`: local vs remote encode benchmark across multiple sizes + framerates (skips local codec if unavailable). Prefers `vtremoted/.build/release/vtremoted` when present.
+- `bench_vtremote.sh`: local vs remote encode benchmark across multiple sizes + framerates (skips local codec if unavailable), plus an optional transcode section. Prefers `vtremoted/.build/release/vtremoted` when present.
 - `run_vtremoted_roundtrip.sh`: launches `vtremoted` on loopback, runs short H.264 + HEVC `*_videotoolbox_remote` encodes, validates PTS/DTS via `check_pts_dts.sh`, and decodes the result with `ffmpeg -xerror` to catch bad bytestream/packet formatting.
 - `run_vtremoted_decode.sh`: generates short local H.264/HEVC inputs and validates remote decode with `h264_videotoolbox_remote` / `hevc_videotoolbox_remote`.
 - `run_transcode_test.sh`: simultaneous remote decode + encode pipeline (sanity + stability).
@@ -37,6 +37,10 @@ Async decode defaults:
 Bench defaults:
 - `VTREMOTE_BENCH_BITRATE=10M`
 - `VTREMOTE_BENCH_CBR=1` (adds `-maxrate`/`-bufsize` for apples-to-apples)
+- `VTREMOTE_BENCH_TRANSCODE=1` (enable transcode section)
+- `VTREMOTE_BENCH_ONLY_TRANSCODE=1` (skip encode/decode benches)
+- `VTREMOTE_BENCH_TRANSCODE_OUT_CODEC=hevc`
+- `VTREMOTE_BENCH_TRANSCODE_PIX_FMT=1` (1=nv12, 2=p010)
 - `FFMPEG_LOCAL` defaults to the repo `ffmpeg/ffmpeg` for local encodes (set `FFMPEG_LOCAL=ffmpeg` to use your system build).
 
 FFmpeg build note: enable the local + remote codecs during configure on macOS, e.g.

@@ -44,10 +44,17 @@ Integration scripts live in `tests/integration/`:
 - `run_transcode_test.sh` — simultaneous decode + encode pipeline
 - `run_speed_decode_async.sh` — sync vs async decode speed
 - `run_speed_decode_matrix.sh` — async/sync + depth + compression matrix
-- `bench_vtremote.sh` — local vs remote encode benchmark
+- `bench_vtremote.sh` — local vs remote encode benchmark + optional transcode bench
 
 For performance tests, use a release server:
 
 ```bash
 export VTREMOTED="$PWD/vtremoted/.build/release/vtremoted"
+```
+
+Transcode bench toggles:
+
+```bash
+VTREMOTE_BENCH_TRANSCODE=1   # enable/disable transcode section
+VTREMOTE_BENCH_ONLY_TRANSCODE=1
 ```

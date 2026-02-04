@@ -21,6 +21,12 @@ swift build -c release
 ./install_launchd.sh --bin /usr/local/bin/vtremoted --listen 0.0.0.0:5555
 ```
 
+## Transcode mode
+
+The server also supports packet-in/packet-out transcode sessions (decode + encode on the Mac).
+From the client, add `-vt_remote_transcode` to a normal VideoToolbox encode command and provide
+`-vt_remote_host`. Optional scaling/format conversion is applied on the server.
+
 ## Command-line options
 
 | Option | Default | Description |

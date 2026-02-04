@@ -50,8 +50,31 @@ ffmpeg -i input.mkv \
   output.mkv
 ```
 
+## Step 4 — Transcode remotely (packet in/out)
+
+Use the normal VideoToolbox flags and add `-vt_remote_transcode`:
+
+```bash
+ffmpeg -i input.mkv \
+  -c:v hevc_videotoolbox -vt_remote_transcode -vt_remote_host macmini.local:5555 \
+  -b:v 6000k -g 240 \
+  -c:a copy -c:s copy \
+  output.mkv
+```
+
+Optional scale/format on the server:
+
+```bash
+ffmpeg -i input.mkv \
+  -c:v hevc_videotoolbox -vt_remote_transcode -vt_remote_host macmini.local:5555 \
+  -s 1280x720 -pix_fmt nv12 -vt_remote_scale_mode aspect \
+  -b:v 6000k -g 240 \
+  output.mkv
+```
+
 ## Notes
 
 - Wire compression uses **Zstd** by default (~30-40% smaller than LZ4).
 - Token auth is optional; add `-vt_remote_token` on the client and `--token` on the server to enforce.
 - The server automatically optimizes VideoToolbox settings for batch encoding throughput.
+- `-vt_remote_host` does not change local `*_videotoolbox` behavior by itself; use a remote codec or `-vt_remote_transcode`.
