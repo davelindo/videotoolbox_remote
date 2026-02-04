@@ -18,6 +18,7 @@
         private var nalLengthField: Int = 4
         private var cvPixelFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         private var encoderExtradata: Data?
+        private var encoderCodec: VideoCodec = .h264
 
         private var warmupPending = false
         private let warmupSemaphore = DispatchSemaphore(value: 0)
@@ -29,12 +30,25 @@
         private var decodeAsyncEnabled = false
         private var decodeReorderDepth = 0
         private var decodeReorderBuffer: DecodeReorderBuffer<[Data]>?
+        private var transcodeReorderBuffer: DecodeReorderBuffer<TranscodeFramePayload>?
+        private var transcodeOutputPool: CVPixelBufferPool?
+        private var transcodeTransferSession: VTPixelTransferSession?
+        private var transcodeOutputWidth: Int = 0
+        private var transcodeOutputHeight: Int = 0
+        private var transcodeNeedsTransfer = false
 
         private class FrameContext {
             let sideData: [Data]
-            init(sideData: [Data]) {
+            let pixelBuffer: CVPixelBuffer?
+            init(sideData: [Data], pixelBuffer: CVPixelBuffer? = nil) {
                 self.sideData = sideData
+                self.pixelBuffer = pixelBuffer
             }
+        }
+
+        private struct TranscodeFramePayload {
+            let pixelBuffer: CVPixelBuffer
+            let durTicks: Int64
         }
         private let inputBufferPool = BufferPool()
         private let outputBufferPool = BufferPool()
@@ -45,14 +59,23 @@
 
         func configure(_ configuration: SessionConfiguration) throws -> Data {
             config = configuration
+            encoderExtradata = nil
+            forceKeyframeNext = false
             decodeAsyncEnabled = false
             decodeReorderDepth = 0
             decodeReorderBuffer = nil
+            transcodeReorderBuffer = nil
+            transcodeOutputPool = nil
+            transcodeTransferSession = nil
+            transcodeOutputWidth = 0
+            transcodeOutputHeight = 0
+            transcodeNeedsTransfer = false
             switch configuration.mode {
             case .encode:
+                encoderCodec = configuration.codec
                 let enforceMonotonicPts = configuration.options.maxBFrames <= 0
                 timestampTracker.reset(enforceMonotonicPts: enforceMonotonicPts)
-                try setupEncoder(configuration)
+                try setupEncoder(configuration, codec: encoderCodec)
                 try warmup()
                 let extra = encoderExtradata ?? Data()
                 logger.info("CONFIGURE returning extradata size=\(extra.count)")
@@ -67,6 +90,23 @@
                 }
                 try setupDecoder(configuration)
                 return Data()
+            case .transcode:
+                encoderCodec = configuration.outputCodec
+                let enforceMonotonicPts = configuration.options.maxBFrames <= 0
+                timestampTracker.reset(enforceMonotonicPts: enforceMonotonicPts)
+                decodeAsyncEnabled = configuration.options.decodeAsync != 0
+                if decodeAsyncEnabled {
+                    let depth = configuration.options.decodeReorderDepth
+                    decodeReorderDepth = depth >= 0 ? depth : 2
+                    transcodeReorderBuffer = DecodeReorderBuffer(depth: decodeReorderDepth)
+                }
+                try setupDecoder(configuration)
+                try setupEncoder(configuration, codec: encoderCodec)
+                setupTranscodeTransfer(configuration)
+                try warmup()
+                let extra = encoderExtradata ?? Data()
+                logger.info("CONFIGURE returning extradata size=\(extra.count)")
+                return extra
             }
         }
 
@@ -255,9 +295,32 @@
             )
         }
 
+        private func encodePixelBuffer(_ pixelBuffer: CVPixelBuffer, pts: CMTime, duration: CMTime) {
+            guard let session = compressionSession else { return }
+            let forceKey = forceKeyframeNext
+            let props: CFDictionary? = forceKey ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
+            forceKeyframeNext = false
+
+            let frameContext = FrameContext(sideData: [], pixelBuffer: pixelBuffer)
+            let ctxPtr = Unmanaged.passRetained(frameContext).toOpaque()
+
+            let status = VTCompressionSessionEncodeFrame(
+                session,
+                imageBuffer: pixelBuffer,
+                presentationTimeStamp: pts,
+                duration: duration,
+                frameProperties: props,
+                sourceFrameRefcon: ctxPtr,
+                infoFlagsOut: nil
+            )
+            if status != noErr {
+                logger.error("encode frame failed: \(status)")
+            }
+        }
+
         func handlePacketMessage(_ payload: Data) throws {
             guard let config else { throw VTRemotedError.protocolViolation("PACKET before CONFIGURE") }
-            guard config.mode == .decode else { return }
+            guard config.mode == .decode || config.mode == .transcode else { return }
             guard let session = decompressionSession, let fmt = formatDescription else {
                 throw VTRemotedError.videoToolboxUnavailable
             }
@@ -352,22 +415,26 @@
             if let session = decompressionSession {
                 VTDecompressionSessionInvalidate(session)
             }
+            transcodeTransferSession = nil
+            transcodeOutputPool = nil
+            transcodeNeedsTransfer = false
             if decodeAsyncEnabled {
                 callbackLock.lock()
                 decodeReorderBuffer = nil
+                transcodeReorderBuffer = nil
                 callbackLock.unlock()
             }
         }
 
         // MARK: - Encoder
 
-        private func setupEncoder(_ config: SessionConfiguration) throws {
-            let codecType: CMVideoCodecType = switch config.codec {
+        private func setupEncoder(_ config: SessionConfiguration, codec: VideoCodec) throws {
+            let codecType: CMVideoCodecType = switch codec {
             case .h264: kCMVideoCodecType_H264
             case .hevc: kCMVideoCodecType_HEVC
             }
 
-            if config.codec == .h264, config.pixelFormat != 1 {
+            if codec == .h264, config.pixelFormat != 1 {
                 throw VTRemotedError.unsupported("h264 requires nv12")
             }
 
@@ -387,7 +454,7 @@
             
             // Low Latency
             if (config.options.flags & VideoToolboxConstants.AV_CODEC_FLAG_LOW_DELAY) != 0,
-               config.codec == .h264 || (config.codec == .hevc && isAppleSilicon()) {
+               codec == .h264 || (codec == .hevc && isAppleSilicon()) {
                 if config.options.bitrate <= 0 {
                     throw VTRemotedError.protocolViolation("low_delay requires bitrate")
                 }
@@ -396,8 +463,8 @@
 
             let pbInfo = NSMutableDictionary()
             pbInfo[kCVPixelBufferPixelFormatTypeKey] = NSNumber(value: cvPixelFormat)
-            pbInfo[kCVPixelBufferWidthKey] = NSNumber(value: config.width)
-            pbInfo[kCVPixelBufferHeightKey] = NSNumber(value: config.height)
+            pbInfo[kCVPixelBufferWidthKey] = NSNumber(value: config.outputWidth)
+            pbInfo[kCVPixelBufferHeightKey] = NSNumber(value: config.outputHeight)
             if let prim = mapColorPrimaries(config.options.colorPrimaries) {
                 pbInfo[kCVImageBufferColorPrimariesKey] = prim
             }
@@ -410,8 +477,8 @@
 
             let status = VTCompressionSessionCreate(
                 allocator: kCFAllocatorDefault,
-                width: Int32(config.width),
-                height: Int32(config.height),
+                width: Int32(config.outputWidth),
+                height: Int32(config.outputHeight),
                 codecType: codecType,
                 encoderSpecification: encInfo,
                 imageBufferAttributes: pbInfo,
@@ -434,7 +501,7 @@
                 throw VTRemotedError.ioError(code: Int32(status), message: "VTCompressionSessionCreate failed")
             }
 
-            try configureProperties(session: session, config: config)
+            try configureProperties(session: session, config: config, codec: codec)
 
             let preparation = VTCompressionSessionPrepareToEncodeFrames(session)
             guard preparation == noErr else {
@@ -448,12 +515,12 @@
             try warmup()
         }
 
-        private func configureProperties(session: VTCompressionSession, config: SessionConfiguration) throws {
+        private func configureProperties(session: VTCompressionSession, config: SessionConfiguration, codec: VideoCodec) throws {
             var hasBFrames = config.options.maxBFrames > 0
             var entropy = config.options.entropy
             let profile = config.options.profile
 
-            if config.codec == .h264 {
+            if codec == .h264 {
                 if hasBFrames, (profile & 0xFF) == VideoToolboxConstants.AV_PROFILE_H264_BASELINE {
                     logger.info("WARN baseline profile cannot use B-frames; disabling")
                     hasBFrames = false
@@ -464,11 +531,11 @@
                 }
             }
 
-            try configureBitrate(session: session, config: config)
+            try configureBitrate(session: session, config: config, codec: codec)
             try configureFrameProperties(session: session, config: config)
             try configureColors(session: session, config: config)
-            try configureProfileLevel(session: session, config: config, profile: profile, hasBFrames: hasBFrames)
-            try configureH264(session: session, config: config, entropy: entropy)
+            try configureProfileLevel(session: session, config: config, codec: codec, profile: profile, hasBFrames: hasBFrames)
+            try configureH264(session: session, config: config, codec: codec, entropy: entropy)
 
             // Misc properties
 
@@ -529,7 +596,7 @@
                 try setProp(session, VideoToolboxProperties.vtKeySpatialAdaptiveQP, num!, "spatial_aq")
             }
 
-            if config.codec == .hevc, config.options.alphaQuality > 0.0 {
+            if codec == .hevc, config.options.alphaQuality > 0.0 {
                 var alphaVal = config.options.alphaQuality
                 let num = CFNumberCreate(kCFAllocatorDefault, .doubleType, &alphaVal)
                 try setProp(session, VideoToolboxProperties.vtKeyTargetQualityForAlpha, num!, "alpha_quality")
@@ -572,7 +639,7 @@
             }
         }
 
-        private func configureBitrate(session: VTCompressionSession, config: SessionConfiguration) throws {
+        private func configureBitrate(session: VTCompressionSession, config: SessionConfiguration, codec: VideoCodec) throws {
             if (config.options.flags & VideoToolboxConstants.AV_CODEC_FLAG_QSCALE) != 0
                 || config.options.globalQuality > 0 {
                 if (config.options.flags & VideoToolboxConstants.AV_CODEC_FLAG_QSCALE) != 0, !isAppleSilicon() {
@@ -619,12 +686,12 @@
                 )
             }
 
-            if config.codec == .h264 || config.codec == .hevc, config.options.maxRate > 0 {
+            if codec == .h264 || codec == .hevc, config.options.maxRate > 0 {
                 let bytesPerSecond = Int64(config.options.maxRate >> 3)
                 let oneSecond: Int64 = 1
                 let arr = [NSNumber(value: bytesPerSecond), NSNumber(value: oneSecond)] as CFArray
                 let status = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits, value: arr)
-                if status != noErr, config.codec != .hevc {
+                if status != noErr, codec != .hevc {
                     throw VTRemotedError.ioError(code: Int32(status), message: "set DataRateLimits failed")
                 }
             }
@@ -685,11 +752,12 @@
         }
 
         private func configureProfileLevel(session: VTCompressionSession, 
-                                           config: SessionConfiguration, 
-                                           profile: Int, 
+                                           config: SessionConfiguration,
+                                           codec: VideoCodec,
+                                           profile: Int,
                                            hasBFrames: Bool) throws {
              let profileLevel = try VideoToolboxProperties.profileLevelString(
-                codec: config.codec,
+                codec: codec,
                 profile: profile,
                 level: config.options.level,
                 pixelFormat: config.pixelFormat,
@@ -700,8 +768,8 @@
             }
         }
 
-        private func configureH264(session: VTCompressionSession, config: SessionConfiguration, entropy: Int) throws {
-            if config.codec == .h264, entropy != 0 {
+        private func configureH264(session: VTCompressionSession, config: SessionConfiguration, codec: VideoCodec, entropy: Int) throws {
+            if codec == .h264, entropy != 0 {
                 let ent = entropy == 2 
                     ? VideoToolboxProperties.vtH264EntropyCABAC 
                     : VideoToolboxProperties.vtH264EntropyCAVLC
@@ -712,7 +780,7 @@
                 try setProp(session, VideoToolboxProperties.vtKeyAllowOpenGOP, kCFBooleanFalse, "closed_gop")
             }
 
-            if config.options.maxSliceBytes >= 0, config.codec == .h264 {
+            if config.options.maxSliceBytes >= 0, codec == .h264 {
                 var val = Int32(clamping: config.options.maxSliceBytes)
                 let num = CFNumberCreate(kCFAllocatorDefault, .intType, &val)
                 try setProp(session, VideoToolboxProperties.vtKeyMaxH264SliceBytes, 
@@ -802,12 +870,12 @@
 
             // Capture extradata once.
             if encoderExtradata == nil, let fmt = CMSampleBufferGetFormatDescription(sbuf) {
-                let atom = (config.codec == .hevc) ? "hvcC" : "avcC"
+                let atom = (encoderCodec == .hevc) ? "hvcC" : "avcC"
                 if let data = sampleDescriptionAtom(fmt, atom: atom) {
                     encoderExtradata = AnnexB.stripAtomHeaderIfPresent(data, fourCC: atom)
-                    if config.codec == .h264, data.count > 4 {
+                    if encoderCodec == .h264, data.count > 4 {
                         nalLengthField = Int((data[4] & 0x3) + 1)
-                    } else if config.codec == .hevc, let extra = encoderExtradata, extra.count > 21 {
+                    } else if encoderCodec == .hevc, let extra = encoderExtradata, extra.count > 21 {
                         nalLengthField = Int((extra[21] & 0x3) + 1)
                     }
                 }
@@ -1028,12 +1096,162 @@
             sendDecodedFrames(frames)
         }
 
+        private func encodeTranscodeFrames(_ frames: [ReorderedDecodedFrame<TranscodeFramePayload>]) {
+            guard let config else { return }
+            for frame in frames {
+                let pts = cmTime(fromTicks: frame.ptsTicks, timebase: config.timebase)
+                let duration: CMTime
+                if frame.durTicks > 0 {
+                    duration = cmTime(fromTicks: frame.durTicks, timebase: config.timebase)
+                } else {
+                    duration = .invalid
+                }
+                guard let outputBuffer = prepareTranscodePixelBuffer(frame.payload.pixelBuffer, config: config) else {
+                    continue
+                }
+                encodePixelBuffer(outputBuffer, pts: pts, duration: duration)
+            }
+        }
+
+        private func enqueueTranscodeFrame(pixelBuffer: CVPixelBuffer, pts: CMTime, duration: CMTime) {
+            guard let config else { return }
+            let ptsTicks = config.timebase.ticks(from: RationalTime(value: pts.value, timescale: pts.timescale))
+            let durTicks: Int64 = if duration.isNumeric {
+                config.timebase.ticks(from: RationalTime(value: duration.value, timescale: duration.timescale))
+            } else {
+                0
+            }
+            let payload = TranscodeFramePayload(pixelBuffer: pixelBuffer, durTicks: durTicks)
+
+            callbackLock.lock()
+            let frames: [ReorderedDecodedFrame<TranscodeFramePayload>]
+            if !decodeAsyncEnabled {
+                let frame = ReorderedDecodedFrame(originalPtsTicks: ptsTicks,
+                                                  ptsTicks: ptsTicks,
+                                                  durTicks: durTicks,
+                                                  payload: payload,
+                                                  clamped: false)
+                frames = [frame]
+            } else {
+                if transcodeReorderBuffer == nil {
+                    transcodeReorderBuffer = DecodeReorderBuffer(depth: decodeReorderDepth)
+                }
+                frames = transcodeReorderBuffer?.enqueue(ptsTicks: ptsTicks, durTicks: durTicks, payload: payload) ?? []
+            }
+            callbackLock.unlock()
+            encodeTranscodeFrames(frames)
+        }
+
         private func flushDecodedFrames() {
             guard decodeAsyncEnabled else { return }
+            if config?.mode == .transcode {
+                callbackLock.lock()
+                let frames = transcodeReorderBuffer?.flush() ?? []
+                callbackLock.unlock()
+                encodeTranscodeFrames(frames)
+                return
+            }
             callbackLock.lock()
             let frames = decodeReorderBuffer?.flush() ?? []
             callbackLock.unlock()
             sendDecodedFrames(frames)
+        }
+
+        private func setupTranscodeTransfer(_ config: SessionConfiguration) {
+            transcodeOutputWidth = config.outputWidth
+            transcodeOutputHeight = config.outputHeight
+            transcodeNeedsTransfer = config.outputWidth != config.width || config.outputHeight != config.height
+            if let session = compressionSession {
+                transcodeOutputPool = VTCompressionSessionGetPixelBufferPool(session)
+            }
+            if transcodeNeedsTransfer {
+                _ = ensureTranscodeTransferSession(config)
+            }
+        }
+
+        private func ensureTranscodeTransferSession(_ config: SessionConfiguration) -> VTPixelTransferSession? {
+            if let session = transcodeTransferSession {
+                return session
+            }
+            var transfer: VTPixelTransferSession?
+            let status = VTPixelTransferSessionCreate(allocator: kCFAllocatorDefault,
+                                                     pixelTransferSessionOut: &transfer)
+            guard status == noErr, let session = transfer else {
+                logger.error("VTPixelTransferSessionCreate failed: \(status)")
+                return nil
+            }
+            transcodeTransferSession = session
+
+            let mode: CFString
+            switch config.scaleMode {
+            case .stretch:
+                mode = kVTScalingMode_Normal
+            case .aspect:
+                mode = kVTScalingMode_Letterbox
+            case .aspectFill:
+                mode = kVTScalingMode_Trim
+            }
+            _ = VTSessionSetProperty(session,
+                                     key: kVTPixelTransferPropertyKey_ScalingMode,
+                                     value: mode)
+            return session
+        }
+
+        private func prepareTranscodePixelBuffer(_ pixelBuffer: CVPixelBuffer, config: SessionConfiguration) -> CVPixelBuffer? {
+            let inputWidth = CVPixelBufferGetWidth(pixelBuffer)
+            let inputHeight = CVPixelBufferGetHeight(pixelBuffer)
+            let inputFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
+            let needsTransfer = transcodeNeedsTransfer ||
+                inputWidth != config.outputWidth ||
+                inputHeight != config.outputHeight ||
+                inputFormat != cvPixelFormat
+            if !needsTransfer {
+                return pixelBuffer
+            }
+
+            guard let transfer = ensureTranscodeTransferSession(config) else {
+                return nil
+            }
+            guard let outputBuffer = makeTranscodeOutputPixelBuffer(width: config.outputWidth,
+                                                                    height: config.outputHeight) else {
+                return nil
+            }
+            let status = VTPixelTransferSessionTransferImage(transfer,
+                                                             from: pixelBuffer,
+                                                             to: outputBuffer)
+            guard status == noErr else {
+                logger.error("VTPixelTransferSessionTransferImage failed: \(status)")
+                return nil
+            }
+            return outputBuffer
+        }
+
+        private func makeTranscodeOutputPixelBuffer(width: Int, height: Int) -> CVPixelBuffer? {
+            var pixelBuffer: CVPixelBuffer?
+            if let pool = transcodeOutputPool {
+                let status = CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &pixelBuffer)
+                if status == kCVReturnSuccess, let buffer = pixelBuffer {
+                    return buffer
+                }
+            }
+
+            let attrs: [CFString: Any] = [
+                kCVPixelBufferPixelFormatTypeKey: cvPixelFormat,
+                kCVPixelBufferWidthKey: width,
+                kCVPixelBufferHeightKey: height,
+                kCVPixelBufferIOSurfacePropertiesKey: [:]
+            ]
+            let status = CVPixelBufferCreate(kCFAllocatorDefault,
+                                             width,
+                                             height,
+                                             cvPixelFormat,
+                                             attrs as CFDictionary,
+                                             &pixelBuffer)
+            guard status == kCVReturnSuccess else {
+                logger.error("CVPixelBufferCreate failed: \(status)")
+                return nil
+            }
+            return pixelBuffer
         }
 
         // MARK: - Decoder
@@ -1121,6 +1339,10 @@
 
         private func handleDecodedFrame(pixelBuffer: CVPixelBuffer, pts: CMTime, duration: CMTime) {
             guard let config else { return }
+            if config.mode == .transcode {
+                enqueueTranscodeFrame(pixelBuffer: pixelBuffer, pts: pts, duration: duration)
+                return
+            }
             CVPixelBufferLockBaseAddress(pixelBuffer, [])
             defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
 

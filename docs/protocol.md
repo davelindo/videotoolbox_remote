@@ -9,7 +9,12 @@ title: Protocol
 **Endianness:** Big Endian (Network Byte Order).
 
 ## 1. Overview
-The protocol uses a single TCP connection per encode/decode session. It is stateful, starting with a handshake (`HELLO`), configuration (`CONFIGURE`), and then a stream of frames/packets.
+The protocol uses a single TCP connection per session. It is stateful, starting with a handshake (`HELLO`), configuration (`CONFIGURE`), and then a stream of frames/packets.
+
+Supported modes:
+- **encode**: `FRAME` in, `PACKET` out
+- **decode**: `PACKET` in, `FRAME` out
+- **transcode**: `PACKET` in, `PACKET` out
 
 ### Sequence Flow
 
@@ -41,6 +46,8 @@ sequenceDiagram
     C->>S: FLUSH
     S-->>C: DONE
 ```
+
+Transcode mode uses the same handshake/configure sequence, but streams `PACKET` in and `PACKET` out (no `FRAME` messages).
 
 ## 2. Transport & Framing
 *   **Port**: Default `5555`.
@@ -107,6 +114,8 @@ Notes:
 - `options` is a passthrough map of codec options from FFmpeg (e.g., bitrate,
   GOP, realtime, decode_async). The server applies only the options it
   recognizes; unknown keys are ignored.
+- `mode=transcode` enables packet-in/packet-out and accepts `out_codec` plus
+  optional `out_width`, `out_height`, and `scale_mode` (stretch|aspect|aspect_fill).
 
 ### FRAME (Type 5)
 Used for **sending raw frames** (Encode) or **receiving raw frames** (Decode).

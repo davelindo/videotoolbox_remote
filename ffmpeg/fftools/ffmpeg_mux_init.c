@@ -47,8 +47,444 @@
 #include "libavutil/opt.h"
 #include "libavutil/parseutils.h"
 #include "libavutil/pixdesc.h"
+#include "libavutil/pixfmt.h"
 
 #define DEFAULT_PASS_LOGFILENAME_PREFIX "ffmpeg2pass"
+
+static const char *const vtremote_transcode_opt_keys[] = {
+    "vt_remote_host",
+    "vt_remote_port",
+    "vt_remote_token",
+    "vt_remote_timeout_ms",
+    "vt_remote_inflight",
+    "vt_remote_log_level",
+    "vt_remote_out_codec",
+    "vt_remote_pix_fmt",
+    "vt_remote_bitrate",
+    "vt_remote_maxrate",
+    "vt_remote_gop",
+    "vt_remote_max_b_frames",
+    "vt_remote_profile",
+    "vt_remote_level",
+    "vt_remote_entropy",
+    "vt_remote_allow_sw",
+    "vt_remote_require_sw",
+    "vt_remote_realtime",
+    "vt_remote_prio_speed",
+    "vt_remote_power_efficient",
+    "vt_remote_spatial_aq",
+    "vt_remote_max_ref_frames",
+    "vt_remote_max_slice_bytes",
+    "vt_remote_constant_bit_rate",
+    "vt_remote_alpha_quality",
+    "vt_remote_color_range",
+    "vt_remote_colorspace",
+    "vt_remote_color_primaries",
+    "vt_remote_color_trc",
+    "vt_remote_sar_num",
+    "vt_remote_sar_den",
+    "vt_remote_a53_cc",
+    "vt_remote_flags",
+    NULL,
+};
+
+static int vtremote_transcode_key_index(const char *key, int key_len)
+{
+    for (int i = 0; vtremote_transcode_opt_keys[i]; i++) {
+        const char *k = vtremote_transcode_opt_keys[i];
+        if ((int)strlen(k) == key_len && !strncmp(k, key, key_len))
+            return i;
+    }
+    return -1;
+}
+
+static void vtremote_transcode_append_kv(AVBPrint *bp, int *count,
+                                         const char *key, const char *val)
+{
+    if (*count == 0)
+        av_bprint_chars(bp, '=', 1);
+    else
+        av_bprint_chars(bp, ':', 1);
+    av_bprintf(bp, "%s=%s", key, val);
+    (*count)++;
+}
+
+static int vtremote_transcode_append_opts(const AVDictionary *opts,
+                                          AVFormatContext *oc,
+                                          AVStream *st,
+                                          Muxer *mux,
+                                          AVBPrint *bp,
+                                          int *count,
+                                          int *have_host,
+                                          uint8_t *used_keys,
+                                          int require_spec)
+{
+    const AVDictionaryEntry *t = NULL;
+    while ((t = av_dict_iterate(opts, t))) {
+        const char *key = t->key;
+        const char *spec = strchr(key, ':');
+        if (require_spec && !spec)
+            continue;
+        if (!require_spec && spec)
+            continue;
+
+        int key_len = spec ? (int)(spec - key) : (int)strlen(key);
+        int idx = vtremote_transcode_key_index(key, key_len);
+        if (idx < 0)
+            continue;
+
+        if (spec) {
+            int err = check_stream_specifier(oc, st, spec + 1);
+            if (err < 0)
+                return err;
+            if (!err)
+                continue;
+        }
+
+        if (used_keys[idx])
+            continue;
+        used_keys[idx] = 1;
+
+        if (key_len == (int)strlen("vt_remote_host") && !strncmp(key, "vt_remote_host", key_len))
+            *have_host = 1;
+
+        if (*count == 0)
+            av_bprint_chars(bp, '=', 1);
+        else
+            av_bprint_chars(bp, ':', 1);
+        av_bprintf(bp, "%.*s=%s", key_len, key, t->value);
+        (*count)++;
+        if (mux)
+            av_dict_set(&mux->enc_opts_used, t->key, "", 0);
+    }
+    return 0;
+}
+
+static const AVDictionaryEntry *vtremote_transcode_find_opt(const AVDictionary *opts,
+                                                            AVFormatContext *oc,
+                                                            AVStream *st,
+                                                            const char *key)
+{
+    if (!opts || !key)
+        return NULL;
+    const AVDictionaryEntry *t = NULL;
+    const AVDictionaryEntry *fallback = NULL;
+    while ((t = av_dict_iterate(opts, t))) {
+        const char *k = t->key;
+        const char *spec = strchr(k, ':');
+        int klen = spec ? (int)(spec - k) : (int)strlen(k);
+        if ((int)strlen(key) != klen || strncmp(k, key, klen))
+            continue;
+        if (spec) {
+            int err = check_stream_specifier(oc, st, spec + 1);
+            if (err < 0)
+                return NULL;
+            if (!err)
+                continue;
+            return t;
+        }
+        if (!fallback)
+            fallback = t;
+    }
+    return fallback;
+}
+
+static int vtremote_parse_bitrate(const char *val, int64_t *out)
+{
+    if (!val || !*val || !out)
+        return AVERROR(EINVAL);
+    char *end = NULL;
+    double d = av_strtod(val, &end);
+    if (end == val)
+        return AVERROR(EINVAL);
+
+    double mult = 1.0;
+    if (*end) {
+        if (!av_strcasecmp(end, "k") || !av_strcasecmp(end, "kb"))
+            mult = 1e3;
+        else if (!av_strcasecmp(end, "m") || !av_strcasecmp(end, "mb"))
+            mult = 1e6;
+        else if (!av_strcasecmp(end, "g") || !av_strcasecmp(end, "gb"))
+            mult = 1e9;
+        else
+            return AVERROR(EINVAL);
+    }
+
+    double res = d * mult;
+    if (res < 0.0 || res > (double)INT64_MAX)
+        return AVERROR(EINVAL);
+    *out = (int64_t)res;
+    return 0;
+}
+
+static int vtremote_transcode_append_rate_opt(AVBPrint *bp,
+                                              int *count,
+                                              const char *remote_key,
+                                              const char *primary_key,
+                                              const char *fallback_key,
+                                              const AVDictionary *opts,
+                                              AVFormatContext *oc,
+                                              AVStream *st,
+                                              Muxer *mux,
+                                              uint8_t *used_keys,
+                                              const char *label)
+{
+    int idx = vtremote_transcode_key_index(remote_key, (int)strlen(remote_key));
+    if (idx < 0 || used_keys[idx])
+        return 0;
+
+    const AVDictionaryEntry *e = vtremote_transcode_find_opt(opts, oc, st, primary_key);
+    if (!e && fallback_key)
+        e = vtremote_transcode_find_opt(opts, oc, st, fallback_key);
+    if (!e)
+        return 0;
+
+    const char *val = e->value;
+    char buf[32];
+    if (val && *val && strspn(val, "0123456789") != strlen(val)) {
+        int64_t parsed = 0;
+        if (vtremote_parse_bitrate(val, &parsed) < 0) {
+            av_log(NULL, AV_LOG_ERROR,
+                   "Invalid %s '%s' for vt_remote_transcode\n", label, val);
+            return AVERROR(EINVAL);
+        }
+        snprintf(buf, sizeof(buf), "%" PRId64, parsed);
+        val = buf;
+    }
+
+    vtremote_transcode_append_kv(bp, count, remote_key, val);
+    used_keys[idx] = 1;
+    if (mux)
+        av_dict_set(&mux->enc_opts_used, e->key, "", 0);
+    return 0;
+}
+
+static int vtremote_transcode_build_bsf(const OptionsContext *o,
+                                        AVFormatContext *oc,
+                                        AVStream *st,
+                                        Muxer *mux,
+                                        char **out)
+{
+    AVBPrint bp;
+    int ret = 0;
+    int count = 0;
+    int have_host = 0;
+    uint8_t used_keys[64] = {0};
+
+    if (!o || !o->g)
+        return AVERROR(EINVAL);
+    const AVDictionary *opts = o->g->codec_opts;
+
+    av_bprint_init(&bp, 0, AV_BPRINT_SIZE_UNLIMITED);
+    av_bprintf(&bp, "vtremote_transcode");
+
+    if (opts) {
+        ret = vtremote_transcode_append_opts(opts, oc, st, mux, &bp, &count,
+                                         &have_host, used_keys, 1);
+        if (ret < 0)
+            goto done;
+        ret = vtremote_transcode_append_opts(opts, oc, st, mux, &bp, &count,
+                                             &have_host, used_keys, 0);
+        if (ret < 0)
+            goto done;
+    }
+
+    {
+        const AVDictionaryEntry *e = NULL;
+        int idx = -1;
+        ret = vtremote_transcode_append_rate_opt(&bp, &count,
+                                                 "vt_remote_bitrate",
+                                                 "b:v", "b",
+                                                 opts, oc, st, mux,
+                                                 used_keys, "bitrate");
+        if (ret < 0)
+            goto done;
+
+        ret = vtremote_transcode_append_rate_opt(&bp, &count,
+                                                 "vt_remote_maxrate",
+                                                 "maxrate:v", "maxrate",
+                                                 opts, oc, st, mux,
+                                                 used_keys, "maxrate");
+        if (ret < 0)
+            goto done;
+
+        idx = vtremote_transcode_key_index("vt_remote_gop", (int)strlen("vt_remote_gop"));
+        if (idx >= 0 && !used_keys[idx]) {
+            e = vtremote_transcode_find_opt(opts, oc, st, "g:v");
+            if (!e)
+                e = vtremote_transcode_find_opt(opts, oc, st, "g");
+            if (e) {
+                vtremote_transcode_append_kv(&bp, &count, "vt_remote_gop", e->value);
+                used_keys[idx] = 1;
+                if (mux)
+                    av_dict_set(&mux->enc_opts_used, e->key, "", 0);
+            }
+        }
+
+        idx = vtremote_transcode_key_index("vt_remote_max_b_frames", (int)strlen("vt_remote_max_b_frames"));
+        if (idx >= 0 && !used_keys[idx]) {
+            e = vtremote_transcode_find_opt(opts, oc, st, "bf:v");
+            if (!e)
+                e = vtremote_transcode_find_opt(opts, oc, st, "bf");
+            if (e) {
+                vtremote_transcode_append_kv(&bp, &count, "vt_remote_max_b_frames", e->value);
+                used_keys[idx] = 1;
+                if (mux)
+                    av_dict_set(&mux->enc_opts_used, e->key, "", 0);
+            }
+        }
+
+        idx = vtremote_transcode_key_index("vt_remote_profile", (int)strlen("vt_remote_profile"));
+        if (idx >= 0 && !used_keys[idx]) {
+            e = vtremote_transcode_find_opt(opts, oc, st, "profile:v");
+            if (!e)
+                e = vtremote_transcode_find_opt(opts, oc, st, "profile");
+            if (e) {
+                vtremote_transcode_append_kv(&bp, &count, "vt_remote_profile", e->value);
+                used_keys[idx] = 1;
+                if (mux)
+                    av_dict_set(&mux->enc_opts_used, e->key, "", 0);
+            }
+        }
+
+        idx = vtremote_transcode_key_index("vt_remote_level", (int)strlen("vt_remote_level"));
+        if (idx >= 0 && !used_keys[idx]) {
+            e = vtremote_transcode_find_opt(opts, oc, st, "level:v");
+            if (!e)
+                e = vtremote_transcode_find_opt(opts, oc, st, "level");
+            if (e) {
+                vtremote_transcode_append_kv(&bp, &count, "vt_remote_level", e->value);
+                used_keys[idx] = 1;
+                if (mux)
+                    av_dict_set(&mux->enc_opts_used, e->key, "", 0);
+            }
+        }
+
+        idx = vtremote_transcode_key_index("vt_remote_entropy", (int)strlen("vt_remote_entropy"));
+        if (idx >= 0 && !used_keys[idx]) {
+            e = vtremote_transcode_find_opt(opts, oc, st, "entropy:v");
+            if (!e)
+                e = vtremote_transcode_find_opt(opts, oc, st, "entropy");
+            if (e) {
+                vtremote_transcode_append_kv(&bp, &count, "vt_remote_entropy", e->value);
+                used_keys[idx] = 1;
+                if (mux)
+                    av_dict_set(&mux->enc_opts_used, e->key, "", 0);
+            }
+        }
+
+        idx = vtremote_transcode_key_index("vt_remote_constant_bit_rate", (int)strlen("vt_remote_constant_bit_rate"));
+        if (idx >= 0 && !used_keys[idx]) {
+            e = vtremote_transcode_find_opt(opts, oc, st, "constant_bit_rate:v");
+            if (!e)
+                e = vtremote_transcode_find_opt(opts, oc, st, "constant_bit_rate");
+            if (e) {
+                vtremote_transcode_append_kv(&bp, &count, "vt_remote_constant_bit_rate", e->value);
+                used_keys[idx] = 1;
+                if (mux)
+                    av_dict_set(&mux->enc_opts_used, e->key, "", 0);
+            }
+        }
+    }
+
+    if (!have_host) {
+        av_log(NULL, AV_LOG_ERROR,
+               "vt_remote_transcode requires vt_remote_host\n");
+        ret = AVERROR(EINVAL);
+        goto done;
+    }
+
+    ret = av_bprint_finalize(&bp, out);
+    if (ret < 0)
+        return ret;
+    return 0;
+
+done:
+    av_bprint_finalize(&bp, NULL);
+    return ret;
+}
+
+static int vtremote_transcode_bsf_add(char **bsf, const char *key, const char *val)
+{
+    if (!bsf || !*bsf || !key || !val || !*val)
+        return 0;
+    const char *sep = strchr(*bsf, '=') ? ":" : "=";
+    char *tmp = av_asprintf("%s%s%s=%s", *bsf, sep, key, val);
+    if (!tmp)
+        return AVERROR(ENOMEM);
+    av_freep(bsf);
+    *bsf = tmp;
+    return 0;
+}
+
+static int vtremote_transcode_apply_pix_fmt(OutputStream *ost,
+                                            char **vt_bsf,
+                                            const char *vt_pix_fmt,
+                                            const char *pix_fmt_str)
+{
+    if (vt_pix_fmt && *vt_pix_fmt)
+        return vtremote_transcode_bsf_add(vt_bsf, "vt_remote_pix_fmt", vt_pix_fmt);
+
+    if (!pix_fmt_str || !*pix_fmt_str)
+        return 0;
+
+    enum AVPixelFormat fmt = av_get_pix_fmt(pix_fmt_str);
+    const char *mapped = NULL;
+    if (fmt == AV_PIX_FMT_NV12 || !av_strcasecmp(pix_fmt_str, "nv12")) {
+        mapped = "1";
+    } else if (fmt == AV_PIX_FMT_P010LE || !av_strcasecmp(pix_fmt_str, "p010") ||
+               !av_strcasecmp(pix_fmt_str, "p010le")) {
+        mapped = "2";
+    }
+
+    if (!mapped) {
+        av_log(ost, AV_LOG_ERROR,
+               "vt_remote_transcode supports pix_fmt nv12 or p010le\n");
+        return AVERROR(EINVAL);
+    }
+
+    return vtremote_transcode_bsf_add(vt_bsf, "vt_remote_pix_fmt", mapped);
+}
+
+static int vtremote_transcode_apply_out_size(OutputStream *ost,
+                                             char **vt_bsf,
+                                             const char *vt_out_width,
+                                             const char *vt_out_height,
+                                             const char *size_str)
+{
+    if ((vt_out_width && !vt_out_height) || (!vt_out_width && vt_out_height)) {
+        av_log(ost, AV_LOG_ERROR,
+               "vt_remote_out_width and vt_remote_out_height must be set together\n");
+        return AVERROR(EINVAL);
+    }
+
+    if (vt_out_width && vt_out_height) {
+        int ret = vtremote_transcode_bsf_add(vt_bsf, "vt_remote_out_width", vt_out_width);
+        if (ret < 0)
+            return ret;
+        return vtremote_transcode_bsf_add(vt_bsf, "vt_remote_out_height", vt_out_height);
+    }
+
+    if (!size_str || !*size_str)
+        return 0;
+
+    int out_w = 0;
+    int out_h = 0;
+    if (av_parse_video_size(&out_w, &out_h, size_str) < 0 || out_w <= 0 || out_h <= 0) {
+        av_log(ost, AV_LOG_ERROR,
+               "Invalid scale size '%s' for vt_remote_transcode\n", size_str);
+        return AVERROR(EINVAL);
+    }
+
+    char buf_w[16];
+    char buf_h[16];
+    snprintf(buf_w, sizeof(buf_w), "%d", out_w);
+    snprintf(buf_h, sizeof(buf_h), "%d", out_h);
+    int ret = vtremote_transcode_bsf_add(vt_bsf, "vt_remote_out_width", buf_w);
+    if (ret < 0)
+        return ret;
+    return vtremote_transcode_bsf_add(vt_bsf, "vt_remote_out_height", buf_h);
+}
 
 static int check_opt_bitexact(void *ctx, const AVDictionary *opts,
                               const char *opt_name, int flag)
@@ -1204,6 +1640,9 @@ static int ost_add(Muxer *mux, const OptionsContext *o, enum AVMediaType type,
     AVRational enc_tb = { 0, 0 };
     enum VideoSyncMethod vsync_method = VSYNC_AUTO;
     const char *bsfs = NULL, *time_base = NULL, *codec_tag = NULL;
+    char *bsfs_buf = NULL;
+    int vt_remote_transcode = 0;
+    const AVCodec *vt_remote_out_enc = NULL;
     char  *next;
     double qscale = -1;
 
@@ -1264,6 +1703,17 @@ static int ost_add(Muxer *mux, const OptionsContext *o, enum AVMediaType type,
     if (ret < 0) {
         av_log(ost, AV_LOG_FATAL, "Error selecting an encoder\n");
         return ret;
+    }
+
+    opt_match_per_stream_int(ost, &o->vt_remote_transcode, oc, st, &vt_remote_transcode);
+    if (vt_remote_transcode && enc) {
+        if (enc->id != AV_CODEC_ID_H264 && enc->id != AV_CODEC_ID_HEVC) {
+            av_log(ost, AV_LOG_ERROR,
+                   "vt_remote_transcode supports only H.264/HEVC output\n");
+            return AVERROR(EINVAL);
+        }
+        vt_remote_out_enc = enc;
+        enc = NULL;
     }
 
     if (enc) {
@@ -1482,6 +1932,76 @@ static int ost_add(Muxer *mux, const OptionsContext *o, enum AVMediaType type,
     ms->copy_prior_start = -1;
     opt_match_per_stream_int(ost, &o->copy_prior_start, oc, st, &ms->copy_prior_start);
     opt_match_per_stream_str(ost, &o->bitstream_filters, oc, st, &bsfs);
+    if (vt_remote_transcode) {
+        if (type != AVMEDIA_TYPE_VIDEO) {
+            av_log(ost, AV_LOG_ERROR, "vt_remote_transcode is only valid for video streams\n");
+            ret = AVERROR(EINVAL);
+            goto fail;
+        }
+        if (enc) {
+            av_log(ost, AV_LOG_ERROR,
+                   "vt_remote_transcode requires stream copy (-c:v copy)\n");
+            ret = AVERROR(EINVAL);
+            goto fail;
+        }
+        if (!bsfs || !strstr(bsfs, "vtremote_transcode")) {
+            char *vt_bsf = NULL;
+            const char *vt_out_codec = NULL;
+            const char *vt_pix_fmt = NULL;
+            const char *vt_port = NULL;
+            const char *vt_out_width = NULL;
+            const char *vt_out_height = NULL;
+            const char *vt_scale_mode = NULL;
+            const char *size_str = NULL;
+            const char *pix_fmt_str = NULL;
+            ret = vtremote_transcode_build_bsf(o, oc, st, mux, &vt_bsf);
+            if (ret < 0)
+                goto fail;
+            opt_match_per_stream_str(ost, &o->vt_remote_out_codec, oc, st, &vt_out_codec);
+            opt_match_per_stream_str(ost, &o->vt_remote_pix_fmt, oc, st, &vt_pix_fmt);
+            opt_match_per_stream_str(ost, &o->vt_remote_port, oc, st, &vt_port);
+            opt_match_per_stream_str(ost, &o->vt_remote_out_width, oc, st, &vt_out_width);
+            opt_match_per_stream_str(ost, &o->vt_remote_out_height, oc, st, &vt_out_height);
+            opt_match_per_stream_str(ost, &o->vt_remote_scale_mode, oc, st, &vt_scale_mode);
+            opt_match_per_stream_str(ost, &o->frame_sizes, oc, st, &size_str);
+            opt_match_per_stream_str(ost, &o->frame_pix_fmts, oc, st, &pix_fmt_str);
+
+            if ((!vt_out_codec || !*vt_out_codec) && vt_remote_out_enc) {
+                if (vt_remote_out_enc->id == AV_CODEC_ID_H264)
+                    vt_out_codec = "h264";
+                else if (vt_remote_out_enc->id == AV_CODEC_ID_HEVC)
+                    vt_out_codec = "hevc";
+            }
+
+            ret = vtremote_transcode_bsf_add(&vt_bsf, "vt_remote_out_codec", vt_out_codec);
+            if (ret < 0)
+                goto fail;
+            ret = vtremote_transcode_apply_pix_fmt(ost, &vt_bsf, vt_pix_fmt, pix_fmt_str);
+            if (ret < 0)
+                goto fail;
+            ret = vtremote_transcode_bsf_add(&vt_bsf, "vt_remote_port", vt_port);
+            if (ret < 0)
+                goto fail;
+            ret = vtremote_transcode_bsf_add(&vt_bsf, "vt_remote_scale_mode", vt_scale_mode);
+            if (ret < 0)
+                goto fail;
+            ret = vtremote_transcode_apply_out_size(ost, &vt_bsf,
+                                                    vt_out_width, vt_out_height,
+                                                    size_str);
+            if (ret < 0)
+                goto fail;
+            if (bsfs && *bsfs)
+                bsfs_buf = av_asprintf("%s,%s", bsfs, vt_bsf);
+            else
+                bsfs_buf = av_strdup(vt_bsf);
+            av_freep(&vt_bsf);
+            if (!bsfs_buf) {
+                ret = AVERROR(ENOMEM);
+                goto fail;
+            }
+            bsfs = bsfs_buf;
+        }
+    }
     if (bsfs && *bsfs) {
         ret = av_bsf_list_parse_str(bsfs, &ms->bsf_ctx);
         if (ret < 0) {
@@ -1595,6 +2115,7 @@ static int ost_add(Muxer *mux, const OptionsContext *o, enum AVMediaType type,
     ret = 0;
 
 fail:
+    av_freep(&bsfs_buf);
     av_dict_free(&encoder_opts);
 
     return ret;

@@ -71,6 +71,12 @@ public struct ClientStats: Sendable {
                     "duration=%.3fs in_mbps=%.2f out_mbps=%.2f",
                 packetsIn, framesOut, bytesIn, bytesOut, elapsed, inMbps, outMbps
             )
+        case .transcode:
+            return String(
+                format: "SUMMARY mode=transcode packets_in=%d packets_out=%d in=%lldB out=%lldB " +
+                    "duration=%.3fs in_mbps=%.2f out_mbps=%.2f",
+                packetsIn, packetsOut, bytesIn, bytesOut, elapsed, inMbps, outMbps
+            )
         }
     }
 }

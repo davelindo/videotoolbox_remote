@@ -20,6 +20,7 @@ flowchart LR
 
 ### Client (FFmpeg)
 *   **Encoders**: `h264_videotoolbox_remote`, `hevc_videotoolbox_remote`.
+*   **Bitstream filter**: `vtremote_transcode` (packet-in/out transcode mode).
 *   **Responsibilities**: Demuxing, filtering, audio/subtitles, TCP session lifecycle, rate-control policy.
 
 ### Server (`vtremoted`, macOS)
@@ -31,6 +32,7 @@ flowchart LR
     3.  Encodes via Hardware.
     4.  Converts output NALs to **Annex B**.
     5.  Returns packets with PTS/DTS.
+    6.  For transcode, decodes packets, optionally scales/converts, then re-encodes.
 
 ## 2. Data Flow (Encode)
 
@@ -41,23 +43,41 @@ flowchart LR
     *   **Out**: `PACKET` (H.264/HEVC)
 4.  **Teardown**: Client sends `FLUSH`, then closes.
 
-## 3. Repository Layout
+## 3. Data Flow (Decode)
+
+1.  **Handshake**: Message `HELLO` exchange.
+2.  **Config**: Client sends `CONFIGURE`, Server creates `VTDecompressionSession`.
+3.  **Stream**:
+    *   **In**: `PACKET` (Annex B)
+    *   **Out**: `FRAME` (NV12/P010)
+4.  **Teardown**: Client sends `FLUSH`, then closes.
+
+## 4. Data Flow (Transcode)
+
+1.  **Handshake**: Message `HELLO` exchange.
+2.  **Config**: Client sends `CONFIGURE` with `mode=transcode` and `out_codec` (optional `out_width/out_height/scale_mode`).
+3.  **Stream**:
+    *   **In**: `PACKET` (Annex B)
+    *   **Out**: `PACKET` (Annex B)
+4.  **Teardown**: Client sends `FLUSH`, then closes.
+
+## 5. Repository Layout
 - **`ffmpeg/`**: Forked codebase with `libavcodec/vtremote*`.
 - **`vtremoted/`**: SwiftPM server implementation.
 - **`tests/`**: Integration tests and Python mock server.
 - **`docs/`**: Protocol and Architecture documentation.
 
-## Build expectations
+## 6. Build expectations
 - FFmpeg client: add `--enable-videotoolbox-remote` plus `liblz4/libzstd`. On macOS, `make build-ffmpeg` enables both local and remote codecs via the Xcode SDK.
 - Server: SwiftPM/Xcode on macOS; flags for listen addr/port, optional token, max_sessions, log level. Requires system `liblz4`.
 
-## Milestone alignment
+## 7. Milestone alignment
 - **M0**: protocol lib (`vtremote_proto.*`) + portable mock server; validate client scaffolding without VideoToolbox.
 - **M1**: `h264_videotoolbox_remote` + real `vtremoted` H.264 (Annex B), full FFmpeg pipeline.
 - **M2**: HEVC path + DTS correctness for B-frames.
 - **M3**: stability/perf (keepalive, inflight tuning, optional wire compression).
 
-## Performance defaults
+## 8. Performance defaults
 
 Defaults applied when the client does not override settings:
 
@@ -80,5 +100,5 @@ Client-side pipelining:
 Remote decode defaults to **async** with a reorder depth of **2**. The reorder buffer
 sorts by PTS and clamps only when PTS would regress.
 
-## Not in scope (MVP)
+## 9. Not in scope (MVP)
 - TLS/mTLS, HandBrake integration, HDR metadata passthrough, multi-server discovery.

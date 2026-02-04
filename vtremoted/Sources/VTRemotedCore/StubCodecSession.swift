@@ -89,7 +89,27 @@ final class StubCodecSession: CodecSession {
 
     func handlePacketMessage(_ payload: Data) throws {
         guard let configuration = config else { throw VTRemotedError.protocolViolation("PACKET before CONFIGURE") }
-        guard configuration.mode == .decode else { return }
+        guard configuration.mode == .decode || configuration.mode == .transcode else { return }
+
+        if configuration.mode == .transcode {
+            var reader = ByteReader(payload)
+            let pts = try reader.readBEUInt64()
+            let dts = try reader.readBEUInt64()
+            let dur = try reader.readBEUInt64()
+            _ = try reader.readBEUInt32() // isKey
+            let dataLen = try Int(reader.readBEUInt32())
+            _ = try reader.readBytes(count: dataLen)
+
+            var writer = ByteWriter()
+            writer.writeBE(pts)
+            writer.writeBE(dts)
+            writer.writeBE(dur)
+            writer.writeBE(UInt32(1))
+            writer.writeBE(UInt32(4))
+            writer.write(Data([0x00, 0x00, 0x00, 0x01]))
+            try send(.packet, [writer.data])
+            return
+        }
 
         var reader = ByteReader(payload)
         let pts = try reader.readBEUInt64()

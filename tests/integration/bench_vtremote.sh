@@ -30,6 +30,10 @@ BENCH_BUFSIZE="${VTREMOTE_BENCH_BUFSIZE:-20M}"
 BENCH_CBR="${VTREMOTE_BENCH_CBR:-1}"
 BENCH_TOL_PCT="${VTREMOTE_BENCH_TOL_PCT:-0.15}"
 BENCH_STRICT="${VTREMOTE_BENCH_STRICT:-0}"
+BENCH_TRANSCODE="${VTREMOTE_BENCH_TRANSCODE:-1}"
+BENCH_TRANSCODE_OUT_CODEC="${VTREMOTE_BENCH_TRANSCODE_OUT_CODEC:-hevc}"
+BENCH_TRANSCODE_PIX_FMT="${VTREMOTE_BENCH_TRANSCODE_PIX_FMT:-1}"
+BENCH_ONLY_TRANSCODE="${VTREMOTE_BENCH_ONLY_TRANSCODE:-0}"
 
 RATE_ARGS=()
 if [[ "$BENCH_CBR" != "0" ]]; then
@@ -67,6 +71,24 @@ except Exception:
 PY
 )
 
+MAXRATE_BPS=$(python3 - <<PY
+import re
+s = "${BENCH_MAXRATE}"
+try:
+    if s.lower().endswith("k"):
+        v = float(s[:-1]) * 1e3
+    elif s.lower().endswith("m"):
+        v = float(s[:-1]) * 1e6
+    elif s.lower().endswith("g"):
+        v = float(s[:-1]) * 1e9
+    else:
+        v = float(s)
+    print(int(v))
+except Exception:
+    print(0)
+PY
+)
+
 VTREMOTED="$VTREMOTED_BIN"
 VTREMOTE_PORT="$PORT"
 trap 'vtremote_stop_server' EXIT
@@ -81,6 +103,16 @@ have_encoder() {
     "$bin" -encoders 2>/dev/null | rg -q "\\b${enc}\\b"
   else
     "$bin" -encoders 2>/dev/null | grep -q "\\b${enc}\\b"
+  fi
+}
+
+have_bsf() {
+  local bin="$1"
+  local bsf="$2"
+  if command -v rg >/dev/null 2>&1; then
+    "$bin" -bsfs 2>/dev/null | rg -q "\b${bsf}\b"
+  else
+    "$bin" -bsfs 2>/dev/null | grep -q "\b${bsf}\b"
   fi
 }
 
@@ -274,18 +306,82 @@ run_remote_decode_case() {
   echo "decode ${label} ${decoder} ok"
 }
 
-echo "Benchmarking local vs remote encode (5s each, LZ4 on wire if enabled)..."
-echo "local ffmpeg:  $FFMPEG_LOCAL_BIN"
-echo "remote ffmpeg: $FFMPEG_BIN"
-if [[ "${#CBR_ARGS_H264[@]}" -gt 0 ]]; then
-  echo "H.264: constant_bit_rate=1"
-else
-  echo "H.264: constant_bit_rate=0"
-fi
-if [[ "${#CBR_ARGS_HEVC[@]}" -gt 0 ]]; then
-  echo "HEVC: constant_bit_rate=1"
-else
-  echo "HEVC: constant_bit_rate=0"
+run_remote_transcode_case() {
+  local label="$1"
+  local in_file="$2"
+  local out_file="$3"
+  local out_codec="$4"
+  local pix_fmt="$5"
+  local out_enc="hevc_videotoolbox"
+  if [[ "$out_codec" == "h264" ]]; then
+    out_enc="h264_videotoolbox"
+  fi
+  local pix_fmt_str=""
+  if [[ "$pix_fmt" == "1" ]]; then
+    pix_fmt_str="nv12"
+  elif [[ "$pix_fmt" == "2" ]]; then
+    pix_fmt_str="p010le"
+  fi
+  local args=( -vt_remote_transcode -vt_remote_host "127.0.0.1" -vt_remote_port "${PORT}" \
+    -c:v "$out_enc" -g 120 -b:v "$BENCH_BITRATE" )
+  if [[ -n "$pix_fmt_str" ]]; then
+    args+=( -pix_fmt "$pix_fmt_str" )
+  fi
+  if [[ -n "$TOKEN" ]]; then
+    args+=( -vt_remote_token "$TOKEN" )
+  fi
+  if [[ "$BENCH_CBR" != "0" ]]; then
+    args+=( -maxrate "$BENCH_MAXRATE" -bufsize "$BENCH_BUFSIZE" -constant_bit_rate 1 )
+  fi
+  if [[ "$DECODE_ASYNC" != "0" ]]; then
+    args+=( -vt_remote_decode_async 1 -vt_remote_decode_reorder_depth "$REORDER_DEPTH" )
+  fi
+  local start_ns end_ns elapsed_s
+  start_ns=$(python3 - <<'PY'
+import time; print(int(time.time() * 1e9))
+PY
+)
+  local log="/tmp/vtremote_bench_transcode_${label}_${out_codec}.log"
+  if ! "$FFMPEG_BIN" -v warning -i "$in_file" -an -sn -c:v copy \
+    "${args[@]}" -y "$out_file" >"$log" 2>&1; then
+    echo "FAIL transcode ${label} ${out_codec} (log: $log)" >&2
+    tail -n 200 "$log" >&2
+    exit 1
+  fi
+  end_ns=$(python3 - <<'PY'
+import time; print(int(time.time() * 1e9))
+PY
+)
+  elapsed_s=$(python3 - <<PY
+print("{:.3f}".format((${end_ns}-${start_ns})/1e9))
+PY
+)
+  local dur bytes bps
+  dur=$("$FFPROBE_BIN" -v error -show_entries format=duration -of default=nk=1:nw=1 "$out_file")
+  bytes=$(wc -c < "$out_file" | tr -d ' ')
+  bps=$(python3 - <<PY
+dur = float("$dur")
+bytes_ = int("$bytes")
+print(int(bytes_ * 8 / dur)) if dur > 0 else print(0)
+PY
+)
+  printf "%-12s %-28s elapsed=%ss avg_bps=%s size=%sB\n" "$label" "transcode_${out_codec}" "$elapsed_s" "$bps" "$bytes"
+}
+
+if [[ "$BENCH_ONLY_TRANSCODE" == "0" ]]; then
+  echo "Benchmarking local vs remote encode (5s each, LZ4 on wire if enabled)..."
+  echo "local ffmpeg:  $FFMPEG_LOCAL_BIN"
+  echo "remote ffmpeg: $FFMPEG_BIN"
+  if [[ "${#CBR_ARGS_H264[@]}" -gt 0 ]]; then
+    echo "H.264: constant_bit_rate=1"
+  else
+    echo "H.264: constant_bit_rate=0"
+  fi
+  if [[ "${#CBR_ARGS_HEVC[@]}" -gt 0 ]]; then
+    echo "HEVC: constant_bit_rate=1"
+  else
+    echo "HEVC: constant_bit_rate=0"
+  fi
 fi
 
 sizes=(
@@ -296,6 +392,7 @@ sizes=(
 )
 rates=(30 60 120)
 
+if [[ "$BENCH_ONLY_TRANSCODE" == "0" ]]; then
 for entry in "${sizes[@]}"; do
   label="${entry%% *}"
   size="${entry##* }"
@@ -336,8 +433,44 @@ if [[ "$HAVE_LOCAL_HEVC" -eq 1 ]]; then
 fi
 run_remote_case "4k60" "4096x2160" "60" "/tmp/vt_remote_hevc_4k60.mp4" "hevc_videotoolbox_remote" p010le \
   "${CBR_ARGS_HEVC[@]+"${CBR_ARGS_HEVC[@]}"}" -vt_remote_host "127.0.0.1:${PORT}"
+fi
 
-if [[ "${VTREMOTE_BENCH_DECODE:-1}" != "0" ]]; then
+if [[ "$BENCH_TRANSCODE" != "0" ]]; then
+  if have_bsf "$FFMPEG_BIN" "vtremote_transcode"; then
+    if [[ "$BENCH_ONLY_TRANSCODE" != "0" ]]; then
+      echo "Benchmarking remote transcode only (packet in -> packet out)..."
+    else
+      echo "Benchmarking remote transcode (packet in -> packet out)..."
+    fi
+    for entry in "${sizes[@]}"; do
+      label="${entry%% *}"
+      for rate in "${rates[@]}"; do
+        in_file="/tmp/vt_local_h264_${label}${rate}.mp4"
+        if [[ ! -f "$in_file" ]]; then
+          in_file="/tmp/vt_remote_h264_${label}${rate}.mp4"
+        fi
+        if [[ -f "$in_file" ]]; then
+          run_remote_transcode_case "${label}${rate}" "$in_file" "/tmp/vt_remote_transcode_${label}${rate}.mp4" "$BENCH_TRANSCODE_OUT_CODEC" "$BENCH_TRANSCODE_PIX_FMT"
+        else
+          echo "WARN: transcode input missing for ${label}${rate}; skipping" >&2
+        fi
+      done
+    done
+    in_file="/tmp/vt_local_h264_4k60.mp4"
+    if [[ ! -f "$in_file" ]]; then
+      in_file="/tmp/vt_remote_h264_4k60.mp4"
+    fi
+    if [[ -f "$in_file" ]]; then
+      run_remote_transcode_case "4k60" "$in_file" "/tmp/vt_remote_transcode_4k60.mp4" "$BENCH_TRANSCODE_OUT_CODEC" "$BENCH_TRANSCODE_PIX_FMT"
+    else
+      echo "WARN: transcode input missing for 4k60; skipping" >&2
+    fi
+  else
+    echo "WARN: vtremote_transcode bsf not available; skipping transcode bench" >&2
+  fi
+fi
+
+if [[ "$BENCH_ONLY_TRANSCODE" == "0" && "${VTREMOTE_BENCH_DECODE:-1}" != "0" ]]; then
   echo "Benchmarking remote decode (uses local encoded inputs)..."
   if [[ "$HAVE_LOCAL_H264" -eq 1 ]]; then
     for entry in "${sizes[@]}"; do

@@ -426,7 +426,8 @@ int vtremote_parse_frame(const uint8_t *payload, int payload_size, VTRemoteFrame
     if (r.pos < r.size) {
         uint8_t sd_count = 0;
         ret |= vtremote_rbuf_read_u8(&r, &sd_count);
-        if (ret < 0) return ret;
+        if (ret < 0)
+            return ret;
         
         out->side_data_count = sd_count > 8 ? 8 : sd_count;
         
@@ -434,8 +435,10 @@ int vtremote_parse_frame(const uint8_t *payload, int payload_size, VTRemoteFrame
             uint32_t type, size;
             ret |= vtremote_rbuf_read_u32(&r, &type);
             ret |= vtremote_rbuf_read_u32(&r, &size);
-            if (ret < 0) return ret;
-            if (size > (uint32_t)(r.size - r.pos)) return AVERROR_INVALIDDATA;
+            if (ret < 0)
+                return ret;
+            if (size > (uint32_t)(r.size - r.pos))
+                return AVERROR_INVALIDDATA;
             
             if (i < 8) {
                 out->side_data[i].type = type;
