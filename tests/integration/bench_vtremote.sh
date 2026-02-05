@@ -20,6 +20,7 @@ fi
 source "${ROOT}/tests/integration/vtremoted_common.sh"
 
 PORT="${VTREMOTE_PORT:-5555}"
+HOST="${VTREMOTE_HOST:-127.0.0.1}"
 TOKEN="${VTREMOTE_TOKEN:-}"
 WIRE_COMP="${VTREMOTE_WIRE_COMPRESSION:-}"
 DECODE_ASYNC="${VTREMOTE_DECODE_ASYNC:-0}"
@@ -297,7 +298,7 @@ run_remote_decode_case() {
   fi
   local log="/tmp/vtremote_bench_decode_${label}_${decoder}.log"
   if ! "$FFMPEG_BIN" -v warning -xerror \
-    -vt_remote_host "127.0.0.1:${PORT}" ${args[@]+"${args[@]}"} \
+    -vt_remote_host "${HOST}:${PORT}" ${args[@]+"${args[@]}"} \
     -c:v "$decoder" -i "$in_file" -f null - >"$log" 2>&1; then
     echo "FAIL decode ${label} ${decoder} (log: $log)" >&2
     tail -n 200 "$log" >&2
@@ -313,8 +314,14 @@ run_remote_transcode_case() {
   local out_codec="$4"
   local pix_fmt="$5"
   local out_enc="hevc_videotoolbox"
+  if ! have_encoder "$FFMPEG_BIN" "$out_enc"; then
+    out_enc="hevc_videotoolbox_remote"
+  fi
   if [[ "$out_codec" == "h264" ]]; then
     out_enc="h264_videotoolbox"
+    if ! have_encoder "$FFMPEG_BIN" "$out_enc"; then
+      out_enc="h264_videotoolbox_remote"
+    fi
   fi
   local pix_fmt_str=""
   if [[ "$pix_fmt" == "1" ]]; then
@@ -322,7 +329,7 @@ run_remote_transcode_case() {
   elif [[ "$pix_fmt" == "2" ]]; then
     pix_fmt_str="p010le"
   fi
-  local args=( -vt_remote_transcode -vt_remote_host "127.0.0.1" -vt_remote_port "${PORT}" \
+  local args=( -vt_remote_transcode -vt_remote_host "${HOST}" -vt_remote_port "${PORT}" \
     -c:v "$out_enc" -g 120 -b:v "$BENCH_BITRATE" )
   if [[ -n "$pix_fmt_str" ]]; then
     args+=( -pix_fmt "$pix_fmt_str" )
@@ -402,7 +409,7 @@ for entry in "${sizes[@]}"; do
         "${CBR_ARGS_H264[@]+"${CBR_ARGS_H264[@]}"}"
     fi
     run_remote_case "${label}${rate}"  "$size"  "$rate" "/tmp/vt_remote_h264_${label}${rate}.mp4" "h264_videotoolbox_remote" nv12 \
-      "${CBR_ARGS_H264[@]+"${CBR_ARGS_H264[@]}"}" -vt_remote_host "127.0.0.1:${PORT}"
+      "${CBR_ARGS_H264[@]+"${CBR_ARGS_H264[@]}"}" -vt_remote_host "${HOST}:${PORT}"
   done
 done
 
@@ -412,7 +419,7 @@ if [[ "$HAVE_LOCAL_H264" -eq 1 ]]; then
     "${CBR_ARGS_H264[@]+"${CBR_ARGS_H264[@]}"}"
 fi
 run_remote_case "4k60" "4096x2160" "60" "/tmp/vt_remote_h264_4k60.mp4" "h264_videotoolbox_remote" nv12 \
-  "${CBR_ARGS_H264[@]+"${CBR_ARGS_H264[@]}"}" -vt_remote_host "127.0.0.1:${PORT}"
+  "${CBR_ARGS_H264[@]+"${CBR_ARGS_H264[@]}"}" -vt_remote_host "${HOST}:${PORT}"
 
 for entry in "${sizes[@]}"; do
   label="${entry%% *}"
@@ -423,7 +430,7 @@ for entry in "${sizes[@]}"; do
         "${CBR_ARGS_HEVC[@]+"${CBR_ARGS_HEVC[@]}"}"
     fi
     run_remote_case "${label}${rate}"  "$size"  "$rate" "/tmp/vt_remote_hevc_${label}${rate}.mp4" "hevc_videotoolbox_remote" p010le \
-      "${CBR_ARGS_HEVC[@]+"${CBR_ARGS_HEVC[@]}"}" -vt_remote_host "127.0.0.1:${PORT}"
+      "${CBR_ARGS_HEVC[@]+"${CBR_ARGS_HEVC[@]}"}" -vt_remote_host "${HOST}:${PORT}"
   done
 done
 
@@ -432,7 +439,7 @@ if [[ "$HAVE_LOCAL_HEVC" -eq 1 ]]; then
     "${CBR_ARGS_HEVC[@]+"${CBR_ARGS_HEVC[@]}"}"
 fi
 run_remote_case "4k60" "4096x2160" "60" "/tmp/vt_remote_hevc_4k60.mp4" "hevc_videotoolbox_remote" p010le \
-  "${CBR_ARGS_HEVC[@]+"${CBR_ARGS_HEVC[@]}"}" -vt_remote_host "127.0.0.1:${PORT}"
+  "${CBR_ARGS_HEVC[@]+"${CBR_ARGS_HEVC[@]}"}" -vt_remote_host "${HOST}:${PORT}"
 fi
 
 if [[ "$BENCH_TRANSCODE" != "0" ]]; then

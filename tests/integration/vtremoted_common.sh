@@ -18,6 +18,7 @@ vtremote_start_server() {
   local port="${VTREMOTE_PORT:-}"
   local token="${VTREMOTE_TOKEN:-}"
   local use_existing="${VTREMOTE_USE_EXISTING:-}"
+  local remote_host="${VTREMOTE_HOST:-}"
 
   if [[ -z "${VTREMOTED:-}" ]]; then
     echo "VTREMOTED not set (path to vtremoted binary)" >&2
@@ -33,6 +34,7 @@ vtremote_start_server() {
       port=5555
     fi
     VTREMOTE_PORT="$port"
+    VTREMOTE_HOST="${remote_host:-127.0.0.1}"
     VTREMOTE_SERVER_LOG="$log_file"
     return 0
   fi
@@ -43,6 +45,7 @@ vtremote_start_server() {
       port="$(vtremote_pick_free_port)"
     fi
     VTREMOTE_PORT="$port"
+    VTREMOTE_HOST="127.0.0.1"
     : >"$log_file"
     if [[ -n "$token" ]]; then
       "$VTREMOTED" --listen "127.0.0.1:${port}" --token "$token" >"$log_file" 2>&1 &
