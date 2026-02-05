@@ -15,13 +15,15 @@ title: VideoToolbox Remote
 </div>
 
 ## Why VideoToolbox Remote?
+
 You have a powerful Mac Mini or Studio, but your production workflow runs on Linux or Windows. **VideoToolbox Remote** bridges the gap, allowing you to utilize Apple's efficient hardware acceleration without complex desktop sharing or file transfers.
 
 ## How It Works
+
 It creates a lightweight, high-performance tunnel for video frames:
 
-*   **Client (Linux/Windows)**: Runs standard FFmpeg. Handles IO, filters, and audio.
-*   **Server (macOS)**: Receives raw frames, encodes via `VideoToolbox`, and returns specific packets.
+- **Client (Linux/Windows)**: Runs standard FFmpeg. Handles I/O, filters, and audio.
+- **Server (macOS)**: Receives raw frames, encodes via `VideoToolbox`, and returns specific packets.
 
 Integration is native. It appears as just another codec in FFmpeg:
 
@@ -34,12 +36,15 @@ ffmpeg -i input.mkv \
 ```
 
 ## Features
-*   **Efficient Transport**: Framed TCP streams with Zstd/LZ4 compression.
-*   **Drop-in Compatibility**: Works with standard FFmpeg filters and containers.
-*   **Native VideoToolbox**: Uses Apple’s hardware pipeline; results match local settings when configured identically.
+
+- **Efficient Transport**: Framed TCP streams with Zstd/LZ4 compression.
+- **Drop-in Compatibility**: Works with standard FFmpeg filters and containers.
+- **Native VideoToolbox**: Uses Apple’s hardware pipeline; results match local settings when configured identically.
 
 ## Documentation
-*   [Getting Started](getting-started.html) - Installation and setup.
-*   [Architecture](architecture.html) - System design and data flow.
-*   [Protocol](protocol.html) - Wire specification.
-*   [Troubleshooting](troubleshooting.html) - Common resolutions.
+
+- [Getting Started](getting-started.html): Installation and setup.
+- [Architecture](architecture.html): System design and data flow.
+- [Protocol](protocol.html): Wire specification.
+- [Troubleshooting](troubleshooting.html): Common resolutions.
+- [Security](security.html): Secure deployment guide.

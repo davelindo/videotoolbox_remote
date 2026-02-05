@@ -4,19 +4,23 @@ title: Protocol
 
 # VideoToolbox Remote Protocol
 
-**Status:** Stable v1.
-**Wire Format:** Annex B (mandatory).
-**Endianness:** Big Endian (Network Byte Order).
+**Status**: Stable v1
+**Wire Format**: Annex B (mandatory)
+**Endianness**: Big Endian (Network Byte Order)
 
 ## 1. Overview
+
 The protocol uses a single TCP connection per session. It is stateful, starting with a handshake (`HELLO`), configuration (`CONFIGURE`), and then a stream of frames/packets.
 
-Supported modes:
-- **encode**: `FRAME` in, `PACKET` out
-- **decode**: `PACKET` in, `FRAME` out
-- **transcode**: `PACKET` in, `PACKET` out
+### Communication Modes
 
-### Sequence Flow
+| Mode | Input | Output | Description |
+|---|---|---|---|
+| **Encode** | `FRAME` | `PACKET` | Raw frames in, compressed NALs out. |
+| **Decode** | `PACKET` | `FRAME` | Compressed NALs in, raw frames out. |
+| **Transcode** | `PACKET` | `PACKET` | Compressed NALs in, compressed NALs out. |
+
+### Sequence Flow (Encode)
 
 ```mermaid
 sequenceDiagram
@@ -47,15 +51,14 @@ sequenceDiagram
     S-->>C: DONE
 ```
 
-Transcode mode uses the same handshake/configure sequence, but streams `PACKET` in and `PACKET` out (no `FRAME` messages).
-
 ## 2. Transport & Framing
-*   **Port**: Default `5555`.
-*   **Framing**: All messages share a common 12-byte header.
+
+- **Port**: Default `5555`.
+- **Framing**: All messages share a common 12-byte header.
 
 ### Header Structure
 
-| Offset | Type | Name | Value / Description |
+| Offset | Type | Name | Value |
 | :--- | :--- | :--- | :--- |
 | 0 | `uint32` | `magic` | `0x56545231` ("VTR1") |
 | 4 | `uint16` | `version` | `1` |
@@ -78,80 +81,57 @@ Transcode mode uses the same handshake/configure sequence, but streams `PACKET` 
 | `10` | **PING** | Bidirectional | Keepalive. |
 | `11` | **PONG** | Bidirectional | Keepalive response. |
 
-## 4. Payloads
+## 4. Message Payloads
 
-### HELLO (Type 1)
+### Handshake
 
-| Type | Name | Description |
-| :--- | :--- | :--- |
-| `string` | `token` | Auth token (optional). |
-| `string` | `codec` | Requested codec (e.g., `h264`, `hevc`). |
-| `string` | `client_name` | User-agent string. |
-| `uint32` | `build_id` | Client build version. |
+**HELLO (Type 1)**
+- `token` (string): Auth token (optional).
+- `codec` (string): Requested codec (e.g., `h264`, `hevc`).
+- `client_name` (string): User-agent string.
 
-### HELLO_ACK (Type 2)
+**HELLO_ACK (Type 2)**
+- `status` (uint32): `0=OK`, `1=Busy`, `2=AuthFail`.
+- `server_name` (string): Server ID.
+- `max_sessions` (uint32): Concurrency limit.
 
-| Type | Name | Description |
-| :--- | :--- | :--- |
-| `uint32` | `status` | `0=OK`, `1=Busy`, `2=AuthFail`. |
-| `string` | `server_name` | Server ID string. |
-| `uint32` | `server_version` | Server build version. |
-| `uint32` | `max_sessions` | Concurrency limit. |
+### Configuration
 
-### CONFIGURE (Type 3)
+**CONFIGURE (Type 3)**
+- `width`, `height` (uint32): Video dimensions.
+- `pix_fmt` (uint32): `1=NV12`, `2=P010`.
+- `options` (map): Key-value pairs (bitrate, GOP, etc.).
+- `extradata` (bytes): Header data (decoding only).
 
-| Type | Name | Description |
-| :--- | :--- | :--- |
-| `uint32` | `width` | Video width. |
-| `uint32` | `height` | Video height. |
-| `uint32` | `pix_fmt` | `1=NV12`, `2=P010`. |
-| `uint32` | `time_base_num` | Timebase numerator. |
-| `uint32` | `time_base_den` | Timebase denominator. |
-| `map` | `options` | Key-value pairs (e.g., `bitrate`). |
-| `bytes` | `extradata` | Header data (decoding only). |
+> [!NOTE]
+> `options` is a map of codec settings. Unknown keys are ignored.
+> For `mode=transcode`, `out_codec`, `out_width`, `out_height`, and `scale_mode` are passed here.
 
-Notes:
-- `options` is a passthrough map of codec options from FFmpeg (e.g., bitrate,
-  GOP, realtime, decode_async). The server applies only the options it
-  recognizes; unknown keys are ignored.
-- `mode=transcode` enables packet-in/packet-out and accepts `out_codec` plus
-  optional `out_width`, `out_height`, and `scale_mode` (stretch|aspect|aspect_fill).
+### Streaming
 
-### FRAME (Type 5)
-Used for **sending raw frames** (Encode) or **receiving raw frames** (Decode).
+**FRAME (Type 5)**
+Raw NV12/P010 planes.
+- `pts`, `duration` (int64).
+- `planes` (struct): Stride, height, scale, data.
 
-| Type | Name | Description |
-| :--- | :--- | :--- |
-| `int64` | `pts` | Presentation timestamp. |
-| `int64` | `duration` | Frame duration. |
-| `uint32` | `flags` | `Bit 0`: Force Keyframe. |
-| `planes[]` | `planes` | NV12/P010 Plane data. |
-
-**Plane Data Format**:
-`count` (uint8) followed by: `stride` (u32), `height` (u32), `length` (u32), `bytes`.
-
-### PACKET (Type 6)
-Used for **receiving encoded data** (Encode) or **sending encoded data** (Decode).
-
-| Type | Name | Description |
-| :--- | :--- | :--- |
-| `int64` | `pts` | Presentation timestamp. |
-| `int64` | `dts` | Decoding timestamp. |
-| `int64` | `duration` | Packet duration. |
-| `uint32` | `flags` | `Bit 0`: Is Keyframe. |
-| `bytes` | `data` | **Annex B** NAL units. |
+**PACKET (Type 6)**
+Encoded Annex B NAL units.
+- `pts`, `dts`, `duration` (int64).
+- `flags` (uint32): Bit 0 = Keyframe.
+- `data` (bytes): NAL units.
 
 ## 5. Security & Error Handling
-*   **Authentication**: Simple token matching in `HELLO`.
-*   **Timeouts**: 10s read timeout suggested. Send `PING` every 5s if idle.
-*   **Errors**: Connection is closed immediately after sending an `ERROR` message.
+
+- **Authentication**: Simple token matching in `HELLO`.
+- **Timeouts**: 10s read timeout suggested. Send `PING` every 5s if idle.
+- **Errors**: Connection closes immediately after sending `ERROR`.
 
 ### Error Codes
 
 | Code | Meaning |
 | :--- | :--- |
 | `1` | Auth Failure |
-| `2` | Server Busy (Max Sessions) |
-| `3` | Unsupported Configuration |
-| `4` | Bad Request (Protocol Violation) |
-| `5` | Internal Server Error |
+| `2` | Server Busy |
+| `3` | Unsupported Config |
+| `4` | Bad Request |
+| `5` | Internal Error |

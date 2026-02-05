@@ -4,48 +4,42 @@ title: Security
 
 # Security
 
-## Important: token auth ≠ encryption
+> [!CAUTION]
+> **No Encryption By Default**
+> The VideoToolbox Remote protocol runs over plain TCP. Traffic is **NOT** encrypted.
+> Do **NOT** expose the daemon port (default 5555) directly to the public internet.
 
-This project supports an optional shared token, but traffic is still plain TCP.
-Do not expose `vtremoted` directly to the public internet.
+## Token Authentication
 
-## Recommended baseline (LAN-only)
+The server supports a simple token-based authentication mechanism.
 
-- Run `vtremoted` on a private LAN
-- Enable token auth:
-  - server: `--token YOUR_TOKEN`
-  - client: `-vt_remote_token YOUR_TOKEN`
-- Restrict inbound access using the macOS firewall (or a router firewall)
+- **Server**: Start with `--token <secret>`
+- **Client**: Run with `-vt_remote_token <secret>`
 
-## Safer setup: SSH tunnel
+> [!WARNING]
+> This token prevents unauthorized access but does **not** protect against eavesdropping or man-in-the-middle attacks.
 
-If you need to run this across networks, tunnel it.
+## Recommended Secure Setup
 
-### On the Mac (server)
+If you must run this over an untrusted network (e.g., across the internet), use a secure tunnel.
 
-Bind to localhost so it is not reachable over the LAN:
+### Option 1: SSH Tunnel (Recommended)
 
-```bash
-vtremoted --listen 127.0.0.1:5555 --token YOUR_TOKEN
-```
+1.  **Bind to localhost**: Start the server bound only to loopback.
+    ```bash
+    vtremoted --listen 127.0.0.1:5555
+    ```
 
-### On the client
+2.  **Create Tunnel**: From the client, create an encrypted tunnel.
+    ```bash
+    ssh -L 5555:localhost:5555 user@mac-server
+    ```
 
-Create a tunnel:
+3.  **Connect**: Point FFmpeg to localhost.
+    ```bash
+    ffmpeg ... -vt_remote_host 127.0.0.1:5555 ...
+    ```
 
-```bash
-ssh -L 5555:127.0.0.1:5555 youruser@your-mac-hostname
-```
+### Option 2: VPN / Tailscale
 
-Then point FFmpeg at localhost:
-
-```bash
-ffmpeg ... -vt_remote_host 127.0.0.1:5555 -vt_remote_token YOUR_TOKEN ...
-```
-
-## Safer setup: VPN
-
-If you already have a VPN between machines:
-
-- bind `vtremoted` to the VPN interface IP
-- firewall it so it’s only reachable from the VPN network
+Run both client and server on a private Tailscale network (or WireGuard/OpenVPN). Use the VPN IP addresses for connection. This provides encryption transparently.

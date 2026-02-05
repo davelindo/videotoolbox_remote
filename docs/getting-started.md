@@ -6,75 +6,83 @@ title: Getting Started
 
 Follow these steps to set up the macOS server and build the FFmpeg client.
 
-## Step 1 — Prepare the Mac (server)
+## Prerequisites
 
-Install dependencies and build:
+- **Server**: A Mac with Apple Silicon (M1/M2/M3) or T2 Security Chip running macOS.
+- **Client**: Linux, Windows, or macOS.
+- **Network**: Wired LAN is strongly recommended (1GbE minimum, 2.5GbE+ for 4K).
 
-```bash
-git clone https://github.com/davelindo/videotoolbox_remote.git
-cd videotoolbox_remote
-brew install lz4 zstd pkg-config
-make build-vtremoted
-```
+## Step 1: Prepare the Mac (Server)
 
-Run it:
+1.  **Clone the repository**:
+    ```bash
+    git clone https://github.com/davelindo/videotoolbox_remote.git
+    cd videotoolbox_remote
+    ```
 
-```bash
-vtremoted/.build/release/vtremoted --listen 0.0.0.0:5555 --log-level 1
-```
+2.  **Install dependencies**:
+    ```bash
+    brew install lz4 zstd pkg-config
+    ```
 
-Optionally install as a service:
+3.  **Build the server**:
+    ```bash
+    make build-vtremoted
+    ```
 
-```bash
-./install_launchd.sh --bin /usr/local/bin/vtremoted --listen 0.0.0.0:5555
-```
+4.  **Run the server**:
+    ```bash
+    vtremoted/.build/release/vtremoted --listen 0.0.0.0:5555 --log-level 1
+    ```
 
-## Step 2 — Build FFmpeg client (other machine)
+    > [!TIP]
+    > To install as a background service, run:
+    > `./install_launchd.sh --bin /usr/local/bin/vtremoted --listen 0.0.0.0:5555`
 
-Install `libzstd` + `liblz4` + `pkg-config` for your OS, then:
+## Step 2: Build FFmpeg (Client)
 
-```bash
-git clone https://github.com/davelindo/videotoolbox_remote.git
-cd videotoolbox_remote
-make build-ffmpeg
-```
+On your Linux or Windows machine (or the same Mac if testing locally):
 
+1.  **Install build dependencies**:
+    - Ensure `libzstd`, `liblz4`, and `pkg-config` are installed.
 
-## Step 3 — Encode remotely
+2.  **Clone and build**:
+    ```bash
+    git clone https://github.com/davelindo/videotoolbox_remote.git
+    cd videotoolbox_remote
+    cd ffmpeg
+    ./configure --enable-videotoolbox-remote --enable-liblz4 --enable-libzstd
+    make -j$(nproc)
+    ```
+
+## Step 3: Usage Examples
+
+### Remote Encode
+Send raw frames to the Mac for encoding.
 
 ```bash
 ffmpeg -i input.mkv \
-  -c:v h264_videotoolbox_remote -vt_remote_host macmini.local:5555 \
+  -c:v h264_videotoolbox_remote \
+  -vt_remote_host <MAC_IP>:5555 \
   -b:v 6000k -g 240 \
   -c:a copy -c:s copy \
   output.mkv
 ```
 
-## Step 4 — Transcode remotely (packet in/out)
-
-Use the normal VideoToolbox flags and add `-vt_remote_transcode`:
-
-```bash
-ffmpeg -i input.mkv \
-  -c:v hevc_videotoolbox -vt_remote_transcode -vt_remote_host macmini.local:5555 \
-  -b:v 6000k -g 240 \
-  -c:a copy -c:s copy \
-  output.mkv
-```
-
-Optional scale/format on the server:
+### Remote Transcode
+Send compressed packets to the Mac. The Mac decodes, processes, and re-encodes them.
 
 ```bash
 ffmpeg -i input.mkv \
-  -c:v hevc_videotoolbox -vt_remote_transcode -vt_remote_host macmini.local:5555 \
-  -s 1280x720 -pix_fmt nv12 -vt_remote_scale_mode aspect \
-  -b:v 6000k -g 240 \
+  -c:v hevc_videotoolbox_remote \
+  -vt_remote_transcode \
+  -vt_remote_host <MAC_IP>:5555 \
+  -b:v 6000k \
   output.mkv
 ```
 
-## Notes
+## Important Notes
 
-- Wire compression uses **Zstd** by default (~30-40% smaller than LZ4).
-- Token auth is optional; add `-vt_remote_token` on the client and `--token` on the server to enforce.
-- The server automatically optimizes VideoToolbox settings for batch encoding throughput.
-- `-vt_remote_host` does not change local `*_videotoolbox` behavior by itself; use a remote codec or `-vt_remote_transcode`.
+- **Compression**: Wire compression uses **Zstd** by default (~30-40% smaller than LZ4).
+- **Security**: Token auth is optional. See [Security](security.md) for details.
+- **Optimization**: The server automatically optimizes VideoToolbox settings for batch encoding throughput.
