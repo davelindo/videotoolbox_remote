@@ -65,6 +65,8 @@ static int vtremote_sock_errno(void) { return errno; }
 #define MSG_DONTWAIT 0
 #endif
 
+static inline int vtremote_log_enabled(const VTRemoteEncContext *s, int level);
+
 static int vtremote_hevc_extradata_to_annexb(const uint8_t *in, int in_size,
                                              uint8_t **out, int *out_size) {
   const uint8_t *p = in;
@@ -165,6 +167,113 @@ static void configure_socket_buffers(int fd) {
              sizeof(bufsize));
   setsockopt(fd, SOL_SOCKET, SO_RCVBUF, VTR_SOCKOPT_ARG & bufsize,
              sizeof(bufsize));
+}
+
+static double vtremote_guess_fps(const AVCodecContext *avctx) {
+  if (avctx->framerate.num > 0 && avctx->framerate.den > 0)
+    return (double)avctx->framerate.num / (double)avctx->framerate.den;
+  if (avctx->time_base.num > 0 && avctx->time_base.den > 0 &&
+      !(avctx->time_base.num == 1 && avctx->time_base.den == 1)) {
+    return (double)avctx->time_base.den / (double)avctx->time_base.num;
+  }
+  return 0.0;
+}
+
+static double vtremote_estimate_raw_mbps(const AVCodecContext *avctx) {
+  if (!avctx || avctx->width <= 0 || avctx->height <= 0)
+    return 0.0;
+  double fps = vtremote_guess_fps(avctx);
+  if (fps <= 0.0)
+    fps = 30.0;
+
+  double bytes_per_pixel = 1.5;
+  if (avctx->pix_fmt == AV_PIX_FMT_P010LE || avctx->pix_fmt == AV_PIX_FMT_P010)
+    bytes_per_pixel = 3.0;
+
+  double bytes_per_frame = bytes_per_pixel * (double)avctx->width *
+                           (double)avctx->height;
+  return bytes_per_frame * fps * 8.0 / 1000000.0;
+}
+
+static void vtremote_apply_auto_wire_compression(AVCodecContext *avctx,
+                                                  VTRemoteEncContext *s) {
+  if (!s || s->wire_compression != 3)
+    return;
+
+  double raw_mbps = vtremote_estimate_raw_mbps(avctx);
+  int chosen = 1; /* lz4 */
+  if (raw_mbps > 0.0 && raw_mbps < 200.0)
+    chosen = 2; /* zstd */
+
+  s->wire_compression = chosen;
+  if (vtremote_log_enabled(s, AV_LOG_VERBOSE)) {
+    av_log(avctx, AV_LOG_VERBOSE,
+           "vtremote auto wire_compression=%.1fMb/s -> %s\n",
+           raw_mbps, chosen == 2 ? "zstd" : "lz4");
+  }
+}
+
+static void vtremote_init_inflight(AVCodecContext *avctx,
+                                   VTRemoteEncContext *s) {
+  if (!s)
+    return;
+  s->inflight_auto = s->inflight == 0;
+  s->inflight_blocked = 0;
+  s->inflight_idle_intervals = 0;
+  s->inflight_last_adjust_us = av_gettime_relative();
+
+  if (!s->inflight_auto) {
+    s->inflight_min = s->inflight;
+    s->inflight_max_limit = s->inflight;
+    s->inflight_step = 0;
+    return;
+  }
+
+  if (s->codec_id == AV_CODEC_ID_H264) {
+    s->inflight_min = 16;
+    s->inflight_max_limit = 64;
+    s->inflight_step = 8;
+    s->inflight = 32;
+  } else {
+    s->inflight_min = 8;
+    s->inflight_max_limit = 32;
+    s->inflight_step = 4;
+    s->inflight = 16;
+  }
+}
+
+static void vtremote_auto_adjust_inflight(AVCodecContext *avctx,
+                                          VTRemoteEncContext *s) {
+  if (!s || !s->inflight_auto || s->inflight_step <= 0)
+    return;
+
+  int64_t now = av_gettime_relative();
+  if (now - s->inflight_last_adjust_us < 1000000)
+    return;
+
+  if (s->inflight_blocked > 0 && s->inflight < s->inflight_max_limit) {
+    int next = s->inflight + s->inflight_step;
+    s->inflight = FFMIN(next, s->inflight_max_limit);
+    s->inflight_idle_intervals = 0;
+    if (vtremote_log_enabled(s, AV_LOG_VERBOSE))
+      av_log(avctx, AV_LOG_VERBOSE,
+             "vtremote inflight auto increase to %d\n", s->inflight);
+  } else if (s->inflight_blocked == 0 && s->inflight > s->inflight_min) {
+    s->inflight_idle_intervals++;
+    if (s->inflight_idle_intervals >= 3) {
+      int next = s->inflight - s->inflight_step;
+      s->inflight = FFMAX(next, s->inflight_min);
+      s->inflight_idle_intervals = 0;
+      if (vtremote_log_enabled(s, AV_LOG_VERBOSE))
+        av_log(avctx, AV_LOG_VERBOSE,
+               "vtremote inflight auto decrease to %d\n", s->inflight);
+    }
+  } else {
+    s->inflight_idle_intervals = 0;
+  }
+
+  s->inflight_blocked = 0;
+  s->inflight_last_adjust_us = now;
 }
 
 static int configure_zstd_ctx(AVCodecContext *avctx, VTRemoteEncContext *s,
@@ -1261,17 +1370,25 @@ int ff_vtremote_common_init(AVCodecContext *avctx) {
     return AVERROR(EINVAL);
   }
 
+  vtremote_init_inflight(avctx, s);
+  vtremote_apply_auto_wire_compression(avctx, s);
+
   if (vtremote_log_enabled(s, AV_LOG_VERBOSE)) {
     av_log(avctx, AV_LOG_VERBOSE,
-           "VT remote init codec=%d host=%s inflight=%d timeout_ms=%d\n",
-           s->codec_id, s->host, s->inflight, s->timeout_ms);
+           "VT remote init codec=%d host=%s inflight=%d timeout_ms=%d wire=%d\n",
+           s->codec_id, s->host, s->inflight, s->timeout_ms,
+           s->wire_compression);
   }
 
   ret = vtremote_net_init();
   if (ret < 0)
     return ret;
 
-  s->send_q_size = FFMAX(4, s->inflight * 2);
+  {
+    int inflight_cap =
+        s->inflight_auto ? s->inflight_max_limit : s->inflight;
+    s->send_q_size = FFMAX(4, inflight_cap * 2);
+  }
   s->send_queue = av_calloc(s->send_q_size, sizeof(*s->send_queue));
   if (!s->send_queue)
     return AVERROR(ENOMEM);
@@ -1366,6 +1483,8 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame) {
   }
   if (s->send_q_count >= s->send_q_size ||
       (s->queued_frames + s->inflight_frames) >= s->inflight) {
+    if (s->inflight_auto)
+      s->inflight_blocked++;
     return AVERROR(EAGAIN);
   }
   if (s->codec_id == AV_CODEC_ID_H264 && frame->format != AV_PIX_FMT_NV12) {
@@ -1486,6 +1605,7 @@ int ff_vtremote_common_receive_packet(AVCodecContext *avctx, AVPacket *pkt) {
       s->recv_wait_us += recv_elapsed_us;
       s->recv_calls++;
     }
+    vtremote_auto_adjust_inflight(avctx, s);
     if (ret < 0)
       return ret;
 
@@ -1544,8 +1664,9 @@ int ff_vtremote_encode(AVCodecContext *avctx, AVPacket *pkt,
                        const AVFrame *frame, int *got_packet) {
   VTRemoteEncContext *s = avctx->priv_data;
   if (!s->pkt_queue) {
-    s->pkt_q_size =
-        FFMAX(4, s->inflight * 2); /* Double for better pipelining */
+    int inflight_cap =
+        s->inflight_auto ? s->inflight_max_limit : s->inflight;
+    s->pkt_q_size = FFMAX(4, inflight_cap * 2); /* Double for better pipelining */
     s->pkt_queue = av_calloc(s->pkt_q_size, sizeof(AVPacket));
     if (!s->pkt_queue)
       return AVERROR(ENOMEM);
@@ -1602,6 +1723,8 @@ int ff_vtremote_encode(AVCodecContext *avctx, AVPacket *pkt,
 
   /* If we have a frame but hit the inflight limit, we must wait for a packet */
   if (frame && s->inflight_frames >= s->inflight) {
+    if (s->inflight_auto)
+      s->inflight_blocked++;
     vtremote_sendq_pump(avctx, 1);
     /* Block until we get at least one packet */
     ret = ff_vtremote_common_receive_packet(avctx, pkt);

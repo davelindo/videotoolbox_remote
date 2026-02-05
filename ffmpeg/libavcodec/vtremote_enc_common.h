@@ -15,6 +15,13 @@ typedef struct VTRemoteEncContext {
     char *token;
     int timeout_ms;
     int inflight;
+    int inflight_auto;
+    int inflight_min;
+    int inflight_max_limit;
+    int inflight_step;
+    int inflight_blocked;
+    int inflight_idle_intervals;
+    int64_t inflight_last_adjust_us;
     int log_level;
     int wire_compression;
     int zstd_level;
@@ -91,12 +98,14 @@ typedef struct VTRemoteSendBuf {
     { "vt_remote_host", "VideoToolbox remote server host:port", OFFSET(host), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, ENC|VID }, \
     { "vt_remote_token", "authentication token (optional)", OFFSET(token), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, ENC|VID }, \
     { "vt_remote_timeout_ms", "socket timeout in ms", OFFSET(timeout_ms), AV_OPT_TYPE_INT, { .i64 = 5000 }, 100, 60000, ENC|VID }, \
-    { "vt_remote_inflight", "max in-flight frames", OFFSET(inflight), AV_OPT_TYPE_INT, { .i64 = inflight_default }, 1, 128, ENC|VID }, \
+    { "vt_remote_inflight", "max in-flight frames", OFFSET(inflight), AV_OPT_TYPE_INT, { .i64 = inflight_default }, 0, 128, ENC|VID, "vt_remote_inflight" }, \
+        { "auto", "auto", 0, AV_OPT_TYPE_CONST, { .i64 = 0 }, 0, 0, ENC|VID, "vt_remote_inflight" }, \
     { "vt_remote_log_level", "remote encoder log level", OFFSET(log_level), AV_OPT_TYPE_INT, { .i64 = AV_LOG_INFO }, AV_LOG_QUIET, AV_LOG_TRACE, ENC|VID }, \
-    { "vt_remote_wire_compression", "wire compression", OFFSET(wire_compression), AV_OPT_TYPE_INT, { .i64 = wire_default }, 0, 2, ENC|VID, "vt_remote_wire_compression" }, \
+    { "vt_remote_wire_compression", "wire compression", OFFSET(wire_compression), AV_OPT_TYPE_INT, { .i64 = wire_default }, 0, 3, ENC|VID, "vt_remote_wire_compression" }, \
         { "none", "no compression", 0, AV_OPT_TYPE_CONST, { .i64 = 0 }, 0, 0, ENC|VID, "vt_remote_wire_compression" }, \
         { "lz4",  "lz4",             0, AV_OPT_TYPE_CONST, { .i64 = 1 }, 0, 0, ENC|VID, "vt_remote_wire_compression" }, \
         { "zstd", "zstd",            0, AV_OPT_TYPE_CONST, { .i64 = 2 }, 0, 0, ENC|VID, "vt_remote_wire_compression" }, \
+        { "auto", "auto",            0, AV_OPT_TYPE_CONST, { .i64 = 3 }, 0, 0, ENC|VID, "vt_remote_wire_compression" }, \
     { "vt_remote_zstd_level", "zstd compression level (wire compression)", OFFSET(zstd_level), AV_OPT_TYPE_INT, { .i64 = 1 }, -5, 22, ENC|VID }, \
     { "vt_remote_zstd_workers", "zstd worker threads (0=single-threaded)", OFFSET(zstd_workers), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 64, ENC|VID }
 

@@ -59,3 +59,10 @@ To reproduce the performance numbers:
 VTREMOTE_HOST=<mac-host> VTREMOTE_PORT=5555 VTREMOTE_USE_EXISTING=1 \
 VTREMOTED=/bin/true tests/integration/bench_vtremote.sh
 ```
+
+### Adaptive options
+
+```bash
+-vt_remote_wire_compression auto   # pick LZ4 vs Zstd based on resolution/FPS
+-vt_remote_inflight auto           # adjust inflight over time
+```

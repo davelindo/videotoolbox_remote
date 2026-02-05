@@ -27,8 +27,9 @@ Common issues and their solutions.
 - **Network**: Use wired LAN (1GbE+). Wi-Fi is often too unstable for raw frame streaming.
 - **Optimization**:
     - Increase in-flight frames: `-vt_remote_inflight 32`
+    - Or let it adapt: `-vt_remote_inflight auto`
     - Use Transcode mode (`-vt_remote_transcode`) to reduce network load.
-- **Compression**: Ensure wire compression is enabled. Default is **LZ4**. Override with `-vt_remote_wire_compression lz4|zstd|none`.
+- **Compression**: Ensure wire compression is enabled. Default is **LZ4**. Override with `-vt_remote_wire_compression lz4|zstd|none`, or use `auto` to pick based on resolution/FPS.
 
 ### High Latency
 **Symptom**: Delay in live streaming.

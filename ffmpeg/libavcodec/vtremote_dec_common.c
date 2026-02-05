@@ -36,6 +36,8 @@
 #include <lz4.h>
 #include <zstd.h>
 
+static inline int vtremote_log_enabled(const VTRemoteDecContext *s, int level);
+
 #if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
 #define VTR_CLOSE_SOCKET closesocket
 #define VTR_SOCKOPT_ARG (const char *)
@@ -89,6 +91,53 @@ static void configure_socket_buffers(int fd)
     int bufsize = 16 * 1024 * 1024;
     setsockopt(fd, SOL_SOCKET, SO_SNDBUF, VTR_SOCKOPT_ARG &bufsize, sizeof(bufsize));
     setsockopt(fd, SOL_SOCKET, SO_RCVBUF, VTR_SOCKOPT_ARG &bufsize, sizeof(bufsize));
+}
+
+static double vtremote_guess_fps(const AVCodecContext *avctx)
+{
+    if (avctx->framerate.num > 0 && avctx->framerate.den > 0)
+        return (double)avctx->framerate.num / (double)avctx->framerate.den;
+    if (avctx->time_base.num > 0 && avctx->time_base.den > 0 &&
+        !(avctx->time_base.num == 1 && avctx->time_base.den == 1)) {
+        return (double)avctx->time_base.den / (double)avctx->time_base.num;
+    }
+    return 0.0;
+}
+
+static double vtremote_estimate_raw_mbps(const AVCodecContext *avctx)
+{
+    if (!avctx || avctx->width <= 0 || avctx->height <= 0)
+        return 0.0;
+    double fps = vtremote_guess_fps(avctx);
+    if (fps <= 0.0)
+        fps = 30.0;
+
+    double bytes_per_pixel = 1.5;
+    if (avctx->pix_fmt == AV_PIX_FMT_P010LE || avctx->pix_fmt == AV_PIX_FMT_P010)
+        bytes_per_pixel = 3.0;
+
+    double bytes_per_frame = bytes_per_pixel * (double)avctx->width *
+                             (double)avctx->height;
+    return bytes_per_frame * fps * 8.0 / 1000000.0;
+}
+
+static void vtremote_apply_auto_wire_compression(AVCodecContext *avctx,
+                                                 VTRemoteDecContext *s)
+{
+    if (!s || s->wire_compression != 3)
+        return;
+
+    double raw_mbps = vtremote_estimate_raw_mbps(avctx);
+    int chosen = 1; /* lz4 */
+    if (raw_mbps > 0.0 && raw_mbps < 200.0)
+        chosen = 2; /* zstd */
+
+    s->wire_compression = chosen;
+    if (vtremote_log_enabled(s, AV_LOG_VERBOSE)) {
+        av_log(avctx, AV_LOG_VERBOSE,
+               "vtremote auto wire_compression=%.1fMb/s -> %s\n",
+               raw_mbps, chosen == 2 ? "zstd" : "lz4");
+    }
 }
 
 static int write_full(int fd, const uint8_t *buf, int size)
@@ -551,6 +600,8 @@ int ff_vtremote_dec_init(AVCodecContext *avctx)
         av_log(avctx, AV_LOG_ERROR, "vt_remote_host is required\n");
         return AVERROR(EINVAL);
     }
+
+    vtremote_apply_auto_wire_compression(avctx, s);
 
     if (vtremote_log_enabled(s, AV_LOG_VERBOSE)) {
         av_log(avctx, AV_LOG_VERBOSE, "VT remote decode init codec=%d host=%s timeout_ms=%d\n",
