@@ -87,13 +87,13 @@ typedef struct VTRemoteSendBuf {
     int64_t enqueue_us;
 } VTRemoteSendBuf;
 
-#define VTREMOTE_BASE_OPTIONS \
+#define VTREMOTE_BASE_OPTIONS(wire_default, inflight_default) \
     { "vt_remote_host", "VideoToolbox remote server host:port", OFFSET(host), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, ENC|VID }, \
     { "vt_remote_token", "authentication token (optional)", OFFSET(token), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, ENC|VID }, \
     { "vt_remote_timeout_ms", "socket timeout in ms", OFFSET(timeout_ms), AV_OPT_TYPE_INT, { .i64 = 5000 }, 100, 60000, ENC|VID }, \
-    { "vt_remote_inflight", "max in-flight frames", OFFSET(inflight), AV_OPT_TYPE_INT, { .i64 = 16 }, 1, 128, ENC|VID }, \
+    { "vt_remote_inflight", "max in-flight frames", OFFSET(inflight), AV_OPT_TYPE_INT, { .i64 = inflight_default }, 1, 128, ENC|VID }, \
     { "vt_remote_log_level", "remote encoder log level", OFFSET(log_level), AV_OPT_TYPE_INT, { .i64 = AV_LOG_INFO }, AV_LOG_QUIET, AV_LOG_TRACE, ENC|VID }, \
-    { "vt_remote_wire_compression", "wire compression", OFFSET(wire_compression), AV_OPT_TYPE_INT, { .i64 = 2 }, 0, 2, ENC|VID, "vt_remote_wire_compression" }, \
+    { "vt_remote_wire_compression", "wire compression", OFFSET(wire_compression), AV_OPT_TYPE_INT, { .i64 = wire_default }, 0, 2, ENC|VID, "vt_remote_wire_compression" }, \
         { "none", "no compression", 0, AV_OPT_TYPE_CONST, { .i64 = 0 }, 0, 0, ENC|VID, "vt_remote_wire_compression" }, \
         { "lz4",  "lz4",             0, AV_OPT_TYPE_CONST, { .i64 = 1 }, 0, 0, ENC|VID, "vt_remote_wire_compression" }, \
         { "zstd", "zstd",            0, AV_OPT_TYPE_CONST, { .i64 = 2 }, 0, 0, ENC|VID, "vt_remote_wire_compression" }, \

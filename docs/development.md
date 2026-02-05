@@ -58,3 +58,28 @@ Transcode bench toggles:
 VTREMOTE_BENCH_TRANSCODE=1   # enable/disable transcode section
 VTREMOTE_BENCH_ONLY_TRANSCODE=1
 ```
+
+## Real-world testing notes
+
+We benchmarked a Linux client against an Apple Silicon (M2) macOS server over a 2.5GbE LAN. Summary:
+
+- 1080p60 remote encode is near‑parity with local VideoToolbox on the Mac.
+- 4k60 encode falls below realtime on this link.
+- For raw‑frame encode, `lz4` outperforms `zstd`; `none` performs poorly on this link.
+- Transcode throughput is similar or slightly lower than encode‑only (expected), but keeps compressed packets on the wire.
+
+### CPU sampling evidence (weak‑CPU clients)
+
+To quantify client CPU savings, we measured 1080p60, 10s runs (10M, GOP 120, LZ4):
+
+- **Remote encode (raw frames)**: ~145% client CPU
+- **Remote transcode (packet in/out)**: ~6–7% client CPU
+
+This shows transcode mode dramatically reduces client CPU, which is the primary win for weak CPUs.
+
+To reproduce on your setup:
+
+```bash
+VTREMOTE_HOST=<mac-host> VTREMOTE_PORT=5555 VTREMOTE_USE_EXISTING=1 \
+VTREMOTED=/bin/true tests/integration/bench_vtremote.sh
+```
