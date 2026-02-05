@@ -43,7 +43,7 @@ typedef struct VTRemoteDecContext {
     { "vt_remote_token", "authentication token (optional)", OFFSET(token), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, DEC|VID }, \
     { "vt_remote_timeout_ms", "socket timeout in ms", OFFSET(timeout_ms), AV_OPT_TYPE_INT, { .i64 = 5000 }, 100, 60000, DEC|VID }, \
     { "vt_remote_log_level", "remote decoder log level", OFFSET(log_level), AV_OPT_TYPE_INT, { .i64 = AV_LOG_INFO }, AV_LOG_QUIET, AV_LOG_TRACE, DEC|VID }, \
-    { "vt_remote_wire_compression", "wire compression", OFFSET(wire_compression), AV_OPT_TYPE_INT, { .i64 = 2 }, 0, 2, DEC|VID, "vt_remote_wire_compression" }, \
+    { "vt_remote_wire_compression", "wire compression", OFFSET(wire_compression), AV_OPT_TYPE_INT, { .i64 = 1 }, 0, 2, DEC|VID, "vt_remote_wire_compression" }, \
         { "none", "no compression", 0, AV_OPT_TYPE_CONST, { .i64 = 0 }, 0, 0, DEC|VID, "vt_remote_wire_compression" }, \
         { "lz4",  "lz4",             0, AV_OPT_TYPE_CONST, { .i64 = 1 }, 0, 0, DEC|VID, "vt_remote_wire_compression" }, \
         { "zstd", "zstd",            0, AV_OPT_TYPE_CONST, { .i64 = 2 }, 0, 0, DEC|VID, "vt_remote_wire_compression" }, \

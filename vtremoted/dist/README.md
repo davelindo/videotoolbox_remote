@@ -18,7 +18,7 @@ swift build -c debug
 
 Use `--once` to exit after a single session (good for tests).
 Log level: 0=errors, 1=info (default), 2=debug.
-Wire compression is enabled by default (zstd). Disable with `-vt_remote_wire_compression none`.
+Wire compression defaults to **LZ4**. Disable with `-vt_remote_wire_compression none`.
 Token auth is optional; add `--token YOURTOKEN` to enforce.
 
 ### Launchd (recommended)

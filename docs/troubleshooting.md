@@ -28,7 +28,7 @@ Common issues and their solutions.
 - **Optimization**:
     - Increase in-flight frames: `-vt_remote_inflight 32`
     - Use Transcode mode (`-vt_remote_transcode`) to reduce network load.
-- **Compression**: Ensure Zstd (`-vt_remote_wire_compression zstd`) is enabled (default).
+- **Compression**: Ensure wire compression is enabled. Default is **LZ4**. Override with `-vt_remote_wire_compression lz4|zstd|none`.
 
 ### High Latency
 **Symptom**: Delay in live streaming.

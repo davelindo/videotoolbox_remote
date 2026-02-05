@@ -83,6 +83,6 @@ ffmpeg -i input.mkv \
 
 ## Important Notes
 
-- **Compression**: Wire compression uses **Zstd** by default (~30-40% smaller than LZ4).
+- **Compression**: Wire compression defaults to **LZ4** for all remote modes. Override with `-vt_remote_wire_compression lz4|zstd|none`.
 - **Security**: Token auth is optional. See [Security](security.md) for details.
 - **Optimization**: The server automatically optimizes VideoToolbox settings for batch encoding throughput.
