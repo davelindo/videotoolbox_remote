@@ -4,7 +4,7 @@ set -eEuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VTREMOTED="${VTREMOTED:-${ROOT}/vtremoted/.build/debug/vtremoted}"
 FFMPEG_REMOTE="${FFMPEG:-${ROOT}/ffmpeg/ffmpeg}"
-FFMPEG_LOCAL="${FFMPEG_LOCAL:-$(command -v ffmpeg || true)}"
+FFMPEG_LOCAL="${FFMPEG_LOCAL:-}"
 source "${ROOT}/tests/integration/vtremoted_common.sh"
 
 PORT="${VTREMOTE_PORT:-}"
@@ -48,15 +48,6 @@ if [[ ! -x "$FFMPEG_REMOTE" ]]; then
   echo "ffmpeg not found at $FFMPEG_REMOTE (build ffmpeg first)"
   exit 1
 fi
-if [[ -z "$FFMPEG_LOCAL" ]]; then
-  # Prefer an ffmpeg in PATH, but fall back to the repo build if none exists.
-  FFMPEG_LOCAL="$FFMPEG_REMOTE"
-fi
-if [[ ! -x "$FFMPEG_LOCAL" ]]; then
-  echo "FFMPEG_LOCAL not executable at $FFMPEG_LOCAL"
-  exit 1
-fi
-
 if command -v rg >/dev/null 2>&1; then
   if ! "$FFMPEG_REMOTE" -h decoder=h264_videotoolbox_remote 2>/dev/null | rg -q "vt_remote_decode_async"; then
     echo "ffmpeg remote decoder options do not include vt_remote_decode_async; rebuild ffmpeg."
@@ -73,9 +64,9 @@ have_encoder() {
   local bin="$1"
   local enc="$2"
   if command -v rg >/dev/null 2>&1; then
-    "$bin" -encoders 2>/dev/null | rg -q "\\b${enc}\\b"
+    "$bin" -encoders 2>/dev/null | rg -q "(?m)(^|\\s)${enc}(\\s|$)"
   else
-    "$bin" -encoders 2>/dev/null | grep -q "\\b${enc}\\b"
+    "$bin" -encoders 2>/dev/null | grep -q -w "$enc"
   fi
 }
 
@@ -92,12 +83,58 @@ pick_h264_encoder() {
   fi
 }
 
-H264_ENCODER="$(pick_h264_encoder "$FFMPEG_LOCAL")"
-if [[ -z "$H264_ENCODER" ]]; then
+pick_local_ffmpeg() {
+  local candidates=()
+  if [[ -n "$FFMPEG_LOCAL" ]]; then
+    candidates+=( "$FFMPEG_LOCAL" )
+  else
+    if command -v ffmpeg >/dev/null 2>&1; then
+      candidates+=( "$(command -v ffmpeg)" )
+    fi
+  fi
+  if [[ -x /usr/bin/ffmpeg ]]; then
+    candidates+=( "/usr/bin/ffmpeg" )
+  fi
+  candidates+=( "$FFMPEG_REMOTE" )
+
+  # De-dupe while preserving order.
+  local dedup=()
+  for c in "${candidates[@]}"; do
+    local seen=0
+    for d in "${dedup[@]}"; do
+      if [[ "$c" == "$d" ]]; then
+        seen=1
+        break
+      fi
+    done
+    if [[ "$seen" -eq 0 ]]; then
+      dedup+=( "$c" )
+    fi
+  done
+  candidates=( "${dedup[@]}" )
+
+  for c in "${candidates[@]}"; do
+    if [[ ! -x "$c" ]]; then
+      continue
+    fi
+    local enc
+    enc="$(pick_h264_encoder "$c")"
+    if [[ -n "$enc" ]]; then
+      FFMPEG_LOCAL="$c"
+      H264_ENCODER="$enc"
+      return 0
+    fi
+  done
+  return 1
+}
+
+H264_ENCODER=""
+if ! pick_local_ffmpeg; then
   echo "Local ffmpeg lacks an H.264 encoder (need one of libopenh264/libx264/h264_videotoolbox)." >&2
   echo "Install one or set FFMPEG_LOCAL to a build that provides one." >&2
   exit 1
 fi
+echo "Using local ffmpeg: ${FFMPEG_LOCAL}"
 
 ENC_ARGS=()
 PIX_FMT="yuv420p"

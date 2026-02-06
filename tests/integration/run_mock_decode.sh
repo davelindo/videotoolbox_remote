@@ -32,9 +32,6 @@ if [[ ! -x "$FFMPEG_BIN" ]]; then
   echo "ffmpeg binary not found at $FFMPEG_BIN" >&2
   exit 1
 fi
-if ! command -v "$FFMPEG_LOCAL_BIN" >/dev/null 2>&1; then
-  FFMPEG_LOCAL_BIN="$FFMPEG_BIN"
-fi
 
 RUN_DIR="$(mktemp -d /tmp/vtremote_mock_decode.XXXXXX)"
 INPUT_FILE="${RUN_DIR}/input.mp4"
@@ -50,40 +47,78 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Generating input file..."
+candidate_bins=()
+if command -v "$FFMPEG_LOCAL_BIN" >/dev/null 2>&1; then
+  candidate_bins+=( "$(command -v "$FFMPEG_LOCAL_BIN")" )
+fi
+if [[ -x /usr/bin/ffmpeg ]]; then
+  candidate_bins+=( "/usr/bin/ffmpeg" )
+fi
+if [[ -x "$FFMPEG_BIN" ]]; then
+  candidate_bins+=( "$FFMPEG_BIN" )
+fi
+
+# De-dupe while preserving order.
+dedup_bins=()
+for b in "${candidate_bins[@]}"; do
+  seen=0
+  for d in "${dedup_bins[@]}"; do
+    if [[ "$b" == "$d" ]]; then
+      seen=1
+      break
+    fi
+  done
+  if [[ "$seen" -eq 0 ]]; then
+    dedup_bins+=( "$b" )
+  fi
+done
+candidate_bins=( "${dedup_bins[@]}" )
+
 have_encoder() {
   local bin="$1"
   local enc="$2"
   if command -v rg >/dev/null 2>&1; then
-    "$bin" -encoders 2>/dev/null | rg -q "\\b${enc}\\b"
+    "$bin" -encoders 2>/dev/null | rg -q "(?m)(^|\\s)${enc}(\\s|$)"
   else
-    "$bin" -encoders 2>/dev/null | grep -q "\\b${enc}\\b"
+    "$bin" -encoders 2>/dev/null | grep -q -w "$enc"
   fi
 }
 
 encode_input() {
+  local bin="$1"
+  shift
   local enc="$1"
   shift
   local pix_fmt="$1"
   shift
-  "$FFMPEG_LOCAL_BIN" -v warning -f lavfi -i testsrc2=size=320x180:rate=5 -t 1 -pix_fmt "$pix_fmt" \
+  "$bin" -v warning -f lavfi -i testsrc2=size=320x180:rate=5 -t 1 -pix_fmt "$pix_fmt" \
     -c:v "$enc" "$@" -an -sn -y "$INPUT_FILE" >/tmp/mock_vtremoted_decode_gen.log 2>&1
 }
 
 ok=0
-for enc in libopenh264 libx264 h264_videotoolbox; do
-  if ! have_encoder "$FFMPEG_LOCAL_BIN" "$enc"; then
-    continue
-  fi
-  extra=()
-  pix_fmt="yuv420p"
-  if [[ "$enc" == "libx264" ]]; then
-    extra=( -preset ultrafast -tune zerolatency )
-  elif [[ "$enc" == "h264_videotoolbox" ]]; then
-    pix_fmt="nv12"
-    extra=( -allow_sw 1 )
-  fi
-  if encode_input "$enc" "$pix_fmt" "${extra[@]+"${extra[@]}"}"; then
-    ok=1
+chosen_bin=""
+chosen_enc=""
+for bin in "${candidate_bins[@]}"; do
+  for enc in libopenh264 libx264 h264_videotoolbox; do
+    if ! have_encoder "$bin" "$enc"; then
+      continue
+    fi
+    extra=()
+    pix_fmt="yuv420p"
+    if [[ "$enc" == "libx264" ]]; then
+      extra=( -preset ultrafast -tune zerolatency )
+    elif [[ "$enc" == "h264_videotoolbox" ]]; then
+      pix_fmt="nv12"
+      extra=( -allow_sw 1 )
+    fi
+    if encode_input "$bin" "$enc" "$pix_fmt" "${extra[@]+"${extra[@]}"}"; then
+      ok=1
+      chosen_bin="$bin"
+      chosen_enc="$enc"
+      break
+    fi
+  done
+  if [[ "$ok" -eq 1 ]]; then
     break
   fi
 done
@@ -92,6 +127,7 @@ if [[ "$ok" -ne 1 ]]; then
   tail -n 200 /tmp/mock_vtremoted_decode_gen.log 2>/dev/null || true
   exit 1
 fi
+echo "Using local input generator: ${chosen_bin} (${chosen_enc})"
 
 echo "Starting mock server..."
 if [[ -n "$SERVER_TOKEN" ]]; then
