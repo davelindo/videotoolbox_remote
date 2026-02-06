@@ -63,7 +63,9 @@ fi
 have_encoder() {
   local bin="$1"
   local enc="$2"
-  "$bin" -encoders 2>/dev/null | grep -q -w "$enc"
+  # Don't use grep -q here: it can exit early, causing ffmpeg to hit SIGPIPE.
+  # With `set -o pipefail`, that would make the probe look like a failure.
+  "$bin" -encoders 2>/dev/null | grep -w "$enc" >/dev/null
 }
 
 pick_h264_encoder() {
