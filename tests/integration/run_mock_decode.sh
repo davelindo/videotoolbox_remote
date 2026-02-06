@@ -54,25 +54,8 @@ fi
 if [[ -x /usr/bin/ffmpeg ]]; then
   candidate_bins+=( "/usr/bin/ffmpeg" )
 fi
-if [[ -x "$FFMPEG_BIN" ]]; then
-  candidate_bins+=( "$FFMPEG_BIN" )
-fi
-
-# De-dupe while preserving order.
-dedup_bins=()
-for b in "${candidate_bins[@]}"; do
-  seen=0
-  for d in "${dedup_bins[@]}"; do
-    if [[ "$b" == "$d" ]]; then
-      seen=1
-      break
-    fi
-  done
-  if [[ "$seen" -eq 0 ]]; then
-    dedup_bins+=( "$b" )
-  fi
-done
-candidate_bins=( "${dedup_bins[@]}" )
+# Always include the repo build as a fallback.
+candidate_bins+=( "$FFMPEG_BIN" )
 
 have_encoder() {
   local bin="$1"

@@ -93,22 +93,6 @@ pick_local_ffmpeg() {
   fi
   candidates+=( "$FFMPEG_REMOTE" )
 
-  # De-dupe while preserving order.
-  local dedup=()
-  for c in "${candidates[@]}"; do
-    local seen=0
-    for d in "${dedup[@]}"; do
-      if [[ "$c" == "$d" ]]; then
-        seen=1
-        break
-      fi
-    done
-    if [[ "$seen" -eq 0 ]]; then
-      dedup+=( "$c" )
-    fi
-  done
-  candidates=( "${dedup[@]}" )
-
   for c in "${candidates[@]}"; do
     if [[ ! -x "$c" ]]; then
       continue
