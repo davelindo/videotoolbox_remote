@@ -46,6 +46,7 @@ make -j$(nproc)
 
 Start the server on your Mac:
 ```bash
+# Default is loopback-only (safe). For LAN clients, bind explicitly:
 ./vtremoted --listen 0.0.0.0:5555 --log-level 1
 ```
 

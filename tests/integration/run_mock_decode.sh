@@ -50,11 +50,47 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Generating input file..."
-if ! "$FFMPEG_LOCAL_BIN" -v warning -f lavfi -i testsrc2=size=320x180:rate=5 -t 1 -pix_fmt yuv420p \
-  -c:v libopenh264 -an -sn -y "$INPUT_FILE" >/tmp/mock_vtremoted_decode_gen.log 2>&1; then
-  echo "WARN: libopenh264 encode failed; trying libx264 (if available)..." >&2
-  "$FFMPEG_LOCAL_BIN" -v warning -f lavfi -i testsrc2=size=320x180:rate=5 -t 1 -pix_fmt yuv420p \
-    -c:v libx264 -preset ultrafast -tune zerolatency -an -sn -y "$INPUT_FILE" >/tmp/mock_vtremoted_decode_gen.log 2>&1
+have_encoder() {
+  local bin="$1"
+  local enc="$2"
+  if command -v rg >/dev/null 2>&1; then
+    "$bin" -encoders 2>/dev/null | rg -q "\\b${enc}\\b"
+  else
+    "$bin" -encoders 2>/dev/null | grep -q "\\b${enc}\\b"
+  fi
+}
+
+encode_input() {
+  local enc="$1"
+  shift
+  local pix_fmt="$1"
+  shift
+  "$FFMPEG_LOCAL_BIN" -v warning -f lavfi -i testsrc2=size=320x180:rate=5 -t 1 -pix_fmt "$pix_fmt" \
+    -c:v "$enc" "$@" -an -sn -y "$INPUT_FILE" >/tmp/mock_vtremoted_decode_gen.log 2>&1
+}
+
+ok=0
+for enc in libopenh264 libx264 h264_videotoolbox; do
+  if ! have_encoder "$FFMPEG_LOCAL_BIN" "$enc"; then
+    continue
+  fi
+  extra=()
+  pix_fmt="yuv420p"
+  if [[ "$enc" == "libx264" ]]; then
+    extra=( -preset ultrafast -tune zerolatency )
+  elif [[ "$enc" == "h264_videotoolbox" ]]; then
+    pix_fmt="nv12"
+    extra=( -allow_sw 1 )
+  fi
+  if encode_input "$enc" "$pix_fmt" "${extra[@]+"${extra[@]}"}"; then
+    ok=1
+    break
+  fi
+done
+if [[ "$ok" -ne 1 ]]; then
+  echo "ERROR: failed to generate H.264 input (need one of libopenh264/libx264/h264_videotoolbox)" >&2
+  tail -n 200 /tmp/mock_vtremoted_decode_gen.log 2>/dev/null || true
+  exit 1
 fi
 
 echo "Starting mock server..."

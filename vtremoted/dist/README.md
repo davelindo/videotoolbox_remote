@@ -13,13 +13,14 @@ swift build -c debug
 ## Run
 
 ```bash
+# Default is loopback-only (safe). For LAN clients, bind explicitly:
 .build/debug/vtremoted --listen 0.0.0.0:5555 --log-level 1
 ```
 
 Use `--once` to exit after a single session (good for tests).
 Log level: 0=errors, 1=info (default), 2=debug.
 Wire compression defaults to **LZ4**. Disable with `-vt_remote_wire_compression none`, or use `auto` to pick based on resolution/FPS.
-Token auth is optional; add `--token YOURTOKEN` to enforce.
+Token auth is optional; prefer `--token-file /path/to/secret` (or `--token YOURTOKEN`) to enforce.
 
 ### Launchd (recommended)
 

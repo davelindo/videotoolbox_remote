@@ -49,7 +49,11 @@ if [[ ! -x "$FFMPEG_REMOTE" ]]; then
   exit 1
 fi
 if [[ -z "$FFMPEG_LOCAL" ]]; then
-  echo "FFMPEG_LOCAL not set and no ffmpeg in PATH"
+  # Prefer an ffmpeg in PATH, but fall back to the repo build if none exists.
+  FFMPEG_LOCAL="$FFMPEG_REMOTE"
+fi
+if [[ ! -x "$FFMPEG_LOCAL" ]]; then
+  echo "FFMPEG_LOCAL not executable at $FFMPEG_LOCAL"
   exit 1
 fi
 
@@ -65,21 +69,55 @@ else
   fi
 fi
 
-if command -v rg >/dev/null 2>&1; then
-  if ! "$FFMPEG_LOCAL" -encoders 2>/dev/null | rg -q "libopenh264"; then
-    echo "Local ffmpeg lacks libopenh264 encoder. Install one or set FFMPEG_LOCAL to a build with libopenh264."
-    exit 1
+have_encoder() {
+  local bin="$1"
+  local enc="$2"
+  if command -v rg >/dev/null 2>&1; then
+    "$bin" -encoders 2>/dev/null | rg -q "\\b${enc}\\b"
+  else
+    "$bin" -encoders 2>/dev/null | grep -q "\\b${enc}\\b"
   fi
-else
-  if ! "$FFMPEG_LOCAL" -encoders 2>/dev/null | grep -q "libopenh264"; then
-    echo "Local ffmpeg lacks libopenh264 encoder. Install one or set FFMPEG_LOCAL to a build with libopenh264."
-    exit 1
+}
+
+pick_h264_encoder() {
+  local bin="$1"
+  if have_encoder "$bin" "libopenh264"; then
+    echo "libopenh264"
+  elif have_encoder "$bin" "libx264"; then
+    echo "libx264"
+  elif have_encoder "$bin" "h264_videotoolbox"; then
+    echo "h264_videotoolbox"
+  else
+    echo ""
   fi
+}
+
+H264_ENCODER="$(pick_h264_encoder "$FFMPEG_LOCAL")"
+if [[ -z "$H264_ENCODER" ]]; then
+  echo "Local ffmpeg lacks an H.264 encoder (need one of libopenh264/libx264/h264_videotoolbox)." >&2
+  echo "Install one or set FFMPEG_LOCAL to a build that provides one." >&2
+  exit 1
 fi
+
+ENC_ARGS=()
+PIX_FMT="yuv420p"
+case "$H264_ENCODER" in
+  libx264)
+    ENC_ARGS=( -preset ultrafast -tune zerolatency )
+    ;;
+  h264_videotoolbox)
+    # Some environments require software fallback (e.g. GitHub runners / VMs).
+    ENC_ARGS=( -allow_sw 1 )
+    PIX_FMT="nv12"
+    ;;
+  *)
+    ;;
+esac
+echo "Using local input encoder: ${H264_ENCODER}"
 
 echo "STEP: generate input ${SIZE}@${RATE} (${DURATION}s)"
 "$FFMPEG_LOCAL" -v error -f lavfi -i "testsrc2=size=${SIZE}:rate=${RATE}:duration=${DURATION}" \
-  -pix_fmt yuv420p -c:v libopenh264 -b:v 4M -g 60 -y "$IN" >"$IN_LOG" 2>&1
+  -pix_fmt "$PIX_FMT" -c:v "$H264_ENCODER" "${ENC_ARGS[@]+"${ENC_ARGS[@]}"}" -b:v 4M -g 60 -y "$IN" >"$IN_LOG" 2>&1
 
 build_remote_args() {
   remote_args=( -vt_remote_host "127.0.0.1:${PORT}" )

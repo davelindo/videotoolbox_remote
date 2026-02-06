@@ -89,11 +89,15 @@ sequenceDiagram
 - `token` (string): Auth token (optional).
 - `codec` (string): Requested codec (e.g., `h264`, `hevc`).
 - `client_name` (string): User-agent string.
+- `build` (string): Client build/version string (freeform).
 
 **HELLO_ACK (Type 2)**
-- `status` (uint32): `0=OK`, `1=Busy`, `2=AuthFail`.
+- `status` (uint8): `0=OK`, `1=Busy`, `2=AuthFail`.
 - `server_name` (string): Server ID.
-- `max_sessions` (uint32): Concurrency limit.
+- `server_version` (string): Server version string (freeform).
+- `caps` (string[]): Capability strings (may be empty).
+- `max_sessions` (uint16): Concurrency limit.
+- `active_sessions` (uint16): Current active sessions.
 
 ### Configuration
 

@@ -7,6 +7,18 @@ public final class VTRClientHandler: @unchecked Sendable {
     public typealias SessionFactory = (@escaping MessageSender) -> CodecSession
     private let sessionFactory: SessionFactory
 
+    private let serverName: String
+    private let serverVersion: String
+    private let serverCapabilities: [String]
+    private let serverSessionSnapshot: () -> (maxSessions: Int, activeSessions: Int)
+
+    private let handshakeTimeoutSeconds: Int
+    private let idleTimeoutSeconds: Int
+    private let maxMessageBytes: Int
+
+    private static let maxHelloBytes: Int = 64 * 1024
+    private static let maxConfigureBytes: Int = 4 * 1024 * 1024
+
     private var codec: VideoCodec = .h264
     private var clientName: String = "unknown"
     private var stats = ClientStats()
@@ -18,11 +30,25 @@ public final class VTRClientHandler: @unchecked Sendable {
         io messageIO: VTRMessageIO,
         expectedToken: String,
         logger: Logger = .shared,
+        handshakeTimeoutSeconds: Int = 10,
+        idleTimeoutSeconds: Int = 60,
+        maxMessageBytes: Int = 256 * 1024 * 1024,
+        serverName: String = "vtremoted",
+        serverVersion: String = "unknown",
+        serverCapabilities: [String] = ["h264", "hevc"],
+        serverSessionSnapshot: @escaping () -> (maxSessions: Int, activeSessions: Int) = { (0, 0) },
         sessionFactory: @escaping SessionFactory = CodecSessionFactory.make
     ) {
         self.messageIO = messageIO
         self.expectedToken = expectedToken
         self.logger = logger
+        self.handshakeTimeoutSeconds = max(1, handshakeTimeoutSeconds)
+        self.idleTimeoutSeconds = max(1, idleTimeoutSeconds)
+        self.maxMessageBytes = max(1, maxMessageBytes)
+        self.serverName = serverName
+        self.serverVersion = serverVersion
+        self.serverCapabilities = serverCapabilities
+        self.serverSessionSnapshot = serverSessionSnapshot
         self.sessionFactory = sessionFactory
     }
 
@@ -43,8 +69,43 @@ public final class VTRClientHandler: @unchecked Sendable {
         }
     }
 
+    private func sendError(code: UInt32, message: String) {
+        let err = ErrorResponse(code: code, message: message)
+        let body = err.encode()
+        stats.bytesOut += Int64(VTRProtocol.headerSize + body.count)
+        // Best-effort: if the socket is already dead, we'll just log on our side.
+        try? messageIO.send(type: .error, body: body)
+    }
+
+    private func readMessageCapped(timeoutSeconds: Int, maxBodyBytes: Int) throws -> (header: VTRMessageHeader, body: Data) {
+        let cap = min(max(1, maxBodyBytes), maxMessageBytes)
+
+        if let streamIO = messageIO as? VTRStreamIO {
+            let header = try streamIO.readHeader(timeoutSeconds: timeoutSeconds)
+            if header.length > UInt32(cap) {
+                sendError(
+                    code: 4,
+                    message: "message too large type=\(header.type) len=\(header.length) cap=\(cap)"
+                )
+                throw VTRemotedError.protocolViolation("message too large")
+            }
+            let body = try streamIO.readBody(length: Int(header.length), pool: inputBufferPool)
+            return (header, body)
+        }
+
+        let (header, body) = try messageIO.readMessage(pool: inputBufferPool, timeoutSeconds: timeoutSeconds)
+        if body.count > cap {
+            sendError(code: 4, message: "message too large type=\(header.type) len=\(body.count) cap=\(cap)")
+            throw VTRemotedError.protocolViolation("message too large")
+        }
+        return (header, body)
+    }
+
     private func handshake() throws {
-        let (header, payload) = try messageIO.readMessage(pool: inputBufferPool, timeoutSeconds: 10)
+        let (header, payload) = try readMessageCapped(
+            timeoutSeconds: handshakeTimeoutSeconds,
+            maxBodyBytes: Self.maxHelloBytes
+        )
         defer { inputBufferPool.return(payload) }
         stats.bytesIn += Int64(VTRProtocol.headerSize + payload.count)
         guard header.type == VTRMessageType.hello.rawValue else {
@@ -58,7 +119,15 @@ public final class VTRClientHandler: @unchecked Sendable {
         let authed = !requireToken || (hello.token == expectedToken)
         let status: UInt8 = authed ? 0 : 2
 
-        let ack = HelloAckResponse(status: status, supportedCodecs: ["h264", "hevc"], warnings: 0)
+        let snapshot = serverSessionSnapshot()
+        let ack = HelloAckResponse(
+            status: status,
+            serverName: serverName,
+            serverVersion: serverVersion,
+            capabilities: serverCapabilities,
+            maxSessions: UInt16(clamping: snapshot.maxSessions),
+            activeSessions: UInt16(clamping: snapshot.activeSessions)
+        )
         let ackBody = ack.encode()
         stats.bytesOut += Int64(VTRProtocol.headerSize + ackBody.count)
         try messageIO.send(type: .helloAck, body: ackBody)
@@ -71,7 +140,10 @@ public final class VTRClientHandler: @unchecked Sendable {
     }
 
     private func configure() throws {
-        let (header, payload) = try messageIO.readMessage(pool: inputBufferPool, timeoutSeconds: 10)
+        let (header, payload) = try readMessageCapped(
+            timeoutSeconds: handshakeTimeoutSeconds,
+            maxBodyBytes: Self.maxConfigureBytes
+        )
         defer { inputBufferPool.return(payload) }
         stats.bytesIn += Int64(VTRProtocol.headerSize + payload.count)
         guard header.type == VTRMessageType.configure.rawValue else {
@@ -170,7 +242,14 @@ public final class VTRClientHandler: @unchecked Sendable {
         // Prefer streaming reads when available to avoid materializing large FRAME payloads.
         if let streamIO = messageIO as? VTRStreamIO {
             while true {
-                let header = try streamIO.readHeader(timeoutSeconds: 10)
+                let header = try streamIO.readHeader(timeoutSeconds: idleTimeoutSeconds)
+                if header.length > UInt32(maxMessageBytes) {
+                    sendError(
+                        code: 4,
+                        message: "message too large type=\(header.type) len=\(header.length) cap=\(maxMessageBytes)"
+                    )
+                    throw VTRemotedError.protocolViolation("message too large")
+                }
                 stats.bytesIn += Int64(VTRProtocol.headerSize) + Int64(header.length)
                 stats.maybeReport(mode: configuration.mode, logger: logger, intervalSeconds: 0.25)
 
@@ -210,7 +289,12 @@ public final class VTRClientHandler: @unchecked Sendable {
         }
 
         while true {
-            let (header, payload) = try messageIO.readMessage(pool: inputBufferPool, timeoutSeconds: 10)
+            let (header, payload) = try messageIO.readMessage(pool: inputBufferPool, timeoutSeconds: idleTimeoutSeconds)
+            if payload.count > maxMessageBytes {
+                inputBufferPool.return(payload)
+                sendError(code: 4, message: "message too large type=\(header.type) len=\(payload.count) cap=\(maxMessageBytes)")
+                throw VTRemotedError.protocolViolation("message too large")
+            }
             stats.bytesIn += Int64(VTRProtocol.headerSize + payload.count)
             stats.maybeReport(mode: configuration.mode, logger: logger, intervalSeconds: 0.25)
             guard let type = VTRMessageType(rawValue: header.type) else {

@@ -1,20 +1,72 @@
 import Foundation
 
+private final class VTRSessionLimiter: @unchecked Sendable {
+    private let semaphore: DispatchSemaphore
+    private let lock = NSLock()
+    private(set) var activeSessions: Int = 0
+    let maxSessions: Int
+
+    init(maxSessions: Int) {
+        self.maxSessions = max(1, maxSessions)
+        semaphore = DispatchSemaphore(value: self.maxSessions)
+    }
+
+    func tryAcquire() -> Bool {
+        if semaphore.wait(timeout: .now()) == .success {
+            lock.lock()
+            activeSessions += 1
+            lock.unlock()
+            return true
+        }
+        return false
+    }
+
+    func release() {
+        lock.lock()
+        activeSessions = max(0, activeSessions - 1)
+        lock.unlock()
+        semaphore.signal()
+    }
+
+    func snapshot() -> (maxSessions: Int, activeSessions: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (maxSessions: maxSessions, activeSessions: activeSessions)
+    }
+}
+
 public final class VTRServer {
     private let listenAddress: String
-    private let expectedToken: String
+    private let tokenArg: String
+    private let tokenFile: String
+    private let tokenEnv: String
     private let once: Bool
     private let logger: Logger
+    private let maxSessions: Int
+    private let handshakeTimeoutSeconds: Int
+    private let idleTimeoutSeconds: Int
+    private let maxMessageBytes: Int
 
     public init(arguments: Arguments, logger: Logger = .shared) {
         listenAddress = arguments.listen
-        expectedToken = arguments.token
+        tokenArg = arguments.token
+        tokenFile = arguments.tokenFile
+        tokenEnv = arguments.tokenEnv
         once = arguments.once
         self.logger = logger
+        maxSessions = max(1, arguments.maxSessions)
+        handshakeTimeoutSeconds = max(1, arguments.handshakeTimeoutSeconds)
+        idleTimeoutSeconds = max(1, arguments.idleTimeoutSeconds)
+        maxMessageBytes = max(1, arguments.maxMessageBytes)
     }
 
     public func run() throws {
         let (ipAddress, port) = try parseListenAddress(listenAddress)
+        let expectedToken = try resolveExpectedToken()
+        let limiter = VTRSessionLimiter(maxSessions: maxSessions)
+        let serverName = "vtremoted"
+        let serverVersion = ProcessInfo.processInfo.environment["VTREMOTED_VERSION"] ?? "unknown"
+        let serverCapabilities = ["h264", "hevc"]
 
         #if os(Linux)
             let socketType = Int32(SOCK_STREAM.rawValue)
@@ -88,26 +140,129 @@ public final class VTRServer {
                                socklen_t(MemoryLayout.size(ofValue: notSentLowat)))
             }
 
-            logger.info("ACCEPT fd=\(clientFd)")
+            if !limiter.tryAcquire() {
+                rejectBusy(
+                    fd: clientFd,
+                    serverName: serverName,
+                    serverVersion: serverVersion,
+                    serverCapabilities: serverCapabilities,
+                    limiter: limiter
+                )
+                continue
+            }
+
+            let snap = limiter.snapshot()
+            logger.info("ACCEPT fd=\(clientFd) active=\(snap.activeSessions)/\(snap.maxSessions)")
             if once {
-                handleClient(fd: clientFd)
+                handleClient(
+                    fd: clientFd,
+                    expectedToken: expectedToken,
+                    serverName: serverName,
+                    serverVersion: serverVersion,
+                    serverCapabilities: serverCapabilities,
+                    limiter: limiter
+                )
                 return
             }
             let token = expectedToken
+            let logger = logger
+            let handshakeTimeoutSeconds = handshakeTimeoutSeconds
+            let idleTimeoutSeconds = idleTimeoutSeconds
+            let maxMessageBytes = maxMessageBytes
             DispatchQueue.global().async {
+                defer {
+                    limiter.release()
+                    close(clientFd)
+                }
                 let connection = VTRWireConnection(fd: clientFd)
-                let handler = VTRClientHandler(io: connection, expectedToken: token)
+                let handler = VTRClientHandler(
+                    io: connection,
+                    expectedToken: token,
+                    logger: logger,
+                    handshakeTimeoutSeconds: handshakeTimeoutSeconds,
+                    idleTimeoutSeconds: idleTimeoutSeconds,
+                    maxMessageBytes: maxMessageBytes,
+                    serverName: serverName,
+                    serverVersion: serverVersion,
+                    serverCapabilities: serverCapabilities,
+                    serverSessionSnapshot: { limiter.snapshot() }
+                )
                 handler.run()
-                close(clientFd)
             }
         }
     }
 
-    private func handleClient(fd clientFd: Int32) {
+    private func handleClient(
+        fd clientFd: Int32,
+        expectedToken: String,
+        serverName: String,
+        serverVersion: String,
+        serverCapabilities: [String],
+        limiter: VTRSessionLimiter
+    ) {
+        defer {
+            limiter.release()
+            close(clientFd)
+        }
         let connection = VTRWireConnection(fd: clientFd)
-        let handler = VTRClientHandler(io: connection, expectedToken: expectedToken, logger: logger)
+        let handler = VTRClientHandler(
+            io: connection,
+            expectedToken: expectedToken,
+            logger: logger,
+            handshakeTimeoutSeconds: handshakeTimeoutSeconds,
+            idleTimeoutSeconds: idleTimeoutSeconds,
+            maxMessageBytes: maxMessageBytes,
+            serverName: serverName,
+            serverVersion: serverVersion,
+            serverCapabilities: serverCapabilities,
+            serverSessionSnapshot: { limiter.snapshot() }
+        )
         handler.run()
-        close(clientFd)
+    }
+
+    private func rejectBusy(
+        fd clientFd: Int32,
+        serverName: String,
+        serverVersion: String,
+        serverCapabilities: [String],
+        limiter: VTRSessionLimiter
+    ) {
+        defer { close(clientFd) }
+        let snap = limiter.snapshot()
+        let ack = HelloAckResponse(
+            status: 1, // busy
+            serverName: serverName,
+            serverVersion: serverVersion,
+            capabilities: serverCapabilities,
+            maxSessions: UInt16(clamping: snap.maxSessions),
+            activeSessions: UInt16(clamping: snap.activeSessions)
+        )
+        let body = ack.encode()
+        let connection = VTRWireConnection(fd: clientFd)
+        try? connection.send(type: .helloAck, body: body)
+    }
+
+    private func resolveExpectedToken() throws -> String {
+        if !tokenArg.isEmpty {
+            return tokenArg
+        }
+        if !tokenFile.isEmpty {
+            let token = try String(contentsOfFile: tokenFile, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if token.isEmpty {
+                throw VTRemotedError.protocolViolation("token-file is empty")
+            }
+            return token
+        }
+        if !tokenEnv.isEmpty {
+            let token = (ProcessInfo.processInfo.environment[tokenEnv] ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if token.isEmpty {
+                throw VTRemotedError.protocolViolation("token-env \(tokenEnv) is not set")
+            }
+            return token
+        }
+        return ""
     }
 
     private func parseListenAddress(_ addressString: String) throws -> (ip: String, port: UInt16) {

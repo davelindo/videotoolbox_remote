@@ -19,22 +19,23 @@ public struct HelloRequest: Equatable, Sendable {
 
 public struct HelloAckResponse: Equatable, Sendable {
     public var status: UInt8
-    public var supportedCodecs: [String]
-    public var warnings: UInt8
+    public var serverName: String
+    public var serverVersion: String
+    public var capabilities: [String]
+    public var maxSessions: UInt16
+    public var activeSessions: UInt16
 
     public func encode() -> Data {
         var writer = ByteWriter()
         writer.write(status)
-        // reserved for future fields (kept for wire compatibility)
-        writer.writeBE(UInt16(0))
-        writer.writeBE(UInt16(0))
-        writer.write(UInt8(UInt8(clamping: supportedCodecs.count)))
-        for codec in supportedCodecs {
-            writer.writeLengthPrefixedUTF8(codec)
+        writer.writeLengthPrefixedUTF8(serverName)
+        writer.writeLengthPrefixedUTF8(serverVersion)
+        writer.write(UInt8(UInt8(clamping: capabilities.count)))
+        for cap in capabilities {
+            writer.writeLengthPrefixedUTF8(cap)
         }
-        // Keep parity with legacy vtremoted: nal length size + something reserved.
-        writer.writeBE(UInt16(4))
-        writer.writeBE(UInt16(1))
+        writer.writeBE(maxSessions)
+        writer.writeBE(activeSessions)
         return writer.data
     }
 }

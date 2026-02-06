@@ -42,10 +42,14 @@ FFMPEG_CONFIGURE_FLAGS ?= --enable-videotoolbox-remote --enable-libzstd --disabl
 endif
 JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 2)
 
-VTREMOTED_LISTEN ?= 0.0.0.0:5555
+VTREMOTED_LISTEN ?= 127.0.0.1:5555
 VTREMOTED_LOG_LEVEL ?= 1
 VTREMOTED_TOKEN ?=
 VTREMOTED_SYSTEM ?=
+
+# SwiftPM uses macOS sandboxing by default (sandbox-exec). In sandboxed environments (e.g. some CI runners
+# and Codex), sandbox-exec can fail with "Operation not permitted". Allow overriding to re-enable.
+SWIFT_BUILD_SANDBOX_FLAGS ?= --disable-sandbox
 
 .PHONY: build build-ffmpeg build-vtremoted install install-ffmpeg install-vtremoted clean clean-ffmpeg clean-vtremoted
 .SILENT: build-ffmpeg
@@ -154,7 +158,7 @@ ifeq ($(IS_DARWIN),Darwin)
 	if [ -n "$(SDKROOT)" ]; then export SDKROOT="$(SDKROOT)"; fi; \
 	if [ -n "$(PKG_CONFIG)" ]; then export PKG_CONFIG="$(PKG_CONFIG)"; fi; \
 	if [ -n "$(PKG_CONFIG_PATH)" ]; then export PKG_CONFIG_PATH="$(PKG_CONFIG_PATH)"; fi; \
-	PATH="$$path" swift build -c release
+	PATH="$$path" swift build -c release $(SWIFT_BUILD_SANDBOX_FLAGS)
 else
 	@echo "Skipping vtremoted build (not macOS)"
 endif
@@ -184,7 +188,7 @@ clean-ffmpeg:
 
 clean-vtremoted:
 ifeq ($(IS_DARWIN),Darwin)
-	@cd $(VTREMOTED_DIR) && swift package clean
+	@cd $(VTREMOTED_DIR) && swift package clean $(SWIFT_BUILD_SANDBOX_FLAGS)
 else
 	@echo "Skipping vtremoted clean (not macOS)"
 endif

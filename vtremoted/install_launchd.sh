@@ -2,16 +2,23 @@
 set -euo pipefail
 
 LABEL="${LABEL:-com.davelindon.vtremoted}"
-LISTEN="${LISTEN:-0.0.0.0:5555}"
+LISTEN="${LISTEN:-127.0.0.1:5555}"
 TOKEN="${TOKEN:-}"
+TOKEN_FILE="${TOKEN_FILE:-}"
+TOKEN_ENV="${TOKEN_ENV:-}"
 LOG_LEVEL="${LOG_LEVEL:-1}"
 BIN="${BIN:-/usr/local/bin/vtremoted}"
+MAX_SESSIONS="${MAX_SESSIONS:-}"
+HANDSHAKE_TIMEOUT="${HANDSHAKE_TIMEOUT:-}"
+IDLE_TIMEOUT="${IDLE_TIMEOUT:-}"
+MAX_MESSAGE_BYTES="${MAX_MESSAGE_BYTES:-}"
 SYSTEM=0
 UNINSTALL=0
 
 usage() {
   cat <<EOF
 Usage: $0 [--bin /path/to/vtremoted] [--listen host:port] [--token TOKEN] [--log-level N] [--system] [--uninstall]
+          [--token-file PATH] [--token-env VAR] [--max-sessions N] [--handshake-timeout S] [--idle-timeout S] [--max-message-bytes N]
 
 Defaults:
   --bin       $BIN
@@ -20,7 +27,7 @@ Defaults:
   --token     (empty; auth disabled)
 
 Environment overrides:
-  LABEL, LISTEN, TOKEN, LOG_LEVEL, BIN
+  LABEL, LISTEN, TOKEN, TOKEN_FILE, TOKEN_ENV, LOG_LEVEL, BIN, MAX_SESSIONS, HANDSHAKE_TIMEOUT, IDLE_TIMEOUT, MAX_MESSAGE_BYTES
 EOF
 }
 
@@ -29,6 +36,12 @@ while [[ $# -gt 0 ]]; do
     --bin) BIN="$2"; shift 2 ;;
     --listen) LISTEN="$2"; shift 2 ;;
     --token) TOKEN="$2"; shift 2 ;;
+    --token-file) TOKEN_FILE="$2"; shift 2 ;;
+    --token-env) TOKEN_ENV="$2"; shift 2 ;;
+    --max-sessions) MAX_SESSIONS="$2"; shift 2 ;;
+    --handshake-timeout) HANDSHAKE_TIMEOUT="$2"; shift 2 ;;
+    --idle-timeout) IDLE_TIMEOUT="$2"; shift 2 ;;
+    --max-message-bytes) MAX_MESSAGE_BYTES="$2"; shift 2 ;;
     --log-level) LOG_LEVEL="$2"; shift 2 ;;
     --label) LABEL="$2"; shift 2 ;;
     --system) SYSTEM=1; shift ;;
@@ -83,6 +96,24 @@ $SUDO mkdir -p "$PLIST_DIR" "$LOG_DIR"
 ARGS=( "$BIN" "--listen" "$LISTEN" "--log-level" "$LOG_LEVEL" )
 if [[ -n "$TOKEN" ]]; then
   ARGS+=( "--token" "$TOKEN" )
+fi
+if [[ -n "$TOKEN_FILE" ]]; then
+  ARGS+=( "--token-file" "$TOKEN_FILE" )
+fi
+if [[ -n "$TOKEN_ENV" ]]; then
+  ARGS+=( "--token-env" "$TOKEN_ENV" )
+fi
+if [[ -n "$MAX_SESSIONS" ]]; then
+  ARGS+=( "--max-sessions" "$MAX_SESSIONS" )
+fi
+if [[ -n "$HANDSHAKE_TIMEOUT" ]]; then
+  ARGS+=( "--handshake-timeout" "$HANDSHAKE_TIMEOUT" )
+fi
+if [[ -n "$IDLE_TIMEOUT" ]]; then
+  ARGS+=( "--idle-timeout" "$IDLE_TIMEOUT" )
+fi
+if [[ -n "$MAX_MESSAGE_BYTES" ]]; then
+  ARGS+=( "--max-message-bytes" "$MAX_MESSAGE_BYTES" )
 fi
 
 {

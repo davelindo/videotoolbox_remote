@@ -32,6 +32,7 @@ Follow these steps to set up the macOS server and build the FFmpeg client.
 
 4.  **Run the server**:
     ```bash
+    # Default is loopback-only (safe). For LAN clients, bind explicitly:
     vtremoted/.build/release/vtremoted --listen 0.0.0.0:5555 --log-level 1
     ```
 

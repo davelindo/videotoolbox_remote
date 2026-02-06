@@ -13,7 +13,7 @@ title: Security
 
 The server supports a simple token-based authentication mechanism.
 
-- **Server**: Start with `--token <secret>`
+- **Server**: Start with `--token-file <path>` (recommended) or `--token <secret>`
 - **Client**: Run with `-vt_remote_token <secret>`
 
 > [!WARNING]

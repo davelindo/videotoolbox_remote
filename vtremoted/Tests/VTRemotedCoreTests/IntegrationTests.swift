@@ -240,15 +240,17 @@ final class IntegrationTests: XCTestCase {
             return writer.data
         }
         
-        // Send frames with some duplicates to simulate VideoToolbox behavior
-        // Unique PTS: 1000, 1001, 1002 (plus duplicates that should be skipped)
+        // Send frames with some duplicates to simulate VideoToolbox behavior.
+        //
+        // In the no-reorder case (max_b_frames=0), the TimestampTracker enforces monotonic DTS/PTS.
+        // Duplicate PTS inputs are not dropped; they are adjusted upward to preserve muxer-safe monotonicity.
         let fakeIO = FakeIO(incoming: [
             (.hello, helloPayload),
             (.configure, configurePayload),
             (.frame, makeFrame(pts: 1000)),
-            (.frame, makeFrame(pts: 1000)), // Duplicate - should be skipped
+            (.frame, makeFrame(pts: 1000)), // Duplicate - should be adjusted
             (.frame, makeFrame(pts: 1001)),
-            (.frame, makeFrame(pts: 1001)), // Duplicate - should be skipped
+            (.frame, makeFrame(pts: 1001)), // Duplicate - should be adjusted
             (.frame, makeFrame(pts: 1002)),
             (.flush, Data())
         ])
@@ -261,9 +263,9 @@ final class IntegrationTests: XCTestCase {
         )
         handler.run()
         
-        // Verify duplicates were skipped - only 3 unique packets
+        // Verify we emitted a PACKET for every FRAME message (duplicates are adjusted, not dropped).
         let packets = fakeIO.sent.filter { $0.0 == .packet }
-        XCTAssertEqual(packets.count, 3, "Expected 3 PACKET messages (duplicates should be skipped)")
+        XCTAssertEqual(packets.count, 5, "Expected 5 PACKET messages (duplicates should be adjusted)")
         
         // Extract DTS from each packet and verify monotonicity
         var dtsValues: [Int64] = []
@@ -275,7 +277,7 @@ final class IntegrationTests: XCTestCase {
         }
         
         // Verify DTS is strictly monotonically increasing
-        XCTAssertEqual(dtsValues.count, 3, "Should have 3 DTS values")
+        XCTAssertEqual(dtsValues.count, packets.count, "Should have one DTS value per packet")
         for idx in 1 ..< dtsValues.count {
             XCTAssertGreaterThan(dtsValues[idx], dtsValues[idx - 1],
                 "DTS must be strictly monotonically increasing. Got: \(dtsValues)")
