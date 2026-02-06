@@ -215,7 +215,7 @@ jobs:
       - name: Build libvmaf (Linux)
         if: runner.os == 'Linux'
         run: |
-          git clone --depth=1 https://github.com/Netflix/vmaf.git
+          git clone --depth=1 --branch v3.0.0 https://github.com/Netflix/vmaf.git
           cd vmaf/libvmaf
           meson setup build --buildtype release --prefix=/usr/local
           ninja -C build
