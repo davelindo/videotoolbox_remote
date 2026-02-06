@@ -206,11 +206,21 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y yasm nasm pkg-config liblz4-dev libzstd-dev ccache \
-            libvmaf-dev libaom-dev libdav1d-dev libsvtav1-dev \
+          sudo apt-get install -y yasm nasm pkg-config meson ninja-build liblz4-dev libzstd-dev ccache \
+            libaom-dev libdav1d-dev libsvtav1-dev \
             libopus-dev libvorbis-dev libmp3lame-dev libx264-dev libx265-dev libvpx-dev \
             libass-dev libfreetype6-dev libfontconfig1-dev libfribidi-dev libharfbuzz-dev \
             libxml2-dev libzimg-dev libwebp-dev libsdl2-dev
+
+      - name: Build libvmaf (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          git clone --depth=1 https://github.com/Netflix/vmaf.git
+          cd vmaf/libvmaf
+          meson setup build --buildtype release --prefix=/usr/local
+          ninja -C build
+          sudo ninja -C build install
+          sudo ldconfig
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
@@ -279,6 +289,7 @@ jobs:
           else
             export CC="ccache gcc"
             export CXX="ccache g++"
+            export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig:${PKG_CONFIG_PATH}"
           fi
           make build-ffmpeg
           ccache -s
