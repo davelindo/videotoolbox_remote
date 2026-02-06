@@ -206,8 +206,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y yasm nasm pkg-config meson ninja-build liblz4-dev libzstd-dev ccache \
-            libaom-dev libdav1d-dev libsvtav1-dev \
+          sudo apt-get install -y yasm nasm pkg-config meson ninja-build cmake liblz4-dev libzstd-dev ccache \
+            libaom-dev libdav1d-dev \
             libopus-dev libvorbis-dev libmp3lame-dev libx264-dev libx265-dev libvpx-dev \
             libass-dev libfreetype6-dev libfontconfig1-dev libfribidi-dev libharfbuzz-dev \
             libxml2-dev libzimg-dev libwebp-dev libsdl2-dev
@@ -220,6 +220,18 @@ jobs:
           meson setup build --buildtype release --prefix=/usr/local
           ninja -C build
           sudo ninja -C build install
+          sudo ldconfig
+
+      - name: Build SVT-AV1 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          git clone --depth=1 --branch v4.0.1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
+          cmake -S SVT-AV1 -B svtav1-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DBUILD_SHARED_LIBS=ON
+          ninja -C svtav1-build
+          sudo ninja -C svtav1-build install
           sudo ldconfig
 
       - name: Install dependencies (macOS)
