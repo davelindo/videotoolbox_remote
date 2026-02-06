@@ -516,8 +516,25 @@ static int vtremote_send_msg_blocking(VTRemoteEncContext *s, int msg_type,
   return 0;
 }
 
-static int vtremote_sendq_enqueue(VTRemoteEncContext *s, int msg_type,
-                                  VTRemoteWBuf *payload, int is_frame) {
+static void vtremote_sendbuf_reset(VTRemoteSendBuf *slot) {
+  if (!slot)
+    return;
+  av_frame_free(&slot->frame_ref);
+  av_freep(&slot->owned_plane[0]);
+  av_freep(&slot->owned_plane[1]);
+  slot->owned_plane_size[0] = slot->owned_plane_size[1] = 0;
+  av_freep(&slot->owned_side_data);
+  slot->owned_side_data_size = 0;
+
+  slot->seg_count = 0;
+  slot->seg_index = 0;
+  slot->seg_offset = 0;
+  slot->is_frame = 0;
+  slot->enqueue_us = 0;
+}
+
+static int vtremote_sendq_enqueue_empty(VTRemoteEncContext *s, int msg_type,
+                                       int is_frame) {
   if (!s || !s->send_queue)
     return AVERROR(EINVAL);
   if (s->send_q_count >= s->send_q_size)
@@ -525,32 +542,27 @@ static int vtremote_sendq_enqueue(VTRemoteEncContext *s, int msg_type,
   if (is_frame && (s->queued_frames + s->inflight_frames) >= s->inflight)
     return AVERROR(EAGAIN);
 
-  const uint32_t payload_size = payload ? (uint32_t)payload->size : 0;
-  const int total_size = VTREMOTE_HEADER_SIZE + (int)payload_size;
-  uint8_t *buf = av_malloc(total_size);
-  if (!buf)
-    return AVERROR(ENOMEM);
+  VTRemoteSendBuf *slot = &s->send_queue[s->send_q_tail];
+  vtremote_sendbuf_reset(slot);
 
   VTRemoteMsgHeader hdr = {
       .magic = VTREMOTE_PROTO_MAGIC,
       .version = VTREMOTE_PROTO_VERSION,
       .type = msg_type,
-      .length = payload_size,
+      .length = 0,
   };
-  int ret = vtremote_write_header(buf, VTREMOTE_HEADER_SIZE, &hdr);
-  if (ret < 0) {
-    av_free(buf);
+  int ret = vtremote_write_header(slot->header, sizeof(slot->header), &hdr);
+  if (ret < 0)
     return ret;
-  }
-  if (payload_size)
-    memcpy(buf + VTREMOTE_HEADER_SIZE, payload->data, payload_size);
 
-  VTRemoteSendBuf *slot = &s->send_queue[s->send_q_tail];
-  slot->data = buf;
-  slot->size = total_size;
-  slot->offset = 0;
+  slot->segs[0] = slot->header;
+  slot->seg_lens[0] = VTREMOTE_HEADER_SIZE;
+  slot->seg_count = 1;
+  slot->seg_index = 0;
+  slot->seg_offset = 0;
   slot->is_frame = is_frame;
   slot->enqueue_us = av_gettime_relative();
+
   s->send_q_tail = (s->send_q_tail + 1) % s->send_q_size;
   s->send_q_count++;
   if (is_frame)
@@ -558,14 +570,218 @@ static int vtremote_sendq_enqueue(VTRemoteEncContext *s, int msg_type,
   return 0;
 }
 
+static int vtremote_sendq_enqueue_frame(AVCodecContext *avctx, VTRemoteEncContext *s,
+                                       const AVFrame *frame,
+                                       const uint8_t *const *planes,
+                                       const uint32_t *strides,
+                                       const uint32_t *heights,
+                                       const uint32_t *sizes,
+                                       const VTRemoteSideData *sd,
+                                       int sd_count) {
+  if (!s || !s->send_queue || !frame || !planes || !strides || !heights || !sizes)
+    return AVERROR(EINVAL);
+  if (s->send_q_count >= s->send_q_size)
+    return AVERROR(EAGAIN);
+  if ((s->queued_frames + s->inflight_frames) >= s->inflight)
+    return AVERROR(EAGAIN);
+
+  const uint8_t *send_planes[2] = {planes[0], planes[1]};
+  uint32_t send_sizes[2] = {sizes[0], sizes[1]};
+
+  VTRemoteSendBuf *slot = &s->send_queue[s->send_q_tail];
+  vtremote_sendbuf_reset(slot);
+
+  int ret = 0;
+
+#define FAIL(code)           \
+  do {                       \
+    ret = (code);            \
+    goto fail;               \
+  } while (0)
+
+  if (s->wire_compression == 1 || s->wire_compression == 2) {
+    if (s->wire_compression == 2) {
+      int zret = configure_zstd_ctx(avctx, s, (int)sizes[0]);
+      if (zret < 0)
+        FAIL(zret);
+    }
+
+    for (int i = 0; i < 2; i++) {
+      const int src_size = (int)sizes[i];
+      size_t bound;
+      if (s->wire_compression == 1) {
+        bound = (size_t)LZ4_compressBound(src_size);
+      } else {
+        bound = ZSTD_compressBound(src_size);
+      }
+      if (bound <= 0)
+        FAIL(AVERROR_EXTERNAL);
+
+      uint8_t *out = av_malloc(bound);
+      if (!out)
+        FAIL(AVERROR(ENOMEM));
+
+      size_t out_size = 0;
+      if (s->wire_compression == 1) {
+        int wrote = LZ4_compress_default((const char *)planes[i], (char *)out,
+                                         src_size, (int)bound);
+        if (wrote <= 0) {
+          av_freep(&out);
+          FAIL(AVERROR_EXTERNAL);
+        }
+        out_size = (size_t)wrote;
+      } else {
+        size_t wrote = ZSTD_compress2(s->zstd_cctx, out, bound, planes[i], src_size);
+        if (ZSTD_isError(wrote)) {
+          av_log(avctx, AV_LOG_ERROR, "Zstd compress failed: %s\n",
+                 ZSTD_getErrorName(wrote));
+          av_freep(&out);
+          FAIL(AVERROR_EXTERNAL);
+        }
+        out_size = wrote;
+      }
+
+      // Shrink to fit to keep queue memory bounded.
+      uint8_t *shrunk = av_realloc(out, out_size);
+      if (shrunk)
+        out = shrunk;
+
+      slot->owned_plane[i] = out;
+      slot->owned_plane_size[i] = (int)out_size;
+      send_planes[i] = out;
+      send_sizes[i] = (uint32_t)out_size;
+    }
+  } else {
+    // Uncompressed: keep the frame alive until the queued send completes.
+    slot->frame_ref = av_frame_alloc();
+    if (!slot->frame_ref)
+      FAIL(AVERROR(ENOMEM));
+    ret = av_frame_ref(slot->frame_ref, frame);
+    if (ret < 0)
+      FAIL(ret);
+    send_planes[0] = slot->frame_ref->data[0];
+    send_planes[1] = slot->frame_ref->data[1];
+  }
+
+  if (!send_planes[0] || !send_planes[1] || send_sizes[0] == 0 || send_sizes[1] == 0) {
+    FAIL(AVERROR(EINVAL));
+  }
+
+  // Pack optional side data into a single owned blob to keep segment count small.
+  if (sd_count > 0 && sd) {
+    int64_t side_len = 1; // count
+    for (int i = 0; i < sd_count; i++) {
+      side_len += 8 + (int64_t)sd[i].size;
+    }
+    if (side_len > INT_MAX)
+      FAIL(AVERROR(ENOMEM));
+    slot->owned_side_data = av_malloc((size_t)side_len);
+    if (!slot->owned_side_data)
+      FAIL(AVERROR(ENOMEM));
+    slot->owned_side_data_size = (int)side_len;
+
+    uint8_t *p = slot->owned_side_data;
+    *p++ = (uint8_t)sd_count;
+    for (int i = 0; i < sd_count; i++) {
+      AV_WB32(p, sd[i].type);
+      p += 4;
+      AV_WB32(p, sd[i].size);
+      p += 4;
+      if (sd[i].size && sd[i].data) {
+        memcpy(p, sd[i].data, sd[i].size);
+        p += sd[i].size;
+      }
+    }
+  }
+
+  // Build frame payload meta (v1 wire format).
+  uint8_t *m = slot->frame_meta;
+  AV_WB64(m, (uint64_t)frame->pts);
+  m += 8;
+  AV_WB64(m, (uint64_t)frame->duration);
+  m += 8;
+  AV_WB32(m, frame->pict_type == AV_PICTURE_TYPE_I ? 1U : 0U);
+  m += 4;
+  *m++ = 2; // plane count
+
+  AV_WB32(slot->plane_meta[0] + 0, strides[0]);
+  AV_WB32(slot->plane_meta[0] + 4, heights[0]);
+  AV_WB32(slot->plane_meta[0] + 8, send_sizes[0]);
+
+  AV_WB32(slot->plane_meta[1] + 0, strides[1]);
+  AV_WB32(slot->plane_meta[1] + 4, heights[1]);
+  AV_WB32(slot->plane_meta[1] + 8, send_sizes[1]);
+
+  uint32_t payload_len = 21 + 24 + send_sizes[0] + send_sizes[1];
+  if (slot->owned_side_data)
+    payload_len += (uint32_t)slot->owned_side_data_size;
+
+  VTRemoteMsgHeader hdr = {
+      .magic = VTREMOTE_PROTO_MAGIC,
+      .version = VTREMOTE_PROTO_VERSION,
+      .type = VTREMOTE_MSG_FRAME,
+      .length = payload_len,
+  };
+  ret = vtremote_write_header(slot->header, sizeof(slot->header), &hdr);
+  if (ret < 0)
+    FAIL(ret);
+
+  int seg = 0;
+  slot->segs[seg] = slot->header;
+  slot->seg_lens[seg++] = VTREMOTE_HEADER_SIZE;
+
+  slot->segs[seg] = slot->frame_meta;
+  slot->seg_lens[seg++] = 21;
+
+  slot->segs[seg] = slot->plane_meta[0];
+  slot->seg_lens[seg++] = 12;
+  slot->segs[seg] = send_planes[0];
+  slot->seg_lens[seg++] = (int)send_sizes[0];
+
+  slot->segs[seg] = slot->plane_meta[1];
+  slot->seg_lens[seg++] = 12;
+  slot->segs[seg] = send_planes[1];
+  slot->seg_lens[seg++] = (int)send_sizes[1];
+
+  if (slot->owned_side_data) {
+    slot->segs[seg] = slot->owned_side_data;
+    slot->seg_lens[seg++] = slot->owned_side_data_size;
+  }
+
+  if (seg > VTREMOTE_SEND_MAX_SEGS) {
+    FAIL(AVERROR_BUG);
+  }
+
+  slot->seg_count = seg;
+  slot->seg_index = 0;
+  slot->seg_offset = 0;
+  slot->is_frame = 1;
+  slot->enqueue_us = av_gettime_relative();
+
+  s->send_q_tail = (s->send_q_tail + 1) % s->send_q_size;
+  s->send_q_count++;
+  s->queued_frames++;
+
+  return 0;
+
+fail:
+  vtremote_sendbuf_reset(slot);
+  return ret;
+
+#undef FAIL
+}
+
 static int vtremote_sendq_pump(AVCodecContext *avctx, int blocking) {
   VTRemoteEncContext *s = avctx->priv_data;
   int flags = blocking ? 0 : MSG_DONTWAIT;
   while (s->send_q_count > 0) {
     VTRemoteSendBuf *slot = &s->send_queue[s->send_q_head];
-    while (slot->offset < slot->size) {
-      int r = (int)send(s->fd, slot->data + slot->offset,
-                        slot->size - slot->offset, flags);
+    while (slot->seg_index < slot->seg_count) {
+      const uint8_t *base = slot->segs[slot->seg_index];
+      const int len = slot->seg_lens[slot->seg_index];
+      const uint8_t *ptr = base + slot->seg_offset;
+      const int to_send = len - slot->seg_offset;
+      int r = (int)send(s->fd, ptr, to_send, flags);
       if (r < 0) {
         int err = vtremote_sock_errno();
 #if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
@@ -582,8 +798,12 @@ static int vtremote_sendq_pump(AVCodecContext *avctx, int blocking) {
       }
       if (r == 0)
         return AVERROR(EPIPE);
-      slot->offset += r;
+      slot->seg_offset += r;
       s->bytes_sent += r;
+      if (slot->seg_offset >= len) {
+        slot->seg_index++;
+        slot->seg_offset = 0;
+      }
     }
 
     if (slot->is_frame) {
@@ -602,11 +822,7 @@ static int vtremote_sendq_pump(AVCodecContext *avctx, int blocking) {
         s->queued_frames--;
     }
 
-    av_freep(&slot->data);
-    slot->size = 0;
-    slot->offset = 0;
-    slot->is_frame = 0;
-    slot->enqueue_us = 0;
+    vtremote_sendbuf_reset(slot);
     s->send_q_head = (s->send_q_head + 1) % s->send_q_size;
     s->send_q_count--;
   }
@@ -685,8 +901,7 @@ static int vtremote_drain_available_packets(AVCodecContext *avctx) {
       s->done = 1;
       return packets_read;
     case VTREMOTE_MSG_PING: {
-      VTRemoteWBuf empty = {0};
-      vtremote_sendq_enqueue(s, VTREMOTE_MSG_PONG, &empty, 0);
+      vtremote_sendq_enqueue_empty(s, VTREMOTE_MSG_PONG, 0);
       vtremote_sendq_pump(avctx, 0);
       av_free(payload);
       break;
@@ -1398,7 +1613,7 @@ int ff_vtremote_common_init(AVCodecContext *avctx) {
     vtremote_net_close();
     if (s->send_queue) {
       for (int i = 0; i < s->send_q_size; i++)
-        av_freep(&s->send_queue[i].data);
+        vtremote_sendbuf_reset(&s->send_queue[i]);
       av_freep(&s->send_queue);
       s->send_q_size = 0;
       s->send_q_head = 0;
@@ -1431,7 +1646,7 @@ int ff_vtremote_common_close(AVCodecContext *avctx) {
   }
   if (s->send_queue) {
     for (int i = 0; i < s->send_q_size; i++)
-      av_freep(&s->send_queue[i].data);
+      vtremote_sendbuf_reset(&s->send_queue[i]);
     av_freep(&s->send_queue);
   }
   if (vtremote_log_enabled(s, AV_LOG_INFO) && s->start_time_us > 0) {
@@ -1469,8 +1684,7 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame) {
 
   if (!frame) {
     s->flushing = 1;
-    VTRemoteWBuf empty = {0};
-    ret = vtremote_sendq_enqueue(s, VTREMOTE_MSG_FLUSH, &empty, 0);
+    ret = vtremote_sendq_enqueue_empty(s, VTREMOTE_MSG_FLUSH, 0);
     if (ret < 0)
       return ret;
     return vtremote_sendq_pump(avctx, 1);
@@ -1497,56 +1711,6 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame) {
   uint32_t heights[2] = {(uint32_t)frame->height,
                          (uint32_t)(frame->height / 2)};
   uint32_t sizes[2] = {strides[0] * heights[0], strides[1] * heights[1]};
-  const uint8_t *send_planes[2] = {planes[0], planes[1]};
-  uint32_t send_sizes[2] = {sizes[0], sizes[1]};
-
-  if (s->wire_compression == 1 || s->wire_compression == 2) {
-    if (s->wire_compression == 2) {
-      int zret = configure_zstd_ctx(avctx, s, (int)sizes[0]);
-      if (zret < 0)
-        return zret;
-    }
-    for (int i = 0; i < 2; i++) {
-      int src_size = (int)sizes[i];
-      size_t bound;
-      if (s->wire_compression == 1) {
-        bound = (size_t)LZ4_compressBound(src_size);
-      } else {
-        bound = ZSTD_compressBound(src_size);
-      }
-      if (bound <= 0)
-        return AVERROR_EXTERNAL;
-      if ((int)bound > s->comp_buf_cap[i]) {
-        uint8_t *tmp = av_realloc(s->comp_buf[i], bound);
-        if (!tmp)
-          return AVERROR(ENOMEM);
-        s->comp_buf[i] = tmp;
-        s->comp_buf_cap[i] = (int)bound;
-      }
-
-      size_t out_size = 0;
-      if (s->wire_compression == 1) {
-        int out = LZ4_compress_default((const char *)planes[i],
-                                       (char *)s->comp_buf[i], src_size,
-                                       s->comp_buf_cap[i]);
-        if (out <= 0)
-          return AVERROR_EXTERNAL;
-        out_size = (size_t)out;
-      } else {
-        size_t out = ZSTD_compress2(s->zstd_cctx, s->comp_buf[i], bound,
-                                    planes[i], src_size);
-        if (ZSTD_isError(out)) {
-          av_log(avctx, AV_LOG_ERROR, "Zstd compress failed: %s\n",
-                 ZSTD_getErrorName(out));
-          return AVERROR_EXTERNAL;
-        }
-        out_size = out;
-      }
-
-      send_planes[i] = s->comp_buf[i];
-      send_sizes[i] = (uint32_t)out_size;
-    }
-  }
 
   VTRemoteSideData sd[16];
   int sd_count = 0;
@@ -1563,15 +1727,9 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame) {
     }
   }
 
-  VTRemoteWBuf *payload = &s->frame_buf;
-  vtremote_wbuf_reset(payload);
-  ret = vtremote_payload_frame(payload, frame->pts, frame->duration,
-                               frame->pict_type == AV_PICTURE_TYPE_I, 2,
-                               send_planes, strides, heights, send_sizes,
-                               sd_count > 0 ? sd : NULL, (uint8_t)sd_count);
-  if (ret < 0)
-    return ret;
-  ret = vtremote_sendq_enqueue(s, VTREMOTE_MSG_FRAME, payload, 1);
+  ret = vtremote_sendq_enqueue_frame(
+      avctx, s, frame, planes, strides, heights, sizes,
+      sd_count > 0 ? sd : NULL, sd_count);
   if (ret < 0)
     return ret;
   ret = vtremote_sendq_pump(avctx, 0);
@@ -1632,8 +1790,7 @@ int ff_vtremote_common_receive_packet(AVCodecContext *avctx, AVPacket *pkt) {
       s->done = 1;
       return AVERROR_EOF;
     case VTREMOTE_MSG_PING: {
-      VTRemoteWBuf empty = {0};
-      vtremote_sendq_enqueue(s, VTREMOTE_MSG_PONG, &empty, 0);
+      vtremote_sendq_enqueue_empty(s, VTREMOTE_MSG_PONG, 0);
       vtremote_sendq_pump(avctx, 0);
       av_free(payload);
       break;

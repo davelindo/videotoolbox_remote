@@ -153,6 +153,62 @@ public final class VTRClientHandler: @unchecked Sendable {
             throw VTRemotedError.protocolViolation("missing configuration")
         }
 
+        func sendDoneAndLog() throws {
+            try messageIO.send(type: .done, body: Data())
+            let msg: String
+            switch configuration.mode {
+            case .encode:
+                msg = "DONE client=\(clientName) frames=\(stats.framesIn) packets=\(stats.packetsOut)"
+            case .decode:
+                msg = "DONE client=\(clientName) packets=\(stats.packetsIn) frames=\(stats.framesOut)"
+            case .transcode:
+                msg = "DONE client=\(clientName) packets=\(stats.packetsIn) packets_out=\(stats.packetsOut)"
+            }
+            logger.info(msg)
+        }
+
+        // Prefer streaming reads when available to avoid materializing large FRAME payloads.
+        if let streamIO = messageIO as? VTRStreamIO {
+            while true {
+                let header = try streamIO.readHeader(timeoutSeconds: 10)
+                stats.bytesIn += Int64(VTRProtocol.headerSize) + Int64(header.length)
+                stats.maybeReport(mode: configuration.mode, logger: logger, intervalSeconds: 0.25)
+
+                guard let type = VTRMessageType(rawValue: header.type) else {
+                    try streamIO.skip(length: Int(header.length))
+                    continue
+                }
+
+                switch type {
+                case .frame:
+                    stats.framesIn += 1
+                    stats.recordSubmit()
+                    if let streamSession = codecSession as? StreamingCodecSession {
+                        try streamSession.handleFrameStream(io: streamIO, length: Int(header.length))
+                    } else {
+                        let payload = try streamIO.readBody(length: Int(header.length), pool: inputBufferPool)
+                        defer { inputBufferPool.return(payload) }
+                        try codecSession.handleFrameMessage(payload)
+                    }
+                case .packet:
+                    stats.packetsIn += 1
+                    let payload = try streamIO.readBody(length: Int(header.length), pool: inputBufferPool)
+                    defer { inputBufferPool.return(payload) }
+                    try codecSession.handlePacketMessage(payload)
+                case .flush:
+                    try streamIO.skip(length: Int(header.length))
+                    try codecSession.flush()
+                    try sendDoneAndLog()
+                    return
+                case .ping:
+                    try streamIO.skip(length: Int(header.length))
+                    try messageIO.send(type: .pong, body: Data())
+                default:
+                    try streamIO.skip(length: Int(header.length))
+                }
+            }
+        }
+
         while true {
             let (header, payload) = try messageIO.readMessage(pool: inputBufferPool, timeoutSeconds: 10)
             stats.bytesIn += Int64(VTRProtocol.headerSize + payload.count)
@@ -174,17 +230,7 @@ public final class VTRClientHandler: @unchecked Sendable {
                 inputBufferPool.return(payload)
             case .flush:
                 try codecSession.flush()
-                try messageIO.send(type: .done, body: Data())
-                let msg: String
-                switch configuration.mode {
-                case .encode:
-                    msg = "DONE client=\(clientName) frames=\(stats.framesIn) packets=\(stats.packetsOut)"
-                case .decode:
-                    msg = "DONE client=\(clientName) packets=\(stats.packetsIn) frames=\(stats.framesOut)"
-                case .transcode:
-                    msg = "DONE client=\(clientName) packets=\(stats.packetsIn) packets_out=\(stats.packetsOut)"
-                }
-                logger.info(msg)
+                try sendDoneAndLog()
                 inputBufferPool.return(payload)
                 return
             case .ping:

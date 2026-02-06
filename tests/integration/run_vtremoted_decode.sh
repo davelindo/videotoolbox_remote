@@ -29,12 +29,15 @@ SKIP_HEVC=0
 VTREMOTED="$VTREMOTED_BIN"
 VTREMOTE_PORT="$PORT"
 VTREMOTE_TOKEN="$TOKEN"
-IN_H264="$(mktemp /tmp/vtremote_dec_h264XXXXXX.mp4)"
-IN_HEVC="$(mktemp /tmp/vtremote_dec_hevcXXXXXX.mp4)"
+RUN_DIR="$(mktemp -d /tmp/vtremote_decode.XXXXXX)"
+IN_H264="${RUN_DIR}/input_h264.mp4"
+IN_HEVC="${RUN_DIR}/input_hevc.mp4"
 SERVER_PID=""
 cleanup() {
   vtremote_stop_server
-  rm -f "$IN_H264" "$IN_HEVC"
+  if [[ -n "${RUN_DIR:-}" && -d "${RUN_DIR:-}" ]]; then
+    rm -rf "$RUN_DIR"
+  fi
 }
 trap cleanup EXIT
 

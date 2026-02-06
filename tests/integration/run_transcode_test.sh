@@ -38,10 +38,13 @@ fi
 
 source "${ROOT}/tests/integration/vtremoted_common.sh"
 
-INPUT_FILE="$(mktemp /tmp/vtremote_transcode_inputXXXXXX.mp4)"
+RUN_DIR="$(mktemp -d /tmp/vtremote_transcode.XXXXXX)"
+INPUT_FILE="${RUN_DIR}/input.mp4"
 cleanup() {
   vtremote_stop_server
-  rm -f "$INPUT_FILE"
+  if [[ -n "${RUN_DIR:-}" && -d "${RUN_DIR:-}" ]]; then
+    rm -rf "$RUN_DIR"
+  fi
 }
 trap cleanup EXIT
 

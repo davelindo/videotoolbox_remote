@@ -86,10 +86,29 @@ typedef struct VTRemoteEncContext {
     int64_t last_dts;
 } VTRemoteEncContext;
 
+#define VTREMOTE_SEND_MAX_SEGS 8
+
 typedef struct VTRemoteSendBuf {
-    uint8_t *data;
-    int size;
-    int offset;
+    const uint8_t *segs[VTREMOTE_SEND_MAX_SEGS];
+    int seg_lens[VTREMOTE_SEND_MAX_SEGS];
+    int seg_count;
+    int seg_index;
+    int seg_offset;
+
+    /* fixed storage for common segments */
+    uint8_t header[VTREMOTE_HEADER_SIZE];
+    uint8_t frame_meta[21];
+    uint8_t plane_meta[2][12];
+
+    /* owned storage for compressed planes / side data (freed when sent) */
+    uint8_t *owned_plane[2];
+    int owned_plane_size[2];
+    uint8_t *owned_side_data;
+    int owned_side_data_size;
+
+    /* optional ref when segments point into the original frame */
+    AVFrame *frame_ref;
+
     int is_frame;
     int64_t enqueue_us;
 } VTRemoteSendBuf;

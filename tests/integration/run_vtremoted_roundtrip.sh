@@ -34,22 +34,27 @@ H264_BITRATE_TOL="${VTREMOTE_H264_BITRATE_TOL:-0.5}"
 HEVC_BITRATE_TOL="${VTREMOTE_HEVC_BITRATE_TOL:-0.1}"
 BFRAMES="${VTREMOTE_TEST_BFRAMES:-0}"
 TOKEN_ARGS=()
-OUT_MP4_H264="$(mktemp /tmp/vtremote_h264_outXXXXXX.mp4)"
-OUT_MP4_HEVC="$(mktemp /tmp/vtremote_hevc_outXXXXXX.mp4)"
-OUT_MP4_H264_LOCAL="$(mktemp /tmp/vtlocal_h264_outXXXXXX.mp4)"
-OUT_MP4_HEVC_LOCAL="$(mktemp /tmp/vtlocal_hevc_outXXXXXX.mp4)"
+RUN_DIR="$(mktemp -d /tmp/vtremote_roundtrip.XXXXXX)"
+OUT_MP4_H264="${RUN_DIR}/remote_h264.mp4"
+OUT_MP4_HEVC="${RUN_DIR}/remote_hevc.mp4"
+OUT_MP4_H264_LOCAL="${RUN_DIR}/local_h264.mp4"
+OUT_MP4_HEVC_LOCAL="${RUN_DIR}/local_hevc.mp4"
 KEEP_OUTPUT="${VTREMOTE_KEEP_OUTPUT:-0}"
 SERVER_PID=""
 cleanup() {
+  local exit_code=$?
   vtremote_stop_server
-  if [[ "$KEEP_OUTPUT" != "0" ]]; then
-    echo "KEEP: outputs preserved:"
+  if [[ "$KEEP_OUTPUT" != "0" || "$exit_code" != "0" ]]; then
+    echo "KEEP: outputs preserved (exit_code=${exit_code}):"
+    echo "  ${RUN_DIR}"
     echo "  $OUT_MP4_H264"
     echo "  $OUT_MP4_HEVC"
     echo "  $OUT_MP4_H264_LOCAL"
     echo "  $OUT_MP4_HEVC_LOCAL"
   else
-    rm -f "$OUT_MP4_H264" "$OUT_MP4_HEVC" "$OUT_MP4_H264_LOCAL" "$OUT_MP4_HEVC_LOCAL"
+    if [[ -n "${RUN_DIR:-}" && -d "${RUN_DIR:-}" ]]; then
+      rm -rf "$RUN_DIR"
+    fi
   fi
 }
 trap cleanup EXIT
@@ -156,7 +161,17 @@ else
 fi
 
 echo "Verifying decode clean with -xerror..."
-"$FFMPEG_BIN" -v error -xerror -i "$OUT_MP4_H264" -f null - >/dev/null
+VERIFY_H264_LOG="${RUN_DIR}/verify_h264_decode.stderr"
+if ! "$FFMPEG_BIN" -hide_banner -v error -xerror -err_detect explode -i "$OUT_MP4_H264" -f null - >/dev/null 2>"$VERIFY_H264_LOG"; then
+  echo "ERROR: H.264 verification decode failed" >&2
+  cat "$VERIFY_H264_LOG" >&2 || true
+  exit 1
+fi
+if [[ -s "$VERIFY_H264_LOG" ]]; then
+  echo "ERROR: H.264 verification produced decoder errors:" >&2
+  cat "$VERIFY_H264_LOG" >&2 || true
+  exit 1
+fi
 
 echo "Running remote HEVC encode..."
 "$FFMPEG_BIN" -v warning \
@@ -179,6 +194,16 @@ else
 fi
 
 echo "Verifying HEVC decode clean with -xerror..."
-"$FFMPEG_BIN" -v error -xerror -i "$OUT_MP4_HEVC" -f null - >/dev/null
+VERIFY_HEVC_LOG="${RUN_DIR}/verify_hevc_decode.stderr"
+if ! "$FFMPEG_BIN" -hide_banner -v error -xerror -err_detect explode -i "$OUT_MP4_HEVC" -f null - >/dev/null 2>"$VERIFY_HEVC_LOG"; then
+  echo "ERROR: HEVC verification decode failed" >&2
+  cat "$VERIFY_HEVC_LOG" >&2 || true
+  exit 1
+fi
+if [[ -s "$VERIFY_HEVC_LOG" ]]; then
+  echo "ERROR: HEVC verification produced decoder errors:" >&2
+  cat "$VERIFY_HEVC_LOG" >&2 || true
+  exit 1
+fi
 
 echo "Roundtrip OK"

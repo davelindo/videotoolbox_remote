@@ -4,6 +4,7 @@ This tree holds VideoToolbox Remote integration tests and benchmarks.
 
 - `mock_vtremoted/`: portable Python mock server to exercise protocol framing and message flow. It responds to HELLO/CONFIGURE/FRAME/FLUSH, emits dummy Annex B packets, and exits after FLUSH (see its README for usage).
 - `run_mock_roundtrip.sh`: spins up the Python mock and runs `h264_videotoolbox_remote` against it using a built ffmpeg binary (defaults to `ffmpeg/ffmpeg` in the repo root).
+- `run_mock_decode.sh`: spins up the Python mock and runs the `h264_videotoolbox_remote` *decoder* against it (forces `-vt_remote_wire_compression none` since the mock does not compress).
 - `run_complex_chain_test.sh`: exercises a complex filter chain via the mock server to validate framing + options under load.
 - `check_pts_dts.sh`: ffprobe-based validator that fails if video packets have `pts < dts`, non-monotonic DTS, missing keyframes, or (optionally) if the average keyframe interval deviates from an expected GOP.
 - `check_frame_packet_count.sh`: validates that decoded frame count equals packet count (guards against warmup/extra packets).

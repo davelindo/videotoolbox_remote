@@ -29,6 +29,7 @@ public final class VTRWireConnection: @unchecked Sendable {
 
     private var headerBuf = Data(count: VTRProtocol.headerSize)
     private var bodyBuf = Data()
+    private var skipBuf = Data(count: 16 * 1024)
 
     public func readHeader(timeoutSeconds: Int = 10) throws -> VTRMessageHeader {
         try POSIXIO.pollReadable(fd: fileDescriptor, timeoutSeconds: timeoutSeconds)
@@ -36,40 +37,49 @@ public final class VTRWireConnection: @unchecked Sendable {
         return try VTRMessageHeader.decode(headerBuf)
     }
 
+    public func readBody(length: Int, pool: BufferPool? = nil) throws -> Data {
+        if length <= 0 { return Data() }
+        let len = length
+
+        if let pool {
+            var buf = pool.get(capacity: len)
+            // BufferPool.get() returns a zero-length Data; size it for the read.
+            if buf.count != len { buf.count = len }
+            try POSIXIO.readExact(fd: fileDescriptor, into: &buf, count: len)
+            return buf
+        }
+
+        // Avoid triggering Data's copy-on-write by mutating `bodyBuf` directly.
+        if bodyBuf.count != len { bodyBuf.count = len }
+        try POSIXIO.readExact(fd: fileDescriptor, into: &bodyBuf, count: len)
+        return bodyBuf
+    }
+
+    public func readExact(into buffer: inout Data, count: Int) throws {
+        try POSIXIO.readExact(fd: fileDescriptor, into: &buffer, count: count)
+    }
+
+    public func readExact(into buffer: UnsafeMutableRawPointer, count: Int) throws {
+        try POSIXIO.readExact(fd: fileDescriptor, into: buffer, count: count)
+    }
+
+    public func skip(length: Int) throws {
+        var remaining = length
+        while remaining > 0 {
+            let chunk = min(remaining, skipBuf.count)
+            try POSIXIO.readExact(fd: fileDescriptor, into: &skipBuf, count: chunk)
+            remaining -= chunk
+        }
+    }
+
     public func readMessage(
         pool: BufferPool? = nil,
         timeoutSeconds: Int = 10
     ) throws -> (header: VTRMessageHeader, body: Data) {
         let header = try readHeader(timeoutSeconds: timeoutSeconds)
-
-        if header.length > 0 {
-            let len = Int(header.length)
-            var buf: Data
-            
-            if let pool {
-                buf = pool.get(capacity: len)
-            } else {
-                if bodyBuf.count != len {
-                    bodyBuf.count = len
-                }
-                buf = bodyBuf
-            }
-            
-            // Ensure correct size (BufferPool.get sets count=0)
-            if buf.count != len {
-                buf.count = len
-            }
-            
-            try POSIXIO.readExact(fd: fileDescriptor, into: &buf, count: len)
-            
-            if pool == nil {
-                // Determine if we need to update our internal buffer reference
-                // (Though strictly speaking, bodyBuf was a value copy, but we want to keep the capacity)
-                bodyBuf = buf
-            }
-            return (header, buf)
-        } else {
-            return (header, Data())
-        }
+        let body = try readBody(length: Int(header.length), pool: pool)
+        return (header, body)
     }
 }
+
+extension VTRWireConnection: VTRStreamIO {}

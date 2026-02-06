@@ -326,18 +326,23 @@ static int vtremote_read_msg(VTRemoteDecContext *s, VTRemoteMsgHeader *hdr, uint
         return ret;
     if (hdr->length == 0) {
         *payload = NULL;
+        s->rx_buf_len = 0;
         s->bytes_recv += VTREMOTE_HEADER_SIZE;
         return 0;
     }
-    uint8_t *buf = av_malloc(hdr->length);
-    if (!buf)
-        return AVERROR(ENOMEM);
-    ret = read_full(s->fd, buf, hdr->length);
-    if (ret < 0) {
-        av_free(buf);
-        return ret;
+    if ((int)hdr->length > s->rx_buf_cap) {
+        int new_cap = FFMAX((s->rx_buf_cap > 0) ? (s->rx_buf_cap * 2) : 0, (int)hdr->length);
+        uint8_t *tmp = av_realloc(s->rx_buf, new_cap);
+        if (!tmp)
+            return AVERROR(ENOMEM);
+        s->rx_buf = tmp;
+        s->rx_buf_cap = new_cap;
     }
-    *payload = buf;
+    ret = read_full(s->fd, s->rx_buf, hdr->length);
+    if (ret < 0)
+        return ret;
+    s->rx_buf_len = hdr->length;
+    *payload = s->rx_buf;
     s->bytes_recv += VTREMOTE_HEADER_SIZE + hdr->length;
     return 0;
 }
@@ -440,13 +445,11 @@ static int vtremote_handshake(AVCodecContext *avctx)
         return ret;
     }
     if (hdr.type != VTREMOTE_MSG_HELLO_ACK) {
-        av_free(pl);
         VTR_CLOSE_SOCKET(fd);
         s->fd = -1;
         return AVERROR_INVALIDDATA;
     }
     ret = vtremote_handle_hello_ack(avctx, pl, hdr.length);
-    av_free(pl);
     if (ret < 0) {
         VTR_CLOSE_SOCKET(fd);
         s->fd = -1;
@@ -559,13 +562,11 @@ cfg_fail:
         return ret;
     }
     if (hdr.type != VTREMOTE_MSG_CONFIGURE_ACK) {
-        av_free(pl);
         VTR_CLOSE_SOCKET(fd);
         s->fd = -1;
         return AVERROR_INVALIDDATA;
     }
     ret = vtremote_handle_configure_ack(avctx, pl, hdr.length);
-    av_free(pl);
     if (ret < 0) {
         VTR_CLOSE_SOCKET(fd);
         s->fd = -1;
@@ -649,6 +650,20 @@ int ff_vtremote_dec_close(AVCodecContext *avctx)
     return 0;
 }
 
+static void add_side_data_to_frame(AVFrame *frame, const VTRemoteFrameView *view)
+{
+    if (!frame || !view || view->side_data_count == 0)
+        return;
+
+    for (int i = 0; i < view->side_data_count; i++) {
+        enum AVFrameSideDataType type = (enum AVFrameSideDataType)view->side_data[i].type;
+        AVFrameSideData *sd = av_frame_new_side_data(frame, type, view->side_data[i].size);
+        if (!sd)
+            continue;
+        memcpy(sd->data, view->side_data[i].data, view->side_data[i].size);
+    }
+}
+
 static int fill_frame_from_view(AVCodecContext *avctx, AVFrame *frame, const VTRemoteFrameView *view)
 {
     if (!view || view->plane_count < 2)
@@ -669,21 +684,17 @@ static int fill_frame_from_view(AVCodecContext *avctx, AVFrame *frame, const VTR
         int rows = view->planes[i].height;
         uint8_t *dst = frame->data[i];
         int dst_stride = frame->linesize[i];
-        int row_bytes = FFMIN(src_stride, dst_stride);
-        for (int y = 0; y < rows; y++) {
-            memcpy(dst + y * dst_stride, src + y * src_stride, row_bytes);
+        if (src_stride == dst_stride) {
+            memcpy(dst, src, (size_t)src_stride * (size_t)rows);
+        } else {
+            int row_bytes = FFMIN(src_stride, dst_stride);
+            for (int y = 0; y < rows; y++) {
+                memcpy(dst + y * dst_stride, src + y * src_stride, row_bytes);
+            }
         }
     }
-    
-    // Add side data if present (V1 extension)
-    for (int i = 0; i < view->side_data_count; i++) {
-        enum AVFrameSideDataType type = (enum AVFrameSideDataType)view->side_data[i].type;
-        AVFrameSideData *sd = av_frame_new_side_data(frame, type, view->side_data[i].size);
-        if (sd) {
-            memcpy(sd->data, view->side_data[i].data, view->side_data[i].size);
-        }
-    }
-    
+
+    add_side_data_to_frame(frame, view);
     return 0;
 }
 
@@ -704,17 +715,60 @@ static void enforce_monotonic_pts(VTRemoteDecContext *s, AVFrame *frame)
     s->last_frame_pts = pts;
 }
 
-static int decompress_frame(VTRemoteDecContext *s, const VTRemoteFrameView *in, VTRemoteFrameView *out)
+static int fill_frame_from_compressed_view(AVCodecContext *avctx, VTRemoteDecContext *s,
+                                           AVFrame *frame, const VTRemoteFrameView *view)
 {
-    if (!s || !in || !out)
+    if (!avctx || !s || !frame || !view)
         return AVERROR(EINVAL);
-    *out = *in;
-    if (in->plane_count < 2)
+    if (view->plane_count < 2)
         return AVERROR_INVALIDDATA;
+
+    frame->format = avctx->pix_fmt;
+    frame->width = avctx->width;
+    frame->height = avctx->height;
+    int ret = ff_get_buffer(avctx, frame, 0);
+    if (ret < 0)
+        return ret;
+    // ff_get_buffer overwrites timestamps based on last packet; restore from view.
+    frame->pts = view->pts;
+    frame->duration = view->duration;
+    frame->pkt_dts = frame->pts;
+
     for (int i = 0; i < 2; i++) {
-        int expected = (int)in->planes[i].stride * (int)in->planes[i].height;
+        const VTRemotePlaneView *p = &view->planes[i];
+        int expected = (int)p->stride * (int)p->height;
         if (expected <= 0)
             return AVERROR_INVALIDDATA;
+
+        uint8_t *dst = frame->data[i];
+        int dst_stride = frame->linesize[i];
+
+        /* Fast path: decompress directly into the destination plane when strides match. */
+        if (dst_stride == (int)p->stride) {
+            if (s->wire_compression == 1) {
+                int decoded = LZ4_decompress_safe((const char *)p->data,
+                                                  (char *)dst,
+                                                  p->data_len,
+                                                  expected);
+                if (decoded != expected)
+                    return AVERROR_INVALIDDATA;
+            } else if (s->wire_compression == 2) {
+                if (!s->zstd_dctx) {
+                    s->zstd_dctx = ZSTD_createDCtx();
+                    if (!s->zstd_dctx)
+                        return AVERROR(ENOMEM);
+                }
+                size_t zret = ZSTD_decompressDCtx(s->zstd_dctx, dst, expected,
+                                                  p->data, p->data_len);
+                if (ZSTD_isError(zret) || zret != (size_t)expected)
+                    return AVERROR_INVALIDDATA;
+            } else {
+                return AVERROR_INVALIDDATA;
+            }
+            continue;
+        }
+
+        /* Fallback: decompress into a tightly-packed scratch buffer then copy rows. */
         if (expected > s->comp_buf_cap[i]) {
             uint8_t *tmp = av_realloc(s->comp_buf[i], expected);
             if (!tmp)
@@ -722,27 +776,37 @@ static int decompress_frame(VTRemoteDecContext *s, const VTRemoteFrameView *in, 
             s->comp_buf[i] = tmp;
             s->comp_buf_cap[i] = expected;
         }
-        
         if (s->wire_compression == 1) {
-            int decoded = LZ4_decompress_safe((const char *)in->planes[i].data,
+            int decoded = LZ4_decompress_safe((const char *)p->data,
                                               (char *)s->comp_buf[i],
-                                              in->planes[i].data_len,
+                                              p->data_len,
                                               expected);
             if (decoded != expected)
                 return AVERROR_INVALIDDATA;
-        } else {
+        } else if (s->wire_compression == 2) {
             if (!s->zstd_dctx) {
                 s->zstd_dctx = ZSTD_createDCtx();
-                if (!s->zstd_dctx) return AVERROR(ENOMEM);
+                if (!s->zstd_dctx)
+                    return AVERROR(ENOMEM);
             }
-            size_t ret = ZSTD_decompressDCtx(s->zstd_dctx, s->comp_buf[i], expected,
-                                             in->planes[i].data, in->planes[i].data_len);
-            if (ZSTD_isError(ret) || ret != (size_t)expected)
+            size_t zret = ZSTD_decompressDCtx(s->zstd_dctx, s->comp_buf[i], expected,
+                                              p->data, p->data_len);
+            if (ZSTD_isError(zret) || zret != (size_t)expected)
                 return AVERROR_INVALIDDATA;
+        } else {
+            return AVERROR_INVALIDDATA;
         }
-        out->planes[i].data = s->comp_buf[i];
-        out->planes[i].data_len = expected;
+
+        const uint8_t *src = s->comp_buf[i];
+        int src_stride = p->stride;
+        int rows = p->height;
+        int row_bytes = FFMIN(src_stride, dst_stride);
+        for (int y = 0; y < rows; y++) {
+            memcpy(dst + y * dst_stride, src + y * src_stride, row_bytes);
+        }
     }
+
+    add_side_data_to_frame(frame, view);
     return 0;
 }
 
@@ -811,21 +875,13 @@ int ff_vtremote_decode(AVCodecContext *avctx, AVFrame *frame, int *got_frame, AV
                 VTRemoteFrameView view;
                 ret = vtremote_parse_frame(payload, hdr.length, &view);
                 if (ret < 0) {
-                    av_free(payload);
                     return ret;
                 }
                 if (s->wire_compression == 1 || s->wire_compression == 2) {
-                    VTRemoteFrameView dec_view;
-                    ret = decompress_frame(s, &view, &dec_view);
-                    if (ret < 0) {
-                        av_free(payload);
-                        return ret;
-                    }
-                    ret = fill_frame_from_view(avctx, frame, &dec_view);
+                    ret = fill_frame_from_compressed_view(avctx, s, frame, &view);
                 } else {
                     ret = fill_frame_from_view(avctx, frame, &view);
                 }
-            av_free(payload);
             if (ret < 0)
                 return ret;
             if (s->decode_async)
@@ -836,14 +892,12 @@ int ff_vtremote_decode(AVCodecContext *avctx, AVFrame *frame, int *got_frame, AV
             return 0;
             }
             case VTREMOTE_MSG_DONE:
-                av_free(payload);
                 s->done = 1;
                 return AVERROR_EOF;
             case VTREMOTE_MSG_PING:
             {
                 VTRemoteWBuf empty = {0};
                 vtremote_send_msg(s, VTREMOTE_MSG_PONG, &empty);
-                av_free(payload);
                 break;
             }
             case VTREMOTE_MSG_ERROR:
@@ -857,11 +911,9 @@ int ff_vtremote_decode(AVCodecContext *avctx, AVFrame *frame, int *got_frame, AV
                     av_log(avctx, AV_LOG_ERROR, "vtremote server error %u: %.*s\n", code, mlen, msg);
                 else
                     av_log(avctx, AV_LOG_ERROR, "vtremote server error %u\n", code);
-                av_free(payload);
                 return AVERROR(EIO);
             }
             default:
-                av_free(payload);
                 break;
             }
         }
@@ -885,21 +937,13 @@ int ff_vtremote_decode(AVCodecContext *avctx, AVFrame *frame, int *got_frame, AV
             VTRemoteFrameView view;
             ret = vtremote_parse_frame(payload, hdr.length, &view);
             if (ret < 0) {
-                av_free(payload);
                 return ret;
             }
             if (s->wire_compression == 1 || s->wire_compression == 2) {
-                VTRemoteFrameView dec_view;
-                ret = decompress_frame(s, &view, &dec_view);
-                if (ret < 0) {
-                    av_free(payload);
-                    return ret;
-                }
-                ret = fill_frame_from_view(avctx, frame, &dec_view);
+                ret = fill_frame_from_compressed_view(avctx, s, frame, &view);
             } else {
                 ret = fill_frame_from_view(avctx, frame, &view);
             }
-            av_free(payload);
             if (ret < 0)
                 return ret;
             if (s->decode_async)
@@ -910,14 +954,12 @@ int ff_vtremote_decode(AVCodecContext *avctx, AVFrame *frame, int *got_frame, AV
             return 0;
         }
         case VTREMOTE_MSG_DONE:
-            av_free(payload);
             s->done = 1;
             return AVERROR_EOF;
         case VTREMOTE_MSG_PING:
         {
             VTRemoteWBuf empty = {0};
             vtremote_send_msg(s, VTREMOTE_MSG_PONG, &empty);
-            av_free(payload);
             break;
         }
         case VTREMOTE_MSG_ERROR:
@@ -931,11 +973,9 @@ int ff_vtremote_decode(AVCodecContext *avctx, AVFrame *frame, int *got_frame, AV
                 av_log(avctx, AV_LOG_ERROR, "vtremote server error %u: %.*s\n", code, mlen, msg);
             else
                 av_log(avctx, AV_LOG_ERROR, "vtremote server error %u\n", code);
-            av_free(payload);
             return AVERROR(EIO);
         }
         default:
-            av_free(payload);
             break;
         }
     }

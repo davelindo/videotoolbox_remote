@@ -14,6 +14,12 @@ public protocol CodecSession: AnyObject {
     func shutdown()
 }
 
+/// Optional hot-path interface for implementations that can stream large message payloads
+/// without materializing the whole payload in a single `Data`.
+protocol StreamingCodecSession: CodecSession {
+    func handleFrameStream(io: VTRStreamIO, length: Int) throws
+}
+
 public typealias MessageSender = (VTRMessageType, [Data]) throws -> Void
 
 public enum CodecSessionFactory {
