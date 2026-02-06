@@ -63,11 +63,7 @@ fi
 have_encoder() {
   local bin="$1"
   local enc="$2"
-  if command -v rg >/dev/null 2>&1; then
-    "$bin" -encoders 2>/dev/null | rg -q "(?m)(^|\\s)${enc}(\\s|$)"
-  else
-    "$bin" -encoders 2>/dev/null | grep -q -w "$enc"
-  fi
+  "$bin" -encoders 2>/dev/null | grep -q -w "$enc"
 }
 
 pick_h264_encoder() {
