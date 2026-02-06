@@ -32,12 +32,11 @@ swift build -c release
 
 #### 2. Build the Client (Linux/Windows/macOS)
 
-Requires `liblz4` and `libzstd` development headers.
+The standard build enables **VMAF**, **SSIM/PSNR**, and common codec libraries (including AV1).
+You will need the corresponding development headers installed (see `docs/development.md` for platform notes).
 
 ```bash
-cd ffmpeg
-./configure --enable-videotoolbox-remote --enable-liblz4 --enable-libzstd
-make -j$(nproc)
+make build-ffmpeg
 ```
 
 *(On macOS, you can use `make build` in the root directory to build both server and client.)*

@@ -31,7 +31,8 @@ This produces:
 1.  **Configure**:
     ```bash
     cd ffmpeg
-    ./configure --enable-videotoolbox-remote --enable-liblz4 --enable-libzstd
+    ./configure --enable-videotoolbox-remote --enable-liblz4 --enable-libzstd \
+      --enable-libvmaf --enable-libaom --enable-libdav1d --enable-libsvtav1
     ```
 2.  **Build**:
     ```bash

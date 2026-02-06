@@ -45,15 +45,14 @@ Follow these steps to set up the macOS server and build the FFmpeg client.
 On your Linux or Windows machine (or the same Mac if testing locally):
 
 1.  **Install build dependencies**:
-    - Ensure `libzstd`, `liblz4`, and `pkg-config` are installed.
+    - Ensure `liblz4`, `libzstd`, `libvmaf`, and `pkg-config` are installed.
+    - For AV1 and common codecs, install `libaom`, `libdav1d`, `libsvtav1`, `x264`, `x265`, `libvpx`, `opus`, `vorbis`, and `lame` development packages as well.
 
 2.  **Clone and build**:
     ```bash
     git clone https://github.com/davelindo/videotoolbox_remote.git
     cd videotoolbox_remote
-    cd ffmpeg
-    ./configure --enable-videotoolbox-remote --enable-liblz4 --enable-libzstd
-    make -j$(nproc)
+    make build-ffmpeg
     ```
 
 ## Step 3: Usage Examples

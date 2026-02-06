@@ -19,12 +19,17 @@ env:
   FFMPEG_CONFIGURE_FLAGS: >-
     --enable-gpl
     --enable-liblz4
+    --enable-libzstd
     --enable-libopus
     --enable-libvorbis
     --enable-libmp3lame
+    --enable-libaom
+    --enable-libdav1d
+    --enable-libsvtav1
     --enable-libx264
     --enable-libx265
     --enable-libvpx
+    --enable-libvmaf
     --enable-libass
     --enable-libfreetype
     --enable-libfontconfig
@@ -201,14 +206,15 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y yasm nasm pkg-config liblz4-dev ccache \
+          sudo apt-get install -y yasm nasm pkg-config liblz4-dev libzstd-dev ccache \
+            libvmaf-dev libaom-dev libdav1d-dev libsvtav1-dev \
             libopus-dev libvorbis-dev libmp3lame-dev libx264-dev libx265-dev libvpx-dev \
             libass-dev libfreetype6-dev libfontconfig1-dev libfribidi-dev libharfbuzz-dev \
             libxml2-dev libzimg-dev libwebp-dev libsdl2-dev
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install lz4 pkg-config yasm nasm ccache opus libvorbis lame x264 x265 libvpx libass freetype fontconfig fribidi harfbuzz libxml2 zimg webp sdl2
+        run: brew install lz4 zstd libvmaf aom dav1d svt-av1 pkg-config yasm nasm ccache opus libvorbis lame x264 x265 libvpx libass freetype fontconfig fribidi harfbuzz libxml2 zimg webp sdl2
 
       - name: Install dependencies (Windows/MSYS2)
         if: runner.os == 'Windows'
@@ -221,6 +227,11 @@ jobs:
             mingw-w64-x86_64-toolchain
             mingw-w64-x86_64-pkg-config
             mingw-w64-x86_64-lz4
+            mingw-w64-x86_64-zstd
+            mingw-w64-x86_64-vmaf
+            mingw-w64-x86_64-aom
+            mingw-w64-x86_64-dav1d
+            mingw-w64-x86_64-svt-av1
             mingw-w64-x86_64-nasm
             mingw-w64-x86_64-yasm
             mingw-w64-x86_64-ccache
@@ -257,7 +268,7 @@ jobs:
           if [ "${RUNNER_OS}" = "macOS" ]; then
             export CC="ccache clang"
             export CXX="ccache clang++"
-            BREW_PKGS="lz4 opus libvorbis lame x264 x265 libvpx libass freetype fontconfig fribidi harfbuzz libxml2 zimg webp sdl2"
+            BREW_PKGS="lz4 zstd libvmaf aom dav1d svt-av1 opus libvorbis lame x264 x265 libvpx libass freetype fontconfig fribidi harfbuzz libxml2 zimg webp sdl2"
             for p in $BREW_PKGS; do
               prefix="$(brew --prefix "$p")"
               export PKG_CONFIG_PATH="${prefix}/lib/pkgconfig:${PKG_CONFIG_PATH}"
@@ -271,6 +282,14 @@ jobs:
           fi
           make build-ffmpeg
           ccache -s
+
+      - name: Verify quality metrics filters (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          ./ffmpeg/ffmpeg -hide_banner -filters | grep -Eq '(^|[[:space:]])psnr([[:space:]]|$)'
+          ./ffmpeg/ffmpeg -hide_banner -filters | grep -Eq '(^|[[:space:]])ssim([[:space:]]|$)'
+          ./ffmpeg/ffmpeg -hide_banner -filters | grep -Eq '(^|[[:space:]])libvmaf([[:space:]]|$)'
+
       - name: Package ffmpeg (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
@@ -293,6 +312,14 @@ jobs:
           export CXX="ccache g++"
           make build-ffmpeg
           ccache -s
+
+      - name: Verify quality metrics filters (Windows/MSYS2)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          ./ffmpeg/ffmpeg.exe -hide_banner -filters | grep -Eq '(^|[[:space:]])psnr([[:space:]]|$)'
+          ./ffmpeg/ffmpeg.exe -hide_banner -filters | grep -Eq '(^|[[:space:]])ssim([[:space:]]|$)'
+          ./ffmpeg/ffmpeg.exe -hide_banner -filters | grep -Eq '(^|[[:space:]])libvmaf([[:space:]]|$)'
       - name: Package ffmpeg (Windows/MSYS2)
         if: runner.os == 'Windows'
         shell: msys2 {0}

@@ -22,6 +22,11 @@ MACOSX_DEPLOYMENT_TARGET ?= $(if $(MACOSX_SDK_VERSION),$(MACOSX_SDK_VERSION),$(s
 ifneq ($(wildcard /opt/homebrew/bin/pkg-config),)
 PKG_CONFIG ?= /opt/homebrew/bin/pkg-config
 PKG_CONFIG_PATH ?= /opt/homebrew/lib/pkgconfig:/opt/homebrew/share/pkgconfig
+else
+ifneq ($(wildcard /usr/local/bin/pkg-config),)
+PKG_CONFIG ?= /usr/local/bin/pkg-config
+PKG_CONFIG_PATH ?= /usr/local/lib/pkgconfig:/usr/local/share/pkgconfig
+endif
 endif
 endif
 
@@ -35,10 +40,12 @@ endif
 FFMPEG_OBJC := $(FFMPEG_CC)
 FFMPEG_OBJCC := $(FFMPEG_CC)
 
+FFMPEG_CONFIGURE_FLAGS_BASE ?= --enable-gpl --enable-liblz4 --enable-libzstd --enable-libvmaf --enable-libaom --enable-libdav1d --enable-libsvtav1 --enable-libopus --enable-libvorbis --enable-libmp3lame --enable-libx264 --enable-libx265 --enable-libvpx --enable-videotoolbox-remote --disable-debug --disable-response-files
+
 ifeq ($(IS_DARWIN),Darwin)
-FFMPEG_CONFIGURE_FLAGS ?= --enable-videotoolbox --enable-videotoolbox-remote --enable-libzstd --disable-debug --disable-response-files
+FFMPEG_CONFIGURE_FLAGS ?= --enable-videotoolbox $(FFMPEG_CONFIGURE_FLAGS_BASE)
 else
-FFMPEG_CONFIGURE_FLAGS ?= --enable-videotoolbox-remote --enable-libzstd --disable-debug --disable-response-files
+FFMPEG_CONFIGURE_FLAGS ?= $(FFMPEG_CONFIGURE_FLAGS_BASE)
 endif
 JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 2)
 
@@ -76,7 +83,7 @@ build-ffmpeg:
 		if [ -z "$$sdkroot" ]; then \
 			sdkroot=$$(xcrun --sdk macosx --show-sdk-path 2>/dev/null); \
 		fi; \
-		if ! printf "%s" "$$config_flags" | grep -qE '(^|[[:space:]])--(enable|disable)-videotoolbox($|[[:space:]])'; then \
+		if ! printf "%s" "$$config_flags" | grep -qE '(^|[[:space:]])--(enable|disable)-videotoolbox([[:space:]]|$$)'; then \
 			config_flags="$$config_flags --enable-videotoolbox"; \
 		fi; \
 		if [ -n "$$sdkroot" ] && ! printf "%s" "$$config_flags" | grep -q -- "--sysroot="; then \
@@ -84,8 +91,9 @@ build-ffmpeg:
 		fi; \
 		sysroot_flag="-isysroot$$sdkroot"; \
 		framework_flag="-F$$sdkroot/System/Library/Frameworks"; \
-		if [ -x /opt/homebrew/bin/pkg-config ] && ! printf "%s" "$$config_flags" | grep -q -- "--pkg-config="; then \
-			config_flags="$$config_flags --pkg-config=/opt/homebrew/bin/pkg-config"; \
+		pkg_config="$(PKG_CONFIG)"; \
+		if [ -n "$$pkg_config" ] && [ -x "$$pkg_config" ] && ! printf "%s" "$$config_flags" | grep -q -- "--pkg-config="; then \
+			config_flags="$$config_flags --pkg-config=$$pkg_config"; \
 		fi; \
 		if ! printf "%s" "$$config_flags" | grep -q -- "--host-cc="; then \
 			config_flags="$$config_flags --host-cc=$$cc"; \
@@ -125,13 +133,31 @@ build-ffmpeg:
 			if ! printf "%s" "$$ldflags" | grep -q -- "-F"; then \
 				ldflags="$$ldflags $$framework_flag"; \
 			fi; \
-		else \
-			echo "WARN: SDKROOT not set; building without explicit sysroot (install Xcode for local VideoToolbox)" >&2; \
+			else \
+				echo "WARN: SDKROOT not set; building without explicit sysroot (install Xcode for local VideoToolbox)" >&2; \
+			fi; \
+			brew_prefix=""; \
+			if [ -d /opt/homebrew ]; then \
+				brew_prefix="/opt/homebrew"; \
+			elif [ -d /usr/local ]; then \
+				brew_prefix="/usr/local"; \
+			fi; \
+			if [ -n "$$brew_prefix" ]; then \
+				inc="$$brew_prefix/include"; \
+				lib="$$brew_prefix/lib"; \
+				if [ -d "$$inc" ]; then \
+					if ! printf "%s" "$$cppflags" | grep -q -- "-I$$inc"; then cppflags="-I$$inc $$cppflags"; fi; \
+					if ! printf "%s" "$$cflags" | grep -q -- "-I$$inc"; then cflags="-I$$inc $$cflags"; fi; \
+					if ! printf "%s" "$$objcflags" | grep -q -- "-I$$inc"; then objcflags="-I$$inc $$objcflags"; fi; \
+				fi; \
+				if [ -d "$$lib" ]; then \
+					if ! printf "%s" "$$ldflags" | grep -q -- "-L$$lib"; then ldflags="-L$$lib $$ldflags"; fi; \
+				fi; \
+			fi; \
 		fi; \
-	fi; \
-	need_config=0; \
-	if [ ! -f ffbuild/config.mak ]; then \
-		need_config=1; \
+		need_config=0; \
+		if [ ! -f ffbuild/config.mak ]; then \
+			need_config=1; \
 	else \
 		current=$$(sed -n 's/^FFMPEG_CONFIGURATION=//p' ffbuild/config.mak); \
 		if [ "$$current" != "$$config_flags" ]; then \
