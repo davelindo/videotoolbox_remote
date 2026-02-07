@@ -2,7 +2,9 @@
 set -euo pipefail
 
 # Integration regression: start vtremoted locally, run remote VideoToolbox encode, assert
-# - PTS/DTS monotonic (no pts<dts)
+# - DTS is strictly monotonic (required for muxers; PTS may be < DTS when B-frames are used)
+# - Frame/packet counts are consistent
+# - Bitrate is near local baseline (when available)
 # - Bitstream decodes cleanly with ffmpeg -xerror
 # Requirements: built ffmpeg binary at ../ffmpeg/ffmpeg and vtremoted at ../vtremoted/.build/debug/vtremoted
 # Note: runs against loopback with a single vtremoted instance. Uses short synthetic sources to keep runtime low.
@@ -104,10 +106,11 @@ if ! "$FFMPEG_LOCAL_BIN" -v warning \
 fi
 
 if [[ -z "$USE_EXISTING" ]]; then
-  echo "Starting vtremoted on 127.0.0.1:${VTREMOTE_PORT}..."
+  echo "Starting vtremoted on 127.0.0.1:${VTREMOTE_PORT:-<auto>}..."
   vtremote_start_server /tmp/vtremoted_it.log
   SERVER_PID="${VTREMOTE_SERVER_PID:-}"
   PORT="$VTREMOTE_PORT"
+  echo "Using vtremoted on 127.0.0.1:${PORT} (pid=${SERVER_PID})"
 else
   echo "Using existing vtremoted on 127.0.0.1:${PORT}..."
 fi

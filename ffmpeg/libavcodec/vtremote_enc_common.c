@@ -66,6 +66,8 @@ static int vtremote_sock_errno(void) { return errno; }
 #endif
 
 static inline int vtremote_log_enabled(const VTRemoteEncContext *s, int level);
+static void vtremote_log_error_payload(AVCodecContext *avctx,
+                                       const uint8_t *payload, int len);
 
 static int vtremote_hevc_extradata_to_annexb(const uint8_t *in, int in_size,
                                              uint8_t **out, int *out_size) {
@@ -907,17 +909,7 @@ static int vtremote_drain_available_packets(AVCodecContext *avctx) {
       break;
     }
     case VTREMOTE_MSG_ERROR: {
-      uint32_t code = 0;
-      VTRemoteRBuf er;
-      vtremote_rbuf_init(&er, payload, hdr.length);
-      vtremote_rbuf_read_u32(&er, &code);
-      const uint8_t *msg = NULL;
-      int mlen = 0;
-      if (vtremote_rbuf_read_str(&er, &msg, &mlen) == 0)
-        av_log(avctx, AV_LOG_ERROR, "vtremote server error %u: %.*s\n", code,
-               mlen, msg);
-      else
-        av_log(avctx, AV_LOG_ERROR, "vtremote server error %u\n", code);
+      vtremote_log_error_payload(avctx, payload, hdr.length);
       av_free(payload);
       return AVERROR(EIO);
     }
@@ -929,6 +921,21 @@ static int vtremote_drain_available_packets(AVCodecContext *avctx) {
   return packets_read;
 }
 
+static void vtremote_log_error_payload(AVCodecContext *avctx,
+                                       const uint8_t *payload, int len) {
+  uint32_t code = 0;
+  VTRemoteRBuf er;
+  vtremote_rbuf_init(&er, payload, len);
+  vtremote_rbuf_read_u32(&er, &code);
+  const uint8_t *msg = NULL;
+  int mlen = 0;
+  if (vtremote_rbuf_read_str(&er, &msg, &mlen) == 0)
+    av_log(avctx, AV_LOG_ERROR, "vtremote server error %u: %.*s\n", code, mlen,
+           msg);
+  else
+    av_log(avctx, AV_LOG_ERROR, "vtremote server error %u\n", code);
+}
+
 static int vtremote_handle_hello_ack(AVCodecContext *avctx,
                                      const uint8_t *payload, int len) {
   VTRemoteRBuf r;
@@ -937,21 +944,47 @@ static int vtremote_handle_hello_ack(AVCodecContext *avctx,
   int ret = vtremote_rbuf_read_u8(&r, &status);
   if (ret < 0)
     return ret;
-  if (status != 0)
-    return AVERROR(EACCES);
 
-  /* Skip strings and counts best-effort */
-  const uint8_t *s;
-  int slen;
-  vtremote_rbuf_read_str(&r, &s, &slen); /* server_name */
-  vtremote_rbuf_read_str(&r, &s, &slen); /* server_version */
+  /* Best-effort parse server info so we can produce useful diagnostics on failure. */
+  const uint8_t *server_name = NULL, *server_ver = NULL;
+  int server_name_len = 0, server_ver_len = 0;
+  vtremote_rbuf_read_str(&r, &server_name, &server_name_len); /* server_name */
+  vtremote_rbuf_read_str(&r, &server_ver, &server_ver_len);   /* server_version */
   uint8_t caps = 0;
   vtremote_rbuf_read_u8(&r, &caps);
-  for (int i = 0; i < caps; i++)
+  for (int i = 0; i < caps; i++) {
+    const uint8_t *s = NULL;
+    int slen = 0;
     vtremote_rbuf_read_str(&r, &s, &slen);
-  uint16_t max_sessions, active;
+  }
+  uint16_t max_sessions = 0, active = 0;
   vtremote_rbuf_read_u16(&r, &max_sessions);
   vtremote_rbuf_read_u16(&r, &active);
+
+  if (status != 0) {
+    if (status == 1) {
+      av_log(avctx, AV_LOG_ERROR,
+             "vtremote server busy (sessions active=%u max=%u) [%.*s %.*s]\n",
+             active, max_sessions,
+             server_name_len,
+             server_name ? (const char *)server_name : "",
+             server_ver_len, server_ver ? (const char *)server_ver : "");
+      return AVERROR(EAGAIN);
+    }
+    if (status == 2) {
+      av_log(avctx, AV_LOG_ERROR,
+             "vtremote server unauthorized (token mismatch) [%.*s %.*s]\n",
+             server_name_len,
+             server_name ? (const char *)server_name : "",
+             server_ver_len, server_ver ? (const char *)server_ver : "");
+      return AVERROR(EACCES);
+    }
+    av_log(avctx, AV_LOG_ERROR,
+           "vtremote server refused handshake (status=%u) [%.*s %.*s]\n", status,
+           server_name_len, server_name ? (const char *)server_name : "",
+           server_ver_len, server_ver ? (const char *)server_ver : "");
+    return AVERROR(EACCES);
+  }
   return 0;
 }
 
@@ -1094,6 +1127,13 @@ static int vtremote_handshake(AVCodecContext *avctx) {
     VTR_CLOSE_SOCKET(fd);
     s->fd = -1;
     return ret;
+  }
+  if (hdr.type == VTREMOTE_MSG_ERROR) {
+    vtremote_log_error_payload(avctx, pl, hdr.length);
+    av_free(pl);
+    VTR_CLOSE_SOCKET(fd);
+    s->fd = -1;
+    return AVERROR(EIO);
   }
   if (hdr.type != VTREMOTE_MSG_HELLO_ACK) {
     av_free(pl);
@@ -1496,6 +1536,13 @@ cfg_fail:
     s->fd = -1;
     return ret;
   }
+  if (hdr.type == VTREMOTE_MSG_ERROR) {
+    vtremote_log_error_payload(avctx, pl, hdr.length);
+    av_free(pl);
+    VTR_CLOSE_SOCKET(fd);
+    s->fd = -1;
+    return AVERROR(EIO);
+  }
   if (hdr.type != VTREMOTE_MSG_CONFIGURE_ACK) {
     av_free(pl);
     VTR_CLOSE_SOCKET(fd);
@@ -1542,9 +1589,6 @@ static int enqueue_packet(AVCodecContext *avctx, const uint8_t *payload,
     s->last_dts = dst->dts;
   }
   if (dst->pts == AV_NOPTS_VALUE)
-    dst->pts = dst->dts;
-  if (dst->pts != AV_NOPTS_VALUE && dst->dts != AV_NOPTS_VALUE &&
-      dst->pts < dst->dts)
     dst->pts = dst->dts;
   if (s->pkt_q_count < s->pkt_q_size)
     s->pkt_q_count++;
@@ -1796,17 +1840,7 @@ int ff_vtremote_common_receive_packet(AVCodecContext *avctx, AVPacket *pkt) {
       break;
     }
     case VTREMOTE_MSG_ERROR: {
-      uint32_t code = 0;
-      VTRemoteRBuf er;
-      vtremote_rbuf_init(&er, payload, hdr.length);
-      vtremote_rbuf_read_u32(&er, &code);
-      const uint8_t *msg = NULL;
-      int mlen = 0;
-      if (vtremote_rbuf_read_str(&er, &msg, &mlen) == 0)
-        av_log(avctx, AV_LOG_ERROR, "vtremote server error %u: %.*s\n", code,
-               mlen, msg);
-      else
-        av_log(avctx, AV_LOG_ERROR, "vtremote server error %u\n", code);
+      vtremote_log_error_payload(avctx, payload, hdr.length);
       av_free(payload);
       return AVERROR(EIO);
     }

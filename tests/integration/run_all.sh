@@ -40,6 +40,8 @@ run_step() {
 }
 
 run_step "mock_roundtrip"      bash "${ROOT}/tests/integration/run_mock_roundtrip.sh"
+run_step "mock_pts_dts"        bash "${ROOT}/tests/integration/run_mock_pts_dts_semantics.sh"
+run_step "mock_transcode_pts_dts" bash "${ROOT}/tests/integration/run_mock_transcode_pts_dts_semantics.sh"
 run_step "mock_decode"         bash "${ROOT}/tests/integration/run_mock_decode.sh"
 run_step "complex_chain"       bash "${ROOT}/tests/integration/run_complex_chain_test.sh"
 run_step "vtremoted_roundtrip" bash "${ROOT}/tests/integration/run_vtremoted_roundtrip.sh"

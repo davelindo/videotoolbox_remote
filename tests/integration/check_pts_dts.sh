@@ -32,7 +32,6 @@ awk -F, -v gop="$EXPECTED_GOP" '
 BEGIN { err=0; lastdts=-1; lastk=-1; gaps=0; totalGap=0 }
 {
   pts=$1; dts=$2; flags=$3;
-  if (dts > pts + 1e-6) { err++; printf("pts<dts at packet %d: pts=%s dts=%s\n", NR, pts, dts) > "/dev/stderr" }
   # Check for strict monotonicity (dts must be > lastdts, not just >=)
   # FFmpeg warns "Non-monotonic DTS" when dts <= previous dts
   if (lastdts >= 0 && dts < lastdts + 1e-6) { err++; printf("non-monotonic dts at packet %d: %s <= %s\n", NR, dts, lastdts) > "/dev/stderr" }

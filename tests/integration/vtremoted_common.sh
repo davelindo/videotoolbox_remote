@@ -20,6 +20,29 @@ vtremote_start_server() {
   local use_existing="${VTREMOTE_USE_EXISTING:-}"
   local remote_host="${VTREMOTE_HOST:-}"
 
+  wait_for_listen_by_pid() {
+    local pid="$1"
+    local port="$2"
+    # If lsof is available, verify the *child pid* owns the listening socket.
+    if command -v lsof >/dev/null 2>&1; then
+      for _ in $(seq 1 20); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+          return 1
+        fi
+        if lsof -nP -a -p "$pid" -iTCP:${port} -sTCP:LISTEN >/dev/null 2>&1; then
+          return 0
+        fi
+        sleep 0.1
+      done
+      return 1
+    fi
+
+    # Fallback: no lsof. Give the process a moment to fail fast (e.g. bind errors),
+    # then treat "still alive" as good enough for local tests.
+    sleep 0.3
+    kill -0 "$pid" 2>/dev/null
+  }
+
   if [[ -z "${VTREMOTED:-}" ]]; then
     echo "VTREMOTED not set (path to vtremoted binary)" >&2
     return 1
@@ -56,23 +79,12 @@ vtremote_start_server() {
     VTREMOTE_SERVER_PID=$SERVER_PID
     VTREMOTE_SERVER_LOG="$log_file"
 
-    if command -v lsof >/dev/null 2>&1; then
-      local listening=0
-      for _ in $(seq 1 20); do
-        if lsof -nP -iTCP:${port} -sTCP:LISTEN >/dev/null 2>&1; then
-          listening=1
-          break
-        fi
-        sleep 0.1
-      done
-      if [[ "$listening" -eq 0 ]]; then
-        kill "$SERVER_PID" 2>/dev/null || true
-        wait "$SERVER_PID" 2>/dev/null || true
-        port=""
-        continue
-      fi
-    else
-      sleep 0.3
+    # Ensure we started *our* vtremoted, not some existing process that already had the port.
+    if ! wait_for_listen_by_pid "$SERVER_PID" "$port"; then
+      kill "$SERVER_PID" 2>/dev/null || true
+      wait "$SERVER_PID" 2>/dev/null || true
+      port=""
+      continue
     fi
 
     if command -v rg >/dev/null 2>&1; then

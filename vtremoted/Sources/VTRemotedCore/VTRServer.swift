@@ -141,6 +141,8 @@ public final class VTRServer {
             }
 
             if !limiter.tryAcquire() {
+                let snap = limiter.snapshot()
+                logger.info("BUSY reject fd=\(clientFd) active=\(snap.activeSessions)/\(snap.maxSessions)")
                 rejectBusy(
                     fd: clientFd,
                     serverName: serverName,

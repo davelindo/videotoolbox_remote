@@ -154,9 +154,10 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                     # Dummy Annex B IDR slice (non-compliant but frame-like)
                     data = b"\x00\x00\x00\x01\x65\x88"
                     pkt_flags = 1 if (flags & 0x1) else 0  # keyframe if requested
+                    dts = pts + int(getattr(args, "packet_dts_offset", 0))
                     body = (
                         struct.pack(">q", pts)
-                        + struct.pack(">q", pts)          # dts = pts in mock
+                        + struct.pack(">q", dts)
                         + struct.pack(">q", duration)
                         + struct.pack(">I", pkt_flags)
                         + struct.pack(">I", len(data))
@@ -175,6 +176,22 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                     data_len, off = read_u32(payload, off)
                     # consume payload
                     off += data_len
+
+                    if getattr(args, "packet_reply", "frame") == "packet":
+                        # Reply with a dummy Annex B packet (non-compliant but packet-like).
+                        data = b"\x00\x00\x00\x01\x65\x88"
+                        pkt_flags = 1 if (flags & 0x1) else 0  # keyframe if requested
+                        out_dts = pts + int(getattr(args, "packet_dts_offset", 0))
+                        body = (
+                            struct.pack(">q", pts)
+                            + struct.pack(">q", out_dts)
+                            + struct.pack(">q", dur)
+                            + struct.pack(">I", pkt_flags)
+                            + struct.pack(">I", len(data))
+                            + data
+                        )
+                        write_msg(conn, MSG_PACKET, body)
+                        continue
                     
                     # Respond with dummy NV12 frame
                     # Frame format: pts(8), dur(8), flags(4), plane_count(1), [stride(4), height(4), len(4), data]...
@@ -238,6 +255,18 @@ def main() -> int:
     parser.add_argument("--listen", default="127.0.0.1:5555", help="host:port to bind (default: 127.0.0.1:5555)")
     parser.add_argument("--token", default="", help="expected HELLO token (empty to disable)")
     parser.add_argument("--max-sessions", type=int, default=4, help="max_sessions reported in HELLO_ACK")
+    parser.add_argument(
+        "--packet-dts-offset",
+        type=int,
+        default=0,
+        help="When replying with PACKET, set packet DTS = PTS + offset (default: 0)",
+    )
+    parser.add_argument(
+        "--packet-reply",
+        choices=["frame", "packet"],
+        default="frame",
+        help="Reply to PACKET with FRAME (decode) or PACKET (transcode-style) (default: frame)",
+    )
     parser.add_argument("--once", action="store_true", help="handle a single connection then exit")
     args = parser.parse_args()
     serve(args.listen, args.token, args)

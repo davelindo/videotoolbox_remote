@@ -23,6 +23,9 @@
         private let warmupSemaphore = DispatchSemaphore(value: 0)
         private var forceKeyframeNext = false
 
+        /// FFmpeg's `AV_NOPTS_VALUE` (INT64_MIN) transported over the wire.
+        private static let noPtsTicks: Int64 = Int64.min
+
         /// Tracks DTS/PTS for monotonicity and duplicate detection
         private let timestampTracker = TimestampTracker()
         private let callbackLock = NSLock()
@@ -328,7 +331,7 @@
                 }
             }
 
-            let pts = cmTime(fromTicks: ptsTicks, timebase: config.timebase)
+            let pts = cmTimeOrInvalid(fromTicks: ptsTicks, timebase: config.timebase)
             let duration = durTicks > 0 ? cmTime(fromTicks: durTicks, timebase: config.timebase) : .invalid
             let forceKey = (flags & 1) != 0 || takeForceKeyframeNext()
             let props: CFDictionary? = forceKey ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
@@ -583,7 +586,7 @@
                 remaining = 0
             }
 
-            let pts = cmTime(fromTicks: ptsTicks, timebase: config.timebase)
+            let pts = cmTimeOrInvalid(fromTicks: ptsTicks, timebase: config.timebase)
             let duration = durTicks > 0 ? cmTime(fromTicks: durTicks, timebase: config.timebase) : .invalid
             let forceKey = (flags & 1) != 0 || takeForceKeyframeNext()
             let props: CFDictionary? = forceKey ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
@@ -679,9 +682,9 @@
             }
 
             var timing = CMSampleTimingInfo(
-                duration: cmTime(fromTicks: durTicks, timebase: config.timebase),
-                presentationTimeStamp: cmTime(fromTicks: ptsTicks, timebase: config.timebase),
-                decodeTimeStamp: cmTime(fromTicks: dtsTicks, timebase: config.timebase)
+                duration: durTicks > 0 ? cmTime(fromTicks: durTicks, timebase: config.timebase) : .invalid,
+                presentationTimeStamp: cmTimeOrInvalid(fromTicks: ptsTicks, timebase: config.timebase),
+                decodeTimeStamp: cmTimeOrInvalid(fromTicks: dtsTicks, timebase: config.timebase)
             )
 
             var sample: CMSampleBuffer?
@@ -1426,17 +1429,18 @@
             }
 
             let pts = sbuf.presentationTimeStamp
-            let ptsTicks = config.timebase.ticks(from: RationalTime(value: pts.value, timescale: pts.timescale))
+            let ptsTicks = ticksOrNoPts(from: pts, timebase: config.timebase)
 
-            // Get DTS from VideoToolbox, falling back to PTS when invalid (common when B-frames disabled)
+            // Get DTS from VideoToolbox, falling back to PTS when invalid (common when B-frames disabled).
             let rawDts = CMSampleBufferGetDecodeTimeStamp(sbuf)
-            let dtsTime: CMTime = (rawDts.isValid && rawDts.isNumeric) ? rawDts : pts
-            let rawDtsTicks = config.timebase.ticks(
-                from: RationalTime(
-                    value: dtsTime.value,
-                    timescale: dtsTime.timescale
-                )
-            )
+            let rawDtsTicks: Int64
+            if rawDts.isValid && rawDts.isNumeric {
+                rawDtsTicks = ticksOrNoPts(from: rawDts, timebase: config.timebase)
+            } else if ptsTicks != Self.noPtsTicks {
+                rawDtsTicks = ptsTicks
+            } else {
+                rawDtsTicks = Self.noPtsTicks
+            }
 
             let dur = sbuf.duration.isNumeric ? sbuf.duration : .invalid
             let durTicks = dur.isNumeric ?
@@ -1784,7 +1788,7 @@
         private func encodeTranscodeFrames(_ frames: [ReorderedDecodedFrame<TranscodeFramePayload>]) {
             guard let config else { return }
             for frame in frames {
-                let pts = cmTime(fromTicks: frame.ptsTicks, timebase: config.timebase)
+                let pts = cmTimeOrInvalid(fromTicks: frame.ptsTicks, timebase: config.timebase)
                 let duration: CMTime
                 if frame.durTicks > 0 {
                     duration = cmTime(fromTicks: frame.durTicks, timebase: config.timebase)
@@ -1800,7 +1804,7 @@
 
         private func enqueueTranscodeFrame(pixelBuffer: CVPixelBuffer, pts: CMTime, duration: CMTime) {
             guard let config else { return }
-            let ptsTicks = config.timebase.ticks(from: RationalTime(value: pts.value, timescale: pts.timescale))
+            let ptsTicks = ticksOrNoPts(from: pts, timebase: config.timebase)
             let durTicks: Int64 = if duration.isNumeric {
                 config.timebase.ticks(from: RationalTime(value: duration.value, timescale: duration.timescale))
             } else {
@@ -2033,7 +2037,7 @@
 
             guard CVPixelBufferGetPlaneCount(pixelBuffer) >= 2 else { return }
 
-            let ptsTicks = config.timebase.ticks(from: RationalTime(value: pts.value, timescale: pts.timescale))
+            let ptsTicks = ticksOrNoPts(from: pts, timebase: config.timebase)
             let durTicks: Int64 = if duration.isNumeric {
                 config.timebase.ticks(from: RationalTime(value: duration.value, timescale: duration.timescale))
             } else {
@@ -2205,6 +2209,16 @@
             default:
                 nil
             }
+        }
+
+        private func cmTimeOrInvalid(fromTicks ticks: Int64, timebase: Timebase) -> CMTime {
+            if ticks == Self.noPtsTicks { return .invalid }
+            return cmTime(fromTicks: ticks, timebase: timebase)
+        }
+
+        private func ticksOrNoPts(from time: CMTime, timebase: Timebase) -> Int64 {
+            guard time.isValid && time.isNumeric else { return Self.noPtsTicks }
+            return timebase.ticks(from: RationalTime(value: time.value, timescale: time.timescale))
         }
 
         private func cmTime(fromTicks ticks: Int64, timebase: Timebase) -> CMTime {

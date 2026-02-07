@@ -51,10 +51,6 @@ final class TimestampTracker: @unchecked Sendable {
                     pts = lastPtsTicks + 1
                     ptsAdjusted = true
                 }
-                if dts > pts {
-                    pts = dts
-                    ptsAdjusted = true
-                }
             }
 
             lastPtsTicks = pts

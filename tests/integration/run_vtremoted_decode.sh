@@ -97,10 +97,11 @@ if [[ "$HEVC_OK" -eq 0 ]]; then
 fi
 
 if [[ -z "$USE_EXISTING" ]]; then
-  echo "Starting vtremoted on 127.0.0.1:${VTREMOTE_PORT}..."
+  echo "Starting vtremoted on 127.0.0.1:${VTREMOTE_PORT:-<auto>}..."
   vtremote_start_server /tmp/vtremoted_decode.log
   SERVER_PID="${VTREMOTE_SERVER_PID:-}"
   PORT="$VTREMOTE_PORT"
+  echo "Using vtremoted on 127.0.0.1:${PORT} (pid=${SERVER_PID})"
 else
   echo "Using existing vtremoted on 127.0.0.1:${PORT}..."
 fi
