@@ -16,7 +16,7 @@ if [[ ! -x "$FFMPEG_BIN" ]]; then
 fi
 
 # Default to the repo-built ffmpeg if no system ffmpeg is available.
-if [[ ! -x "$FFMPEG_LOCAL_BIN" ]] && ! command -v "$FFMPEG_LOCAL_BIN" >/dev/null 2>&1; then
+if ! command -v "$FFMPEG_LOCAL_BIN" >/dev/null 2>&1; then
   FFMPEG_LOCAL_BIN="$FFMPEG_BIN"
 fi
 
