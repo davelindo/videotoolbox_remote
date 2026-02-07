@@ -5,7 +5,7 @@ set -euo pipefail
 # Requirements: built ffmpeg binary at ../ffmpeg/ffmpeg and vtremoted at ../vtremoted/.build/debug/vtremoted
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-FFMPEG_BIN="${FFMPEG:-${ROOT}/ffmpeg/ffmpeg}"
+FFMPEG_BIN="${FFMPEG_BIN:-${FFMPEG:-${ROOT}/ffmpeg/ffmpeg}}"
 FFMPEG_LOCAL_BIN="${FFMPEG_LOCAL:-ffmpeg}"
 VTREMOTED_BIN="${VTREMOTED:-${ROOT}/vtremoted/.build/debug/vtremoted}"
 source "${ROOT}/tests/integration/vtremoted_common.sh"
@@ -14,6 +14,12 @@ LOCAL_ALLOW_SW="${VTREMOTE_LOCAL_ALLOW_SW:-1}"
 if [[ ! -x "$FFMPEG_BIN" ]]; then
   echo "ffmpeg not found at $FFMPEG_BIN (override with FFMPEG)" >&2; exit 1
 fi
+
+# Default to the repo-built ffmpeg if no system ffmpeg is available.
+if [[ ! -x "$FFMPEG_LOCAL_BIN" ]] && ! command -v "$FFMPEG_LOCAL_BIN" >/dev/null 2>&1; then
+  FFMPEG_LOCAL_BIN="$FFMPEG_BIN"
+fi
+
 if [[ ! -x "$VTREMOTED_BIN" ]]; then
   echo "vtremoted not found at $VTREMOTED_BIN (build it or set VTREMOTED)" >&2; exit 1
 fi
