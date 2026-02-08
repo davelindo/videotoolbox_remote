@@ -116,8 +116,73 @@ echo "Transcoding via vtremote_transcode (out=${OUT_CODEC})..."
   -bsf:v "$BSF_ARGS" \
   -an -sn -dn "$OUT_FILE" >/tmp/vtremote_long_transcode_ffmpeg.log 2>&1
 
+echo "Checking transcode log for timestamp warnings..."
+if grep -qiE "Invalid DTS:|Non-monotonic DTS|non monotonically increasing dts" /tmp/vtremote_long_transcode_ffmpeg.log; then
+  echo "ERROR: ffmpeg reported timestamp problems during muxing; see /tmp/vtremote_long_transcode_ffmpeg.log" >&2
+  grep -niE "Invalid DTS:|Non-monotonic DTS|non monotonically increasing dts" /tmp/vtremote_long_transcode_ffmpeg.log | head -n 50 >&2 || true
+  exit 1
+fi
+
 echo "Checking DTS monotonicity..."
 "$ROOT/tests/integration/check_pts_dts.sh" "$OUT_FILE" "$LONG_GOP"
+
+echo "Checking decoded frame timestamp deltas (presentation order)..."
+python3 - <<PY
+import subprocess
+
+ffprobe = "$FFPROBE_BIN"
+path = "$OUT_FILE"
+rate_s = "$LONG_RATE"
+dur_s = float("$LONG_DURATION_S")
+
+def parse_rate(s: str) -> float:
+    s = s.strip()
+    if "/" in s:
+        num, den = s.split("/", 1)
+        return float(num) / float(den)
+    return float(s)
+
+rate = parse_rate(rate_s)
+frame_dur = 1.0 / rate if rate > 0 else 0.0
+if frame_dur <= 0:
+    raise SystemExit("invalid rate")
+
+start = min(max(0.0, dur_s * 0.5), max(0.0, dur_s - 2.0))
+interval = f"{start}%+2"
+
+cmd = [
+    ffprobe, "-v", "error", "-select_streams", "v:0",
+    "-read_intervals", interval,
+    "-show_frames",
+    "-show_entries", "frame=best_effort_timestamp_time",
+    "-of", "csv=p=0",
+    path,
+]
+txt = subprocess.check_output(cmd, text=True)
+times = []
+for line in txt.splitlines():
+    line = line.strip()
+    if not line or line == "N/A":
+        continue
+    times.append(float(line))
+
+if len(times) < 10:
+    raise RuntimeError(f"not enough decoded frames for delta check (got {len(times)})")
+
+deltas = [b - a for a, b in zip(times, times[1:])]
+min_d = min(deltas)
+max_d = max(deltas)
+small = sum(1 for d in deltas if d < 0.0015)
+huge = sum(1 for d in deltas if d > frame_dur * 1.75)
+
+if small or huge:
+    raise RuntimeError(
+        f"bad frame timestamp deltas around t~{start:.1f}s: "
+        f"min={min_d:.6f} max={max_d:.6f} small<{0.0015}s={small} huge>{frame_dur*1.75:.6f}s={huge}"
+    )
+
+print(f"frame_delta_ok sample_start_s={start:.1f} frames={len(times)} min_delta={min_d:.6f} max_delta={max_d:.6f}")
+PY
 
 echo "Checking packet count + duration + reported fps..."
 python3 - <<PY
