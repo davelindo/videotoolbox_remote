@@ -20,6 +20,18 @@ vtremote_start_server() {
   local use_existing="${VTREMOTE_USE_EXISTING:-}"
   local remote_host="${VTREMOTE_HOST:-}"
 
+  # If the caller points at an existing daemon (e.g. a LAN vtremoted),
+  # don't require a local vtremoted binary.
+  if [[ -n "$use_existing" ]]; then
+    if [[ -z "$port" ]]; then
+      port=5555
+    fi
+    VTREMOTE_PORT="$port"
+    VTREMOTE_HOST="${remote_host:-127.0.0.1}"
+    VTREMOTE_SERVER_LOG="$log_file"
+    return 0
+  fi
+
   wait_for_listen_by_pid() {
     local pid="$1"
     local port="$2"
@@ -50,16 +62,6 @@ vtremote_start_server() {
   if [[ ! -x "$VTREMOTED" ]]; then
     echo "vtremoted not found at $VTREMOTED (build it or set VTREMOTED)" >&2
     return 1
-  fi
-
-  if [[ -n "$use_existing" ]]; then
-    if [[ -z "$port" ]]; then
-      port=5555
-    fi
-    VTREMOTE_PORT="$port"
-    VTREMOTE_HOST="${remote_host:-127.0.0.1}"
-    VTREMOTE_SERVER_LOG="$log_file"
-    return 0
   fi
 
   while (( attempts < retries )); do

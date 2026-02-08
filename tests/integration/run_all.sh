@@ -6,6 +6,7 @@ set -euo pipefail
 #   VTREMOTE_SKIP_SPEED=1     skip speed tests
 #   VTREMOTE_RUN_MATRIX=1     include speed matrix runner
 #   VTREMOTE_RUN_BENCH=1      include bench_vtremote.sh
+#   VTREMOTE_RUN_LONG=1       include long vtremote_transcode test (10min by default)
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
@@ -57,6 +58,10 @@ fi
 
 if [[ "${VTREMOTE_RUN_BENCH:-0}" != "0" ]]; then
   run_step "bench_vtremote" bash "${ROOT}/tests/integration/bench_vtremote.sh"
+fi
+
+if [[ "${VTREMOTE_RUN_LONG:-0}" != "0" ]]; then
+  run_step "vtremoted_transcode_bsf_long" bash "${ROOT}/tests/integration/run_vtremoted_transcode_bsf_long.sh"
 fi
 
 echo "OK: all integration tests passed"

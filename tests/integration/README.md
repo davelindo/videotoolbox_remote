@@ -6,13 +6,14 @@ This tree holds VideoToolbox Remote integration tests and benchmarks.
 - `run_mock_roundtrip.sh`: spins up the Python mock and runs `h264_videotoolbox_remote` against it using a built ffmpeg binary (defaults to `ffmpeg/ffmpeg` in the repo root).
 - `run_mock_decode.sh`: spins up the Python mock and runs the `h264_videotoolbox_remote` *decoder* against it (forces `-vt_remote_wire_compression none` since the mock does not compress).
 - `run_complex_chain_test.sh`: exercises a complex filter chain via the mock server to validate framing + options under load.
-- `check_pts_dts.sh`: ffprobe-based validator that fails if video packets have `pts < dts`, non-monotonic DTS, missing keyframes, or (optionally) if the average keyframe interval deviates from an expected GOP.
+- `check_pts_dts.sh`: ffprobe-based validator that fails on **non-monotonic DTS** (muxer requirement) and missing keyframes. Note: `pts < dts` is valid when B-frames are used.
 - `check_frame_packet_count.sh`: validates that decoded frame count equals packet count (guards against warmup/extra packets).
 - `check_bitrate.sh`: validates average bitrate within a tolerance window (guards against broken rate-control).
 - `bench_vtremote.sh`: local vs remote encode benchmark across multiple sizes + framerates (skips local codec if unavailable), plus an optional transcode section. Prefers `vtremoted/.build/release/vtremoted` when present.
 - `run_vtremoted_roundtrip.sh`: launches `vtremoted` on loopback, runs short H.264 + HEVC `*_videotoolbox_remote` encodes, validates PTS/DTS via `check_pts_dts.sh`, and decodes the result with `ffmpeg -xerror` to catch bad bytestream/packet formatting.
 - `run_vtremoted_decode.sh`: generates short local H.264/HEVC inputs and validates remote decode with `h264_videotoolbox_remote` / `hevc_videotoolbox_remote`.
 - `run_transcode_test.sh`: simultaneous remote decode + encode pipeline (sanity + stability).
+- `run_vtremoted_transcode_bsf_long.sh`: long-run vtremote_transcode bitstream filter test (optional; 10 minutes by default) to catch timestamp/ordering bugs that only appear after many frames.
 - `run_speed_decode_async.sh`: sync vs async remote decode speed test.
 - `run_speed_decode_matrix.sh`: matrix runner over async/sync, reorder depth, and wire compression (outputs CSV).
 - `run_all.sh`: convenience runner for the standard integration suite (with optional speed/bench toggles).
