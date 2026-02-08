@@ -103,8 +103,9 @@ else
   echo "Using existing vtremoted on ${VTREMOTE_HOST}:${VTREMOTE_PORT}"
 fi
 
-SERVER_ADDR="${VTREMOTE_HOST}:${VTREMOTE_PORT}"
-BSF_ARGS="vtremote_transcode=vt_remote_host=${SERVER_ADDR}:vt_remote_out_codec=${OUT_CODEC}:vt_remote_bitrate=${OUT_BITRATE_BPS}:vt_remote_gop=${LONG_GOP}:vt_remote_max_b_frames=${LONG_BFRAMES}:vt_remote_inflight=16:vt_remote_timeout_ms=10000"
+# Note: BSF options use ':' as the key/value separator. Don't embed ':port' inside vt_remote_host or
+# FFmpeg will try to parse the port number as the next option name.
+BSF_ARGS="vtremote_transcode=vt_remote_host=${VTREMOTE_HOST}:vt_remote_port=${VTREMOTE_PORT}:vt_remote_out_codec=${OUT_CODEC}:vt_remote_bitrate=${OUT_BITRATE_BPS}:vt_remote_gop=${LONG_GOP}:vt_remote_max_b_frames=${LONG_BFRAMES}:vt_remote_inflight=16:vt_remote_timeout_ms=10000"
 if [[ -n "$TOKEN" ]]; then
   BSF_ARGS="${BSF_ARGS}:vt_remote_token=${TOKEN}"
 fi
@@ -206,4 +207,3 @@ if [[ -s "$VERIFY_LOG" ]]; then
 fi
 
 echo "OK: long vtremote_transcode test passed; logs at /tmp/vtremote_long_transcode_ffmpeg.log"
-
