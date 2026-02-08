@@ -162,9 +162,12 @@ txt = subprocess.check_output(cmd, text=True)
 times = []
 for line in txt.splitlines():
     line = line.strip()
-    if not line or line == "N/A":
+    # Some HEVC streams can include side-data messages in ffprobe CSV output; only parse the
+    # timestamp column and ignore any trailing fields.
+    tok = line.split(",", 1)[0].strip()
+    if not tok or tok == "N/A":
         continue
-    times.append(float(line))
+    times.append(float(tok))
 
 if len(times) < 10:
     raise RuntimeError(f"not enough decoded frames for delta check (got {len(times)})")

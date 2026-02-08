@@ -731,6 +731,32 @@
         }
 
         func flush() throws {
+            // In transcode mode, the decoder can hold a small reorder buffer (especially with
+            // B-frames) and only release the final frames on EOS flush. Those decoded frames must be
+            // submitted to the encoder before we call VTCompressionSessionCompleteFrames, otherwise
+            // the last frames can be silently dropped.
+            if config?.mode == .transcode {
+                if let session = decompressionSession {
+                    _ = VTDecompressionSessionFinishDelayedFrames(session)
+                    _ = VTDecompressionSessionWaitForAsynchronousFrames(session)
+                    flushDecodedFrames()
+                }
+                if let session = compressionSession {
+                    VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
+                    callbackLock.lock()
+                    if encodeReorderBySeq {
+                        drainEncodePacketsLocked()
+                    } else if let reorder = encodeDtsReorderBuffer {
+                        let pkts = reorder.flush()
+                        for pkt in pkts {
+                            emitEncodedPacketLocked(pkt)
+                        }
+                    }
+                    callbackLock.unlock()
+                }
+                return
+            }
+
             if let session = compressionSession {
                 VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
                 callbackLock.lock()
