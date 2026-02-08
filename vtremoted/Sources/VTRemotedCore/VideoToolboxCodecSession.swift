@@ -55,6 +55,15 @@
         private var transcodeOutputHeight: Int = 0
         private var transcodeNeedsTransfer = false
 
+        // When encoding with frame reordering enabled, VideoToolbox can report DTS values that are
+        // ahead of PTS for B-frames. FFmpeg's muxer treats dts > pts as invalid and will "guess"
+        // timestamps, which causes jitter/duplicates and breaks metrics alignment.
+        //
+        // We keep PTS unchanged (A/V sync), and shift DTS earlier by a fixed offset (in ticks)
+        // derived from reorder depth and nominal frame duration.
+        private var nominalFrameDurTicks: Int64 = 0
+        private var encodeDtsOffsetTicks: Int64 = 0
+
         private class FrameContext {
             let seq: UInt64
             let sideData: [Data]
@@ -125,6 +134,8 @@
             transcodeOutputWidth = 0
             transcodeOutputHeight = 0
             transcodeNeedsTransfer = false
+            nominalFrameDurTicks = 0
+            encodeDtsOffsetTicks = 0
             switch configuration.mode {
             case .encode:
                 encoderCodec = configuration.codec
@@ -1216,6 +1227,15 @@
                 encodeDtsReorderDepth = min(64, max(2, frameDelay))
                 encodeDtsReorderBuffer = EncodeReorderBuffer(depth: encodeDtsReorderDepth)
             }
+
+            // If we already observed a nominal duration, (re)compute the DTS shift now.
+            if useDtsReorder, nominalFrameDurTicks > 0 {
+                // Add a small cushion to cover mixed 41/42ms timecode patterns (e.g. 24000/1001 into 1/1000).
+                encodeDtsOffsetTicks = Int64(encodeDtsReorderDepth + 1) * nominalFrameDurTicks
+                logger.info("ENCODE dts_offset_ticks=\(encodeDtsOffsetTicks) (depth=\(encodeDtsReorderDepth) dur_ticks=\(nominalFrameDurTicks))")
+            } else {
+                encodeDtsOffsetTicks = 0
+            }
             callbackLock.unlock()
 
             timestampTracker.reset(enforceMonotonicPts: useSeqReorder)
@@ -1326,7 +1346,19 @@
         private func emitEncodedPacketLocked(_ pkt: PendingEncodedPacket) {
             guard config != nil else { return }
 
-            let result = timestampTracker.process(ptsTicks: pkt.ptsTicks, dtsTicks: pkt.dtsTicks)
+            let ptsTicks = pkt.ptsTicks
+            var dtsTicks = pkt.dtsTicks
+
+            // If we're in DTS-reorder mode, shift DTS earlier by a fixed amount so that dts <= pts.
+            // This prevents FFmpeg muxers from rewriting timestamps (which causes jitter and duplicate PTS).
+            if !encodeReorderBySeq && encodeDtsOffsetTicks > 0 && dtsTicks != Self.noPtsTicks {
+                let (shifted, overflow) = dtsTicks.subtractingReportingOverflow(encodeDtsOffsetTicks)
+                if !overflow {
+                    dtsTicks = shifted
+                }
+            }
+
+            let result = timestampTracker.process(ptsTicks: ptsTicks, dtsTicks: dtsTicks)
             let adjustedPtsTicks: Int64
             let adjustedDtsTicks: Int64
             switch result {
@@ -1445,6 +1477,18 @@
             let dur = sbuf.duration.isNumeric ? sbuf.duration : .invalid
             let durTicks = dur.isNumeric ?
                 config.timebase.ticks(from: RationalTime(value: dur.value, timescale: dur.timescale)) : 0
+
+            if nominalFrameDurTicks == 0 && durTicks > 0 {
+                nominalFrameDurTicks = durTicks
+                if !encodeReorderBySeq && encodeDtsReorderDepth > 0 {
+                    // Add a small cushion to cover mixed timecode patterns.
+                    encodeDtsOffsetTicks = Int64(encodeDtsReorderDepth + 1) * nominalFrameDurTicks
+                    logger.info(
+                        "ENCODE observed dur_ticks=\(nominalFrameDurTicks); " +
+                            "dts_offset_ticks=\(encodeDtsOffsetTicks) (depth=\(encodeDtsReorderDepth))"
+                    )
+                }
+            }
 
             let attachments = CMSampleBufferGetSampleAttachmentsArray(sbuf, createIfNecessary: false)
             let isKey = (attachments as? [[NSObject: Any]])?.first?[kCMSampleAttachmentKey_NotSync as NSObject] == nil
