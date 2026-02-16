@@ -1,6 +1,12 @@
 import Foundation
 
 final class StubCodecSession: CodecSession {
+    private struct PacketEnvelope {
+        let pts: UInt64
+        let dts: UInt64
+        let dur: UInt64
+    }
+
     private let send: MessageSender
     private var config: SessionConfiguration?
     private let timestampTracker = TimestampTracker()
@@ -14,6 +20,51 @@ final class StubCodecSession: CodecSession {
         let enforceMonotonicPts = configuration.options.maxBFrames <= 0
         timestampTracker.reset(enforceMonotonicPts: enforceMonotonicPts)
         return Data()
+    }
+
+    private func maybeDecompress(_ data: Data, expectedSize: Int, compressionMode: Int) throws -> Data {
+        switch compressionMode {
+        case 1:
+            guard let decoded = LZ4Codec.decompress(data, expectedSize: expectedSize) else {
+                throw VTRemotedError.protocolViolation("LZ4 decode failed")
+            }
+            return decoded
+        case 2:
+            guard let decoded = ZstdCodec.decompress(data, expectedSize: expectedSize) else {
+                throw VTRemotedError.protocolViolation("Zstd decode failed")
+            }
+            return decoded
+        default:
+            return data
+        }
+    }
+
+    private func maybeCompress(_ data: Data, compressionMode: Int) throws -> Data {
+        switch compressionMode {
+        case 1:
+            guard let compressed = LZ4Codec.compress(data) else {
+                throw VTRemotedError.protocolViolation("LZ4 compress failed")
+            }
+            return compressed
+        case 2:
+            guard let compressed = ZstdCodec.compress(data) else {
+                throw VTRemotedError.protocolViolation("Zstd compress failed")
+            }
+            return compressed
+        default:
+            return data
+        }
+    }
+
+    private func decodePacketEnvelope(_ payload: Data) throws -> PacketEnvelope {
+        var reader = ByteReader(payload)
+        let pts = try reader.readBEUInt64()
+        let dts = try reader.readBEUInt64()
+        let dur = try reader.readBEUInt64()
+        _ = try reader.readBEUInt32() // isKey
+        let dataLen = try Int(reader.readBEUInt32())
+        _ = try reader.readBytes(count: dataLen)
+        return PacketEnvelope(pts: pts, dts: dts, dur: dur)
     }
 
     func handleFrameMessage(_ payload: Data) throws {
@@ -44,20 +95,11 @@ final class StubCodecSession: CodecSession {
             let raw = try reader.readBytes(count: len)
 
             let expectedSize = max(0, stride * height)
-            let planeData: Data
-            if configuration.options.wireCompression == 1 {
-                guard let decoded = LZ4Codec.decompress(raw, expectedSize: expectedSize) else {
-                    throw VTRemotedError.protocolViolation("LZ4 decode failed")
-                }
-                planeData = decoded
-            } else if configuration.options.wireCompression == 2 {
-                guard let decoded = ZstdCodec.decompress(raw, expectedSize: expectedSize) else {
-                    throw VTRemotedError.protocolViolation("Zstd decode failed")
-                }
-                planeData = decoded
-            } else {
-                planeData = raw
-            }
+            let planeData = try maybeDecompress(
+                raw,
+                expectedSize: expectedSize,
+                compressionMode: configuration.options.wireCompression
+            )
             planes.append(Plane(stride: stride, height: height, data: planeData))
         }
 
@@ -90,34 +132,19 @@ final class StubCodecSession: CodecSession {
     func handlePacketMessage(_ payload: Data) throws {
         guard let configuration = config else { throw VTRemotedError.protocolViolation("PACKET before CONFIGURE") }
         guard configuration.mode == .decode || configuration.mode == .transcode else { return }
+        let packet = try decodePacketEnvelope(payload)
 
         if configuration.mode == .transcode {
-            var reader = ByteReader(payload)
-            let pts = try reader.readBEUInt64()
-            let dts = try reader.readBEUInt64()
-            let dur = try reader.readBEUInt64()
-            _ = try reader.readBEUInt32() // isKey
-            let dataLen = try Int(reader.readBEUInt32())
-            _ = try reader.readBytes(count: dataLen)
-
             var writer = ByteWriter()
-            writer.writeBE(pts)
-            writer.writeBE(dts)
-            writer.writeBE(dur)
+            writer.writeBE(packet.pts)
+            writer.writeBE(packet.dts)
+            writer.writeBE(packet.dur)
             writer.writeBE(UInt32(1))
             writer.writeBE(UInt32(4))
             writer.write(Data([0x00, 0x00, 0x00, 0x01]))
             try send(.packet, [writer.data])
             return
         }
-
-        var reader = ByteReader(payload)
-        let pts = try reader.readBEUInt64()
-        _ = try reader.readBEUInt64() // dts
-        let dur = try reader.readBEUInt64()
-        _ = try reader.readBEUInt32() // isKey
-        let dataLen = try Int(reader.readBEUInt32())
-        _ = try reader.readBytes(count: dataLen)
 
         let bytesPerSample = (configuration.pixelFormat == 2) ? 2 : 1
         let yStride = configuration.width * bytesPerSample
@@ -127,27 +154,12 @@ final class StubCodecSession: CodecSession {
         let yBytes = yStride * yHeight
         let uvBytes = uvStride * uvHeight
 
-        func maybeCompress(_ data: Data) throws -> Data {
-            if configuration.options.wireCompression == 1 {
-                guard let compressed = LZ4Codec.compress(data) else {
-                    throw VTRemotedError.protocolViolation("LZ4 compress failed")
-                }
-                return compressed
-            } else if configuration.options.wireCompression == 2 {
-                guard let compressed = ZstdCodec.compress(data) else {
-                    throw VTRemotedError.protocolViolation("Zstd compress failed")
-                }
-                return compressed
-            }
-            return data
-        }
-
-        let yPlane = try maybeCompress(Data(count: yBytes))
-        let uvPlane = try maybeCompress(Data(count: uvBytes))
+        let yPlane = try maybeCompress(Data(count: yBytes), compressionMode: configuration.options.wireCompression)
+        let uvPlane = try maybeCompress(Data(count: uvBytes), compressionMode: configuration.options.wireCompression)
 
         var writer = ByteWriter()
-        writer.writeBE(pts)
-        writer.writeBE(dur)
+        writer.writeBE(packet.pts)
+        writer.writeBE(packet.dur)
         writer.writeBE(UInt32(0))
         writer.write(UInt8(2))
 

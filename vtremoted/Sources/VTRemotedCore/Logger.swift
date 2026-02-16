@@ -32,6 +32,10 @@ public final class Logger: @unchecked Sendable {
         log(.debug, message())
     }
 
+    private static func writeToStderr(_ raw: UnsafeRawBufferPointer) {
+        _ = write(2, raw.baseAddress, raw.count)
+    }
+
     private func log(_ msgLevel: LogLevel, _ message: String) {
         guard level.rawValue >= msgLevel.rawValue else { return }
         lock.lock()
@@ -41,12 +45,12 @@ public final class Logger: @unchecked Sendable {
         let line = "[vtremoted] \(message)\n"
         _ = line.utf8.withContiguousStorageIfAvailable { buf in
             buf.withUnsafeBytes { raw in
-                _ = write(2, raw.baseAddress, raw.count)
+                Self.writeToStderr(raw)
             }
         } ?? {
             let bytes = Array(line.utf8)
             bytes.withUnsafeBytes { raw in
-                _ = write(2, raw.baseAddress, raw.count)
+                Self.writeToStderr(raw)
             }
         }()
     }

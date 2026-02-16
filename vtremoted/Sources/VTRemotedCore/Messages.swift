@@ -49,6 +49,12 @@ public struct ConfigureRequest: Sendable {
     public var options: [String: String]
     public var extradata: Data?
 
+    private static func readLengthPrefixedUTF8(_ reader: inout ByteReader) throws -> String? {
+        let length = try Int(reader.readBEUInt16())
+        let data = try reader.readBytes(count: length)
+        return String(data: data, encoding: .utf8)
+    }
+
     public static func decode(_ payload: Data) throws -> ConfigureRequest {
         var reader = ByteReader(payload)
         let width = try Int(reader.readBEUInt32())
@@ -63,12 +69,9 @@ public struct ConfigureRequest: Sendable {
         if reader.remaining >= 2 {
             let count = try Int(reader.readBEUInt16())
             for _ in 0 ..< count {
-                let keyLen = try Int(reader.readBEUInt16())
-                let keyData = try reader.readBytes(count: keyLen)
-                let valLen = try Int(reader.readBEUInt16())
-                let valData = try reader.readBytes(count: valLen)
-                if let key = String(data: keyData, encoding: .utf8),
-                   let val = String(data: valData, encoding: .utf8) {
+                let key = try readLengthPrefixedUTF8(&reader)
+                let val = try readLengthPrefixedUTF8(&reader)
+                if let key, let val {
                     options[key] = val
                 }
             }

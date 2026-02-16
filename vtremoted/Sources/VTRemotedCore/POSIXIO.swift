@@ -1,20 +1,10 @@
 import Foundation
 
 public enum POSIXIO {
-    public static func readExact(fd fileDescriptor: Int32, into buffer: inout Data, count: Int) throws {
-        guard count >= 0 else {
-            throw VTRemotedError.protocolViolation("negative read length")
-        }
-        if buffer.count != count {
-            buffer.count = count
-        }
-
+    private static func readExactLoop(count: Int, reader: (Int) -> Int) throws {
         var got = 0
         while got < count {
-            let bytesRead = buffer.withUnsafeMutableBytes { ptr in
-                guard let base = ptr.baseAddress else { return Int(-1) }
-                return read(fileDescriptor, base.advanced(by: got), count - got)
-            }
+            let bytesRead = reader(got)
             if bytesRead < 0 {
                 let code = errno
                 if code == EINTR { continue }
@@ -27,24 +17,46 @@ public enum POSIXIO {
         }
     }
 
+    private static func writeExactLoop(count: Int, writer: (Int) -> Int) throws {
+        var writtenTotal = 0
+        while writtenTotal < count {
+            let bytesWritten = writer(writtenTotal)
+            if bytesWritten < 0 {
+                let code = errno
+                if code == EINTR { continue }
+                throw VTRemotedError.ioError(code: code, message: String(cString: strerror(code)))
+            }
+            if bytesWritten == 0 {
+                throw VTRemotedError.ioError(code: 0, message: "write returned 0")
+            }
+            writtenTotal += bytesWritten
+        }
+    }
+
+    public static func readExact(fd fileDescriptor: Int32, into buffer: inout Data, count: Int) throws {
+        guard count >= 0 else {
+            throw VTRemotedError.protocolViolation("negative read length")
+        }
+        if buffer.count != count {
+            buffer.count = count
+        }
+
+        try readExactLoop(count: count) { got in
+            buffer.withUnsafeMutableBytes { ptr in
+                guard let base = ptr.baseAddress else { return Int(-1) }
+                return read(fileDescriptor, base.advanced(by: got), count - got)
+            }
+        }
+    }
+
     public static func readExact(fd fileDescriptor: Int32, into buffer: UnsafeMutableRawPointer, count: Int) throws {
         guard count >= 0 else {
             throw VTRemotedError.protocolViolation("negative read length")
         }
         if count == 0 { return }
 
-        var got = 0
-        while got < count {
-            let bytesRead = read(fileDescriptor, buffer.advanced(by: got), count - got)
-            if bytesRead < 0 {
-                let code = errno
-                if code == EINTR { continue }
-                throw VTRemotedError.ioError(code: code, message: String(cString: strerror(code)))
-            }
-            if bytesRead == 0 {
-                throw VTRemotedError.ioError(code: 0, message: "unexpected EOF")
-            }
-            got += bytesRead
+        try readExactLoop(count: count) { got in
+            read(fileDescriptor, buffer.advanced(by: got), count - got)
         }
     }
 
@@ -125,20 +137,10 @@ public enum POSIXIO {
     }
 
     public static func writeAll(fd fileDescriptor: Int32, data: Data) throws {
-        var total = 0
         try data.withUnsafeBytes { raw in
             guard let base = raw.baseAddress else { return }
-            while total < data.count {
-                let bytesWritten = write(fileDescriptor, base.advanced(by: total), data.count - total)
-                if bytesWritten < 0 {
-                    let code = errno
-                    if code == EINTR { continue }
-                    throw VTRemotedError.ioError(code: code, message: String(cString: strerror(code)))
-                }
-                if bytesWritten == 0 {
-                    throw VTRemotedError.ioError(code: 0, message: "write returned 0")
-                }
-                total += bytesWritten
+            try writeExactLoop(count: data.count) { offset in
+                write(fileDescriptor, base.advanced(by: offset), data.count - offset)
             }
         }
     }

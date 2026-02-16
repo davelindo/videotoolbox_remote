@@ -35,13 +35,15 @@ public struct Arguments: Equatable, Sendable {
             case "--token-env":
                 if let value = iterator.next() { args.tokenEnv = value }
             case "--max-sessions":
-                if let value = iterator.next(), let n = Int(value), n > 0 { args.maxSessions = n }
+                if let value = iterator.next(), let parsed = Int(value), parsed > 0 { args.maxSessions = parsed }
             case "--handshake-timeout":
-                if let value = iterator.next(), let n = Int(value), n > 0 { args.handshakeTimeoutSeconds = n }
+                if let value = iterator.next(), let parsed = Int(value), parsed > 0 {
+                    args.handshakeTimeoutSeconds = parsed
+                }
             case "--idle-timeout":
-                if let value = iterator.next(), let n = Int(value), n > 0 { args.idleTimeoutSeconds = n }
+                if let value = iterator.next(), let parsed = Int(value), parsed > 0 { args.idleTimeoutSeconds = parsed }
             case "--max-message-bytes":
-                if let value = iterator.next(), let n = Int(value), n > 0 { args.maxMessageBytes = n }
+                if let value = iterator.next(), let parsed = Int(value), parsed > 0 { args.maxMessageBytes = parsed }
             case "--log-level":
                 if let value = iterator.next() {
                     let lower = value.lowercased()

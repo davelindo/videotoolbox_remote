@@ -262,6 +262,90 @@ static int vtremote_add_opt(VTRemoteKV **opts, int *count, int *cap,
     return 0;
 }
 
+static int vtremote_add_opt_value(VTRemoteKV **opts, int *count, int *cap,
+                                  const char *key, char *value)
+{
+    int ret = vtremote_add_opt(opts, count, cap, key, value);
+    if (ret < 0)
+        av_freep(&value);
+    return ret;
+}
+
+static int vtremote_add_opt_string(VTRemoteKV **opts, int *count, int *cap,
+                                   const char *key, const char *value)
+{
+    char *tmp;
+    if (!value)
+        return AVERROR(EINVAL);
+    tmp = av_strdup(value);
+    if (!tmp)
+        return AVERROR(ENOMEM);
+    return vtremote_add_opt_value(opts, count, cap, key, tmp);
+}
+
+static int vtremote_add_opt_int(VTRemoteKV **opts, int *count, int *cap,
+                                const char *key, int value)
+{
+    char *tmp = av_asprintf("%d", value);
+    if (!tmp)
+        return AVERROR(ENOMEM);
+    return vtremote_add_opt_value(opts, count, cap, key, tmp);
+}
+
+static int vtremote_add_opt_int64(VTRemoteKV **opts, int *count, int *cap,
+                                  const char *key, int64_t value)
+{
+    char *tmp = av_asprintf("%" PRId64, value);
+    if (!tmp)
+        return AVERROR(ENOMEM);
+    return vtremote_add_opt_value(opts, count, cap, key, tmp);
+}
+
+static int vtremote_add_opt_double(VTRemoteKV **opts, int *count, int *cap,
+                                   const char *key, double value)
+{
+    char *tmp = av_asprintf("%.6f", value);
+    if (!tmp)
+        return AVERROR(ENOMEM);
+    return vtremote_add_opt_value(opts, count, cap, key, tmp);
+}
+
+typedef struct VTRemoteIntOptSpec {
+    const char *key;
+    int value;
+    int min_value;
+} VTRemoteIntOptSpec;
+
+static int vtremote_add_int_opt_specs(VTRemoteKV **opts, int *count, int *cap,
+                                      const VTRemoteIntOptSpec *specs, size_t nb_specs)
+{
+    int ret;
+    for (size_t i = 0; i < nb_specs; i++) {
+        if (specs[i].value < specs[i].min_value)
+            continue;
+        ret = vtremote_add_opt_int(opts, count, cap, specs[i].key, specs[i].value);
+        if (ret < 0)
+            return ret;
+    }
+    return 0;
+}
+
+static int vtremote_add_opt_nonempty_string(VTRemoteKV **opts, int *count, int *cap,
+                                            const char *key, const char *value)
+{
+    if (!value || !*value)
+        return 0;
+    return vtremote_add_opt_string(opts, count, cap, key, value);
+}
+
+static int vtremote_add_opt_if_enabled(VTRemoteKV **opts, int *count, int *cap,
+                                       const char *key, int enabled)
+{
+    if (!enabled)
+        return 0;
+    return vtremote_add_opt_string(opts, count, cap, key, "1");
+}
+
 static void vtremote_free_opts(VTRemoteKV **opts, int count) {
     if (!opts || !*opts)
         return;
@@ -618,311 +702,264 @@ static int vtremote_handle_configure_ack(AVBSFContext *ctx, const uint8_t *paylo
     return 0;
 }
 
-static int vtremote_handshake(AVBSFContext *ctx) {
-    VTRemoteTranscodeContext *s = ctx->priv_data;
-    if (!s->host || !*s->host)
+static int vtremote_build_hostport(const VTRemoteTranscodeContext *s,
+                                   char *hostport, size_t hostport_size)
+{
+    if (!s || !s->host || !*s->host || !hostport || !hostport_size)
         return AVERROR(EINVAL);
-    char hostport[320];
-    if (strrchr(s->host, ':')) {
-        av_strlcpy(hostport, s->host, sizeof(hostport));
-    } else {
-        if (s->port <= 0 || s->port > 65535)
-            return AVERROR(EINVAL);
-        snprintf(hostport, sizeof(hostport), "%s:%d", s->host, s->port);
-    }
-    int fd = connect_hostport(hostport, s->timeout_ms);
-    if (fd < 0) {
-        av_log(ctx, AV_LOG_ERROR, "Failed to connect to %s\n", hostport);
-        return fd;
-    }
-    s->fd = fd;
 
+    if (strrchr(s->host, ':')) {
+        if (av_strlcpy(hostport, s->host, hostport_size) >= hostport_size)
+            return AVERROR(EINVAL);
+        return 0;
+    }
+
+    if (s->port <= 0 || s->port > 65535)
+        return AVERROR(EINVAL);
+    {
+        int n = snprintf(hostport, hostport_size, "%s:%d", s->host, s->port);
+        if (n < 0 || (size_t)n >= hostport_size)
+            return AVERROR(EINVAL);
+    }
+
+    return 0;
+}
+
+static int vtremote_read_expected_ack(AVBSFContext *ctx, uint8_t expected_type,
+                                      int (*handler)(AVBSFContext *, const uint8_t *, int))
+{
+    VTRemoteTranscodeContext *s = ctx->priv_data;
+    VTRemoteMsgHeader hdr;
+    uint8_t *payload = NULL;
+    int ret = vtremote_read_msg(s, &hdr, &payload);
+    if (ret < 0)
+        return ret;
+
+    if (hdr.type == VTREMOTE_MSG_ERROR) {
+        vtremote_log_error_payload(ctx, payload, hdr.length);
+        av_free(payload);
+        return AVERROR(EIO);
+    }
+    if (hdr.type != expected_type) {
+        av_free(payload);
+        return AVERROR_INVALIDDATA;
+    }
+
+    ret = handler(ctx, payload, hdr.length);
+    av_free(payload);
+    return ret;
+}
+
+static int vtremote_send_hello(AVBSFContext *ctx)
+{
+    VTRemoteTranscodeContext *s = ctx->priv_data;
     VTRemoteWBuf payload;
+    int ret;
+
     vtremote_wbuf_init(&payload);
     vtremote_payload_hello(&payload, s->token, codec_name_for_id(s->codec_id_in),
                            "ffmpeg-vtremote", FFMPEG_VERSION);
-    int ret = vtremote_send_msg(s, VTREMOTE_MSG_HELLO, &payload);
+    ret = vtremote_send_msg(s, VTREMOTE_MSG_HELLO, &payload);
     vtremote_wbuf_free(&payload);
-    if (ret < 0) {
-        VTR_CLOSE_SOCKET(fd);
-        s->fd = -1;
-        return ret;
-    }
-
-    VTRemoteMsgHeader hdr;
-    uint8_t *pl = NULL;
-    ret = vtremote_read_msg(s, &hdr, &pl);
-    if (ret < 0) {
-        VTR_CLOSE_SOCKET(fd);
-        s->fd = -1;
-        return ret;
-    }
-    if (hdr.type == VTREMOTE_MSG_ERROR) {
-        vtremote_log_error_payload(ctx, pl, hdr.length);
-        av_free(pl);
-        VTR_CLOSE_SOCKET(fd);
-        s->fd = -1;
-        return AVERROR(EIO);
-    }
-    if (hdr.type != VTREMOTE_MSG_HELLO_ACK) {
-        av_free(pl);
-        VTR_CLOSE_SOCKET(fd);
-        s->fd = -1;
-        return AVERROR_INVALIDDATA;
-    }
-    ret = vtremote_handle_hello_ack(ctx, pl, hdr.length);
-    av_free(pl);
-    if (ret < 0) {
-        VTR_CLOSE_SOCKET(fd);
-        s->fd = -1;
-        return ret;
-    }
-
-    VTRemoteKV *opts = NULL;
-    int opt_count = 0;
-    int opt_cap = 0;
-    char *tmp = NULL;
-
-    tmp = av_strdup("transcode");
-    ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "mode", tmp);
     if (ret < 0)
-        goto cfg_fail;
+        return ret;
 
-    if (s->decode_async >= 0) {
-        tmp = av_asprintf("%d", s->decode_async);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "decode_async", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->decode_reorder_depth >= -1) {
-        tmp = av_asprintf("%d", s->decode_reorder_depth);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "decode_reorder_depth", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->out_codec && *s->out_codec) {
-        tmp = av_strdup(s->out_codec);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "out_codec", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->out_width > 0) {
-        tmp = av_asprintf("%d", s->out_width);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "out_width", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->out_height > 0) {
-        tmp = av_asprintf("%d", s->out_height);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "out_height", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->scale_mode && *s->scale_mode) {
-        tmp = av_strdup(s->scale_mode);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "scale_mode", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->bitrate > 0) {
-        tmp = av_asprintf("%d", s->bitrate);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "bitrate", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->maxrate > 0) {
-        tmp = av_asprintf("%d", s->maxrate);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "maxrate", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->gop > 0) {
-        tmp = av_asprintf("%d", s->gop);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "gop", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->max_b_frames >= 0) {
-        tmp = av_asprintf("%d", s->max_b_frames);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "max_b_frames", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->profile >= 0) {
-        tmp = av_asprintf("%d", s->profile);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "profile", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->level > 0) {
-        tmp = av_asprintf("%d", s->level);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "level", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->entropy > 0) {
-        tmp = av_asprintf("%d", s->entropy);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "entropy", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->allow_sw) {
-        tmp = av_strdup("1");
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "allow_sw", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->require_sw) {
-        tmp = av_strdup("1");
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "require_sw", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->realtime >= 0) {
-        tmp = av_asprintf("%d", s->realtime);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "realtime", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->prio_speed >= 0) {
-        tmp = av_asprintf("%d", s->prio_speed);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "prio_speed", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->power_efficient >= 0) {
-        tmp = av_asprintf("%d", s->power_efficient);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "power_efficient", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->spatial_aq >= 0) {
-        tmp = av_asprintf("%d", s->spatial_aq);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "spatial_aq", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->max_ref_frames > 0) {
-        tmp = av_asprintf("%d", s->max_ref_frames);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "max_ref_frames", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->max_slice_bytes >= 0) {
-        tmp = av_asprintf("%d", s->max_slice_bytes);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "max_slice_bytes", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->constant_bit_rate) {
-        tmp = av_strdup("1");
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "constant_bit_rate", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
+    return vtremote_read_expected_ack(ctx, VTREMOTE_MSG_HELLO_ACK, vtremote_handle_hello_ack);
+}
+
+static int vtremote_append_transcode_opts(AVBSFContext *ctx, VTRemoteKV **opts,
+                                          int *opt_count, int *opt_cap)
+{
+    VTRemoteTranscodeContext *s = ctx->priv_data;
+    const VTRemoteIntOptSpec pre_codec_int_opts[] = {
+        { "decode_async", s->decode_async, 0 },
+        { "decode_reorder_depth", s->decode_reorder_depth, -1 },
+    };
+    const VTRemoteIntOptSpec scale_int_opts[] = {
+        { "out_width", s->out_width, 1 },
+        { "out_height", s->out_height, 1 },
+    };
+    const VTRemoteIntOptSpec encode_int_opts[] = {
+        { "bitrate", s->bitrate, 1 },
+        { "maxrate", s->maxrate, 1 },
+        { "gop", s->gop, 1 },
+        { "max_b_frames", s->max_b_frames, 0 },
+        { "profile", s->profile, 0 },
+        { "level", s->level, 1 },
+        { "entropy", s->entropy, 0 },
+    };
+    const VTRemoteIntOptSpec post_bool_int_opts[] = {
+        { "realtime", s->realtime, 0 },
+        { "prio_speed", s->prio_speed, 0 },
+        { "power_efficient", s->power_efficient, 0 },
+        { "spatial_aq", s->spatial_aq, 0 },
+        { "max_ref_frames", s->max_ref_frames, 1 },
+        { "max_slice_bytes", s->max_slice_bytes, 0 },
+    };
+    const VTRemoteIntOptSpec color_int_opts[] = {
+        { "color_range", s->color_range, 1 },
+        { "colorspace", s->colorspace, 1 },
+        { "color_primaries", s->color_primaries, 1 },
+        { "color_trc", s->color_trc, 1 },
+    };
+    const VTRemoteIntOptSpec tail_int_opts[] = {
+        { "a53_cc", s->a53_cc, 0 },
+    };
+    int ret;
+
+    ret = vtremote_add_opt_string(opts, opt_count, opt_cap, "mode", "transcode");
+    if (ret < 0)
+        return ret;
+
+    ret = vtremote_add_int_opt_specs(opts, opt_count, opt_cap, pre_codec_int_opts,
+                                     FF_ARRAY_ELEMS(pre_codec_int_opts));
+    if (ret < 0)
+        return ret;
+
+    ret = vtremote_add_opt_nonempty_string(opts, opt_count, opt_cap, "out_codec", s->out_codec);
+    if (ret < 0)
+        return ret;
+
+    ret = vtremote_add_int_opt_specs(opts, opt_count, opt_cap, scale_int_opts,
+                                     FF_ARRAY_ELEMS(scale_int_opts));
+    if (ret < 0)
+        return ret;
+
+    ret = vtremote_add_opt_nonempty_string(opts, opt_count, opt_cap, "scale_mode", s->scale_mode);
+    if (ret < 0)
+        return ret;
+
+    ret = vtremote_add_int_opt_specs(opts, opt_count, opt_cap, encode_int_opts,
+                                     FF_ARRAY_ELEMS(encode_int_opts));
+    if (ret < 0)
+        return ret;
+
+    ret = vtremote_add_opt_if_enabled(opts, opt_count, opt_cap, "allow_sw", s->allow_sw);
+    if (ret < 0)
+        return ret;
+    ret = vtremote_add_opt_if_enabled(opts, opt_count, opt_cap, "require_sw", s->require_sw);
+    if (ret < 0)
+        return ret;
+
+    ret = vtremote_add_int_opt_specs(opts, opt_count, opt_cap, post_bool_int_opts,
+                                     FF_ARRAY_ELEMS(post_bool_int_opts));
+    if (ret < 0)
+        return ret;
+
+    ret = vtremote_add_opt_if_enabled(opts, opt_count, opt_cap, "constant_bit_rate",
+                                      s->constant_bit_rate);
+    if (ret < 0)
+        return ret;
+
     if (s->alpha_quality > 0.0) {
-        tmp = av_asprintf("%.3f", s->alpha_quality);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "alpha_quality", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->color_range > 0) {
-        tmp = av_asprintf("%d", s->color_range);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "color_range", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->colorspace > 0) {
-        tmp = av_asprintf("%d", s->colorspace);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "colorspace", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->color_primaries > 0) {
-        tmp = av_asprintf("%d", s->color_primaries);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "color_primaries", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->color_trc > 0) {
-        tmp = av_asprintf("%d", s->color_trc);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "color_trc", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->sar_num > 0 && s->sar_den > 0) {
-        tmp = av_asprintf("%d", s->sar_num);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "sar_num", tmp);
-        if (ret < 0) goto cfg_fail;
-        tmp = av_asprintf("%d", s->sar_den);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "sar_den", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->a53_cc >= 0) {
-        tmp = av_asprintf("%d", s->a53_cc);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "a53_cc", tmp);
-        if (ret < 0) goto cfg_fail;
-    }
-    if (s->flags != 0) {
-        tmp = av_asprintf("%" PRId64, s->flags);
-        if (!tmp) { ret = AVERROR(ENOMEM); goto cfg_fail; }
-        ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "flags", tmp);
-        if (ret < 0) goto cfg_fail;
+        ret = vtremote_add_opt_double(opts, opt_count, opt_cap, "alpha_quality",
+                                      s->alpha_quality);
+        if (ret < 0)
+            return ret;
     }
 
-    VTRemoteWBuf cfg;
-    vtremote_wbuf_init(&cfg);
-    const uint8_t *extradata = ctx->par_in->extradata;
-    uint32_t extradata_len = ctx->par_in->extradata_size > 0 ? (uint32_t)ctx->par_in->extradata_size : 0;
-    AVRational tb = ctx->time_base_in.num && ctx->time_base_in.den ? ctx->time_base_in : (AVRational){1, 90000};
-    int retcfg = vtremote_payload_configure(&cfg,
-                                            ctx->par_in->width,
-                                            ctx->par_in->height,
-                                            (uint8_t)s->pixel_format,
-                                            tb.num, tb.den,
-                                            0, 1,
-                                            opts, opt_count,
-                                            extradata, extradata_len);
-    if (retcfg < 0) {
-        vtremote_wbuf_free(&cfg);
-        ret = retcfg;
-        goto cfg_fail;
+    ret = vtremote_add_int_opt_specs(opts, opt_count, opt_cap, color_int_opts,
+                                     FF_ARRAY_ELEMS(color_int_opts));
+    if (ret < 0)
+        return ret;
+
+    if (s->sar_num > 0 && s->sar_den > 0) {
+        ret = vtremote_add_opt_int(opts, opt_count, opt_cap, "sar_num", s->sar_num);
+        if (ret < 0)
+            return ret;
+        ret = vtremote_add_opt_int(opts, opt_count, opt_cap, "sar_den", s->sar_den);
+        if (ret < 0)
+            return ret;
     }
+
+    ret = vtremote_add_int_opt_specs(opts, opt_count, opt_cap, tail_int_opts,
+                                     FF_ARRAY_ELEMS(tail_int_opts));
+    if (ret < 0)
+        return ret;
+
+    if (s->flags != 0) {
+        ret = vtremote_add_opt_int64(opts, opt_count, opt_cap, "flags", s->flags);
+        if (ret < 0)
+            return ret;
+    }
+
+    return 0;
+}
+
+static int vtremote_send_configure(AVBSFContext *ctx, VTRemoteKV *opts, int opt_count)
+{
+    VTRemoteTranscodeContext *s = ctx->priv_data;
+    VTRemoteWBuf cfg;
+    const uint8_t *extradata = ctx->par_in->extradata;
+    uint32_t extradata_len = ctx->par_in->extradata_size > 0 ?
+                             (uint32_t)ctx->par_in->extradata_size : 0;
+    AVRational tb = ctx->time_base_in.num && ctx->time_base_in.den ?
+                    ctx->time_base_in : (AVRational){1, 90000};
+    int ret;
+
+    vtremote_wbuf_init(&cfg);
+    ret = vtremote_payload_configure(&cfg,
+                                     ctx->par_in->width,
+                                     ctx->par_in->height,
+                                     (uint8_t)s->pixel_format,
+                                     tb.num, tb.den,
+                                     0, 1,
+                                     opts, opt_count,
+                                     extradata, extradata_len);
+    if (ret < 0) {
+        vtremote_wbuf_free(&cfg);
+        return ret;
+    }
+
     ret = vtremote_send_msg(s, VTREMOTE_MSG_CONFIGURE, &cfg);
     vtremote_wbuf_free(&cfg);
     if (ret < 0)
-        goto cfg_fail;
+        return ret;
 
-    ret = vtremote_read_msg(s, &hdr, &pl);
+    return vtremote_read_expected_ack(ctx, VTREMOTE_MSG_CONFIGURE_ACK,
+                                      vtremote_handle_configure_ack);
+}
+
+static int vtremote_handshake(AVBSFContext *ctx) {
+    VTRemoteTranscodeContext *s = ctx->priv_data;
+    char hostport[320];
+    VTRemoteKV *opts = NULL;
+    int opt_count = 0;
+    int opt_cap = 0;
+    int ret;
+
+    ret = vtremote_build_hostport(s, hostport, sizeof(hostport));
     if (ret < 0)
-        goto cfg_fail;
-    if (hdr.type == VTREMOTE_MSG_ERROR) {
-        vtremote_log_error_payload(ctx, pl, hdr.length);
-        av_free(pl);
-        ret = AVERROR(EIO);
-        goto cfg_fail;
+        return ret;
+
+    s->fd = connect_hostport(hostport, s->timeout_ms);
+    if (s->fd < 0) {
+        av_log(ctx, AV_LOG_ERROR, "Failed to connect to %s\n", hostport);
+        return s->fd;
     }
-    if (hdr.type != VTREMOTE_MSG_CONFIGURE_ACK) {
-        av_free(pl);
-        ret = AVERROR_INVALIDDATA;
-        goto cfg_fail;
-    }
-    ret = vtremote_handle_configure_ack(ctx, pl, hdr.length);
-    av_free(pl);
+
+    ret = vtremote_send_hello(ctx);
     if (ret < 0)
-        goto cfg_fail;
+        goto fail;
+
+    ret = vtremote_append_transcode_opts(ctx, &opts, &opt_count, &opt_cap);
+    if (ret < 0)
+        goto fail;
+
+    ret = vtremote_send_configure(ctx, opts, opt_count);
+    if (ret < 0)
+        goto fail;
 
     vtremote_free_opts(&opts, opt_count);
     s->connected = 1;
     return 0;
 
-cfg_fail:
+fail:
     vtremote_free_opts(&opts, opt_count);
-    VTR_CLOSE_SOCKET(fd);
-    s->fd = -1;
+    if (s->fd >= 0) {
+        VTR_CLOSE_SOCKET(s->fd);
+        s->fd = -1;
+    }
     return ret;
 }
 

@@ -70,34 +70,51 @@ public final class VTRClientHandler: @unchecked Sendable {
     }
 
     private func sendError(code: UInt32, message: String) {
-        let err = ErrorResponse(code: code, message: message)
-        let body = err.encode()
-        stats.bytesOut += Int64(VTRProtocol.headerSize + body.count)
+        let body = makeErrorBody(code: code, message: message)
         // Best-effort: if the socket is already dead, we'll just log on our side.
         try? messageIO.send(type: .error, body: body)
     }
 
-    private func readMessageCapped(timeoutSeconds: Int, maxBodyBytes: Int) throws -> (header: VTRMessageHeader, body: Data) {
+    private func sendErrorThrowing(code: UInt32, message: String) throws {
+        let body = makeErrorBody(code: code, message: message)
+        try messageIO.send(type: .error, body: body)
+    }
+
+    private func makeErrorBody(code: UInt32, message: String) -> Data {
+        let err = ErrorResponse(code: code, message: message)
+        let body = err.encode()
+        stats.bytesOut += Int64(VTRProtocol.headerSize + body.count)
+        return body
+    }
+
+    private func validateMessageLength(_ length: Int, type: UInt16, cap: Int) throws {
+        if length > cap {
+            sendError(code: 4, message: "message too large type=\(type) len=\(length) cap=\(cap)")
+            throw VTRemotedError.protocolViolation("message too large")
+        }
+    }
+
+    private func transcodeLogSuffix(for config: SessionConfiguration) -> String {
+        guard config.mode == .transcode else { return "" }
+        return " out=\(config.outputWidth)x\(config.outputHeight) " +
+            "scale=\(config.scaleMode.rawValue) out_codec=\(config.outputCodec.rawValue)"
+    }
+
+    private func readMessageCapped(
+        timeoutSeconds: Int,
+        maxBodyBytes: Int
+    ) throws -> (header: VTRMessageHeader, body: Data) {
         let cap = min(max(1, maxBodyBytes), maxMessageBytes)
 
         if let streamIO = messageIO as? VTRStreamIO {
             let header = try streamIO.readHeader(timeoutSeconds: timeoutSeconds)
-            if header.length > UInt32(cap) {
-                sendError(
-                    code: 4,
-                    message: "message too large type=\(header.type) len=\(header.length) cap=\(cap)"
-                )
-                throw VTRemotedError.protocolViolation("message too large")
-            }
+            try validateMessageLength(Int(header.length), type: header.type, cap: cap)
             let body = try streamIO.readBody(length: Int(header.length), pool: inputBufferPool)
             return (header, body)
         }
 
         let (header, body) = try messageIO.readMessage(pool: inputBufferPool, timeoutSeconds: timeoutSeconds)
-        if body.count > cap {
-            sendError(code: 4, message: "message too large type=\(header.type) len=\(body.count) cap=\(cap)")
-            throw VTRemotedError.protocolViolation("message too large")
-        }
+        try validateMessageLength(body.count, type: header.type, cap: cap)
         return (header, body)
     }
 
@@ -154,13 +171,7 @@ public final class VTRClientHandler: @unchecked Sendable {
 
         let wireComp = config.options.wireCompression
         if wireComp != 0, wireComp != 1, wireComp != 2 {
-            let err = ErrorResponse(
-                code: 1,
-                message: "unsupported wire_compression=\(wireComp)"
-            )
-            let body = err.encode()
-            stats.bytesOut += Int64(VTRProtocol.headerSize + body.count)
-            try messageIO.send(type: .error, body: body)
+            try sendErrorThrowing(code: 1, message: "unsupported wire_compression=\(wireComp)")
             throw VTRemotedError.unsupported("wire_compression")
         }
 
@@ -170,9 +181,7 @@ public final class VTRClientHandler: @unchecked Sendable {
                 "pix=\(config.pixelFormat) tb=\(config.timebase.num)/\(config.timebase.den) " +
                 "fr=\(config.frameRate.num)/\(config.frameRate.den) br=\(config.options.bitrate) " +
                 "gop=\(config.options.gop) wc=\(config.options.wireCompression)" +
-                (config.mode == .transcode
-                    ? " out=\(config.outputWidth)x\(config.outputHeight) scale=\(config.scaleMode.rawValue) out_codec=\(config.outputCodec.rawValue)"
-                    : "")
+                transcodeLogSuffix(for: config)
         )
 
         let mode = config.mode
@@ -206,16 +215,11 @@ public final class VTRClientHandler: @unchecked Sendable {
                     "pixfmt=\(config.pixelFormat) tb=\(config.timebase.num)/\(config.timebase.den) " +
                     "br=\(config.options.bitrate) " +
                     "gop=\(config.options.gop) wc=\(config.options.wireCompression)" +
-                    (config.mode == .transcode
-                        ? " out=\(config.outputWidth)x\(config.outputHeight) scale=\(config.scaleMode.rawValue) out_codec=\(config.outputCodec.rawValue)"
-                        : "")
+                    transcodeLogSuffix(for: config)
             )
         } catch {
             logger.error("CONFIGURE failed mode=\(config.mode.rawValue) codec=\(config.codec.rawValue) error=\(error)")
-            let err = ErrorResponse(code: 1, message: "configure failed: \(error)")
-            let body = err.encode()
-            stats.bytesOut += Int64(VTRProtocol.headerSize + body.count)
-            try messageIO.send(type: .error, body: body)
+            try sendErrorThrowing(code: 1, message: "configure failed: \(error)")
             throw error
         }
     }
@@ -243,18 +247,13 @@ public final class VTRClientHandler: @unchecked Sendable {
         if let streamIO = messageIO as? VTRStreamIO {
             while true {
                 let header = try streamIO.readHeader(timeoutSeconds: idleTimeoutSeconds)
-                if header.length > UInt32(maxMessageBytes) {
-                    sendError(
-                        code: 4,
-                        message: "message too large type=\(header.type) len=\(header.length) cap=\(maxMessageBytes)"
-                    )
-                    throw VTRemotedError.protocolViolation("message too large")
-                }
-                stats.bytesIn += Int64(VTRProtocol.headerSize) + Int64(header.length)
+                let messageLength = Int(header.length)
+                try validateMessageLength(messageLength, type: header.type, cap: maxMessageBytes)
+                stats.bytesIn += Int64(VTRProtocol.headerSize) + Int64(messageLength)
                 stats.maybeReport(mode: configuration.mode, logger: logger, intervalSeconds: 0.25)
 
                 guard let type = VTRMessageType(rawValue: header.type) else {
-                    try streamIO.skip(length: Int(header.length))
+                    try streamIO.skip(length: messageLength)
                     continue
                 }
 
@@ -263,42 +262,38 @@ public final class VTRClientHandler: @unchecked Sendable {
                     stats.framesIn += 1
                     stats.recordSubmit()
                     if let streamSession = codecSession as? StreamingCodecSession {
-                        try streamSession.handleFrameStream(io: streamIO, length: Int(header.length))
+                        try streamSession.handleFrameStream(streamIO: streamIO, length: messageLength)
                     } else {
-                        let payload = try streamIO.readBody(length: Int(header.length), pool: inputBufferPool)
+                        let payload = try streamIO.readBody(length: messageLength, pool: inputBufferPool)
                         defer { inputBufferPool.return(payload) }
                         try codecSession.handleFrameMessage(payload)
                     }
                 case .packet:
                     stats.packetsIn += 1
-                    let payload = try streamIO.readBody(length: Int(header.length), pool: inputBufferPool)
+                    let payload = try streamIO.readBody(length: messageLength, pool: inputBufferPool)
                     defer { inputBufferPool.return(payload) }
                     try codecSession.handlePacketMessage(payload)
                 case .flush:
-                    try streamIO.skip(length: Int(header.length))
+                    try streamIO.skip(length: messageLength)
                     try codecSession.flush()
                     try sendDoneAndLog()
                     return
                 case .ping:
-                    try streamIO.skip(length: Int(header.length))
+                    try streamIO.skip(length: messageLength)
                     try messageIO.send(type: .pong, body: Data())
                 default:
-                    try streamIO.skip(length: Int(header.length))
+                    try streamIO.skip(length: messageLength)
                 }
             }
         }
 
         while true {
             let (header, payload) = try messageIO.readMessage(pool: inputBufferPool, timeoutSeconds: idleTimeoutSeconds)
-            if payload.count > maxMessageBytes {
-                inputBufferPool.return(payload)
-                sendError(code: 4, message: "message too large type=\(header.type) len=\(payload.count) cap=\(maxMessageBytes)")
-                throw VTRemotedError.protocolViolation("message too large")
-            }
+            defer { inputBufferPool.return(payload) }
+            try validateMessageLength(payload.count, type: header.type, cap: maxMessageBytes)
             stats.bytesIn += Int64(VTRProtocol.headerSize + payload.count)
             stats.maybeReport(mode: configuration.mode, logger: logger, intervalSeconds: 0.25)
             guard let type = VTRMessageType(rawValue: header.type) else {
-                inputBufferPool.return(payload)
                 continue
             }
 
@@ -307,21 +302,17 @@ public final class VTRClientHandler: @unchecked Sendable {
                 stats.framesIn += 1
                 stats.recordSubmit()
                 try codecSession.handleFrameMessage(payload)
-                inputBufferPool.return(payload)
             case .packet:
                 stats.packetsIn += 1
                 try codecSession.handlePacketMessage(payload)
-                inputBufferPool.return(payload)
             case .flush:
                 try codecSession.flush()
                 try sendDoneAndLog()
-                inputBufferPool.return(payload)
                 return
             case .ping:
                 try messageIO.send(type: .pong, body: Data())
-                inputBufferPool.return(payload)
             default:
-                inputBufferPool.return(payload)
+                break
             }
         }
     }

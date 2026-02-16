@@ -20,6 +20,14 @@ public final class BufferPool: @unchecked Sendable {
         self.maxPooledBytes = max(0, maxPooledBytes)
     }
 
+    private func checkout(_ item: Item, want: Int) -> Data {
+        pooledBytes = max(0, pooledBytes - item.capacityHint)
+        var buf = item.data
+        buf.count = 0
+        if want > 0 { buf.reserveCapacity(want) }
+        return buf
+    }
+
     public func get(capacity: Int) -> Data {
         let want = max(0, capacity)
         lock.lock()
@@ -28,29 +36,19 @@ public final class BufferPool: @unchecked Sendable {
             // Best-fit to reduce realloc churn and avoid handing out huge buffers for small reads.
             var bestIdx: Int?
             var bestCap = Int.max
-            for i in buffers.indices {
-                let cap = buffers[i].capacityHint
+            for index in buffers.indices {
+                let cap = buffers[index].capacityHint
                 if cap >= want, cap < bestCap {
-                    bestIdx = i
+                    bestIdx = index
                     bestCap = cap
                 }
             }
             if let idx = bestIdx {
-                let item = buffers.remove(at: idx)
-                pooledBytes = max(0, pooledBytes - item.capacityHint)
-                var buf = item.data
-                buf.count = 0
-                if want > 0 { buf.reserveCapacity(want) }
-                return buf
+                return checkout(buffers.remove(at: idx), want: want)
             }
 
             // Fallback: pop last.
-            let item = buffers.removeLast()
-            pooledBytes = max(0, pooledBytes - item.capacityHint)
-            var buf = item.data
-            buf.count = 0
-            if want > 0 { buf.reserveCapacity(want) }
-            return buf
+            return checkout(buffers.removeLast(), want: want)
         }
 
         var buf = Data()

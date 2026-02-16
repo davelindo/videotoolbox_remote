@@ -8,6 +8,13 @@ public final class VTRWireConnection: @unchecked Sendable {
         self.fileDescriptor = fileDescriptor
     }
 
+    private func encodeHeader(type: VTRMessageType, bodyLength: Int) -> Data {
+        VTRMessageHeader(
+            type: type.rawValue,
+            length: UInt32(bodyLength)
+        ).encoded()
+    }
+
     public func send(type: VTRMessageType, body: Data = Data()) throws {
         try sendMessage(type: type, bodyParts: [body])
     }
@@ -16,10 +23,7 @@ public final class VTRWireConnection: @unchecked Sendable {
         sendLock.lock()
         defer { sendLock.unlock() }
         let totalLen = bodyParts.reduce(0) { $0 + $1.count }
-        let header = VTRMessageHeader(
-            type: type.rawValue,
-            length: UInt32(totalLen)
-        ).encoded()
+        let header = encodeHeader(type: type, bodyLength: totalLen)
 
         var chunks = [header]
         chunks.append(contentsOf: bodyParts)

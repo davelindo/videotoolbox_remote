@@ -60,6 +60,41 @@ public final class VTRServer {
         maxMessageBytes = max(1, arguments.maxMessageBytes)
     }
 
+    private func setSocketOption(socketFD: Int32, level: Int32, name: Int32, value: Int32) {
+        var valueCopy = value
+        _ = setsockopt(socketFD, level, name, &valueCopy, socklen_t(MemoryLayout.size(ofValue: valueCopy)))
+    }
+
+    private func configureSocketBuffers(socketFD: Int32, bytes: Int32 = 16 * 1024 * 1024) {
+        setSocketOption(socketFD: socketFD, level: Int32(SOL_SOCKET), name: Int32(SO_SNDBUF), value: bytes)
+        setSocketOption(socketFD: socketFD, level: Int32(SOL_SOCKET), name: Int32(SO_RCVBUF), value: bytes)
+    }
+
+    // `serverName/serverVersion/serverCapabilities` are passed through to the handshake ACK.
+    // swiftlint:disable:next function_parameter_count
+    private func makeClientHandler(
+        fd clientFd: Int32,
+        expectedToken: String,
+        serverName: String,
+        serverVersion: String,
+        serverCapabilities: [String],
+        limiter: VTRSessionLimiter
+    ) -> VTRClientHandler {
+        let connection = VTRWireConnection(fd: clientFd)
+        return VTRClientHandler(
+            io: connection,
+            expectedToken: expectedToken,
+            logger: logger,
+            handshakeTimeoutSeconds: handshakeTimeoutSeconds,
+            idleTimeoutSeconds: idleTimeoutSeconds,
+            maxMessageBytes: maxMessageBytes,
+            serverName: serverName,
+            serverVersion: serverVersion,
+            serverCapabilities: serverCapabilities,
+            serverSessionSnapshot: { limiter.snapshot() }
+        )
+    }
+
     public func run() throws {
         let (ipAddress, port) = try parseListenAddress(listenAddress)
         let expectedToken = try resolveExpectedToken()
@@ -79,13 +114,10 @@ public final class VTRServer {
         }
         defer { close(socketFd) }
 
-        var yes: Int32 = 1
-        _ = setsockopt(socketFd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout.size(ofValue: yes)))
+        setSocketOption(socketFD: socketFd, level: Int32(SOL_SOCKET), name: Int32(SO_REUSEADDR), value: 1)
 
         // Set large buffers on listening socket BEFORE listen() for correct TCP Window Scale negotiation
-        var bufSize: Int32 = 16 * 1024 * 1024
-        _ = setsockopt(socketFd, SOL_SOCKET, SO_SNDBUF, &bufSize, socklen_t(MemoryLayout.size(ofValue: bufSize)))
-        _ = setsockopt(socketFd, SOL_SOCKET, SO_RCVBUF, &bufSize, socklen_t(MemoryLayout.size(ofValue: bufSize)))
+        configureSocketBuffers(socketFD: socketFd)
 
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
@@ -105,7 +137,7 @@ public final class VTRServer {
             throw VTRemotedError.ioError(code: errno, message: "listen failed")
         }
 
-        print("vtremoted listening on \(listenAddress)")
+        logger.info("vtremoted listening on \(listenAddress)")
 
         while true {
             var caddr = sockaddr()
@@ -117,27 +149,19 @@ public final class VTRServer {
             }
             if clientFd < 0 { continue }
             
-            var noDelay: Int32 = 1
-            _ = setsockopt(clientFd, Int32(IPPROTO_TCP), TCP_NODELAY, &noDelay, 
-                           socklen_t(MemoryLayout.size(ofValue: noDelay)))
+            setSocketOption(socketFD: clientFd, level: Int32(IPPROTO_TCP), name: Int32(TCP_NODELAY), value: 1)
 
 #if !os(Linux)
-            var noSigPipe: Int32 = 1
-            _ = setsockopt(clientFd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe,
-                           socklen_t(MemoryLayout.size(ofValue: noSigPipe)))
+            setSocketOption(socketFD: clientFd, level: Int32(SOL_SOCKET), name: Int32(SO_NOSIGPIPE), value: 1)
 #endif
 
-            var bufSize: Int32 = 16 * 1024 * 1024
-            _ = setsockopt(clientFd, SOL_SOCKET, SO_SNDBUF, &bufSize, socklen_t(MemoryLayout.size(ofValue: bufSize)))
-            _ = setsockopt(clientFd, SOL_SOCKET, SO_RCVBUF, &bufSize, socklen_t(MemoryLayout.size(ofValue: bufSize)))
+            configureSocketBuffers(socketFD: clientFd)
             
             if let lowatValue = ProcessInfo.processInfo.environment["VTREMOTED_NOTSENT_LOWAT"],
                let lowat = Int32(lowatValue),
                lowat > 0 {
-                var notSentLowat = lowat
                 // 0x201 is TCP_NOTSENT_LOWAT on Darwin
-                _ = setsockopt(clientFd, Int32(IPPROTO_TCP), 0x201, &notSentLowat,
-                               socklen_t(MemoryLayout.size(ofValue: notSentLowat)))
+                setSocketOption(socketFD: clientFd, level: Int32(IPPROTO_TCP), name: 0x201, value: lowat)
             }
 
             if !limiter.tryAcquire() {
@@ -167,33 +191,26 @@ public final class VTRServer {
                 return
             }
             let token = expectedToken
-            let logger = logger
-            let handshakeTimeoutSeconds = handshakeTimeoutSeconds
-            let idleTimeoutSeconds = idleTimeoutSeconds
-            let maxMessageBytes = maxMessageBytes
             DispatchQueue.global().async {
                 defer {
                     limiter.release()
                     close(clientFd)
                 }
-                let connection = VTRWireConnection(fd: clientFd)
-                let handler = VTRClientHandler(
-                    io: connection,
+                let handler = self.makeClientHandler(
+                    fd: clientFd,
                     expectedToken: token,
-                    logger: logger,
-                    handshakeTimeoutSeconds: handshakeTimeoutSeconds,
-                    idleTimeoutSeconds: idleTimeoutSeconds,
-                    maxMessageBytes: maxMessageBytes,
                     serverName: serverName,
                     serverVersion: serverVersion,
                     serverCapabilities: serverCapabilities,
-                    serverSessionSnapshot: { limiter.snapshot() }
+                    limiter: limiter
                 )
                 handler.run()
             }
         }
     }
 
+    // `serverName/serverVersion/serverCapabilities` are passed through to the handshake ACK.
+    // swiftlint:disable:next function_parameter_count
     private func handleClient(
         fd clientFd: Int32,
         expectedToken: String,
@@ -206,18 +223,13 @@ public final class VTRServer {
             limiter.release()
             close(clientFd)
         }
-        let connection = VTRWireConnection(fd: clientFd)
-        let handler = VTRClientHandler(
-            io: connection,
+        let handler = makeClientHandler(
+            fd: clientFd,
             expectedToken: expectedToken,
-            logger: logger,
-            handshakeTimeoutSeconds: handshakeTimeoutSeconds,
-            idleTimeoutSeconds: idleTimeoutSeconds,
-            maxMessageBytes: maxMessageBytes,
             serverName: serverName,
             serverVersion: serverVersion,
             serverCapabilities: serverCapabilities,
-            serverSessionSnapshot: { limiter.snapshot() }
+            limiter: limiter
         )
         handler.run()
     }
@@ -249,22 +261,27 @@ public final class VTRServer {
             return tokenArg
         }
         if !tokenFile.isEmpty {
-            let token = try String(contentsOfFile: tokenFile, encoding: .utf8)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if token.isEmpty {
-                throw VTRemotedError.protocolViolation("token-file is empty")
-            }
-            return token
+            return try requireNonEmptyToken(
+                String(contentsOfFile: tokenFile, encoding: .utf8),
+                errorMessage: "token-file is empty"
+            )
         }
         if !tokenEnv.isEmpty {
-            let token = (ProcessInfo.processInfo.environment[tokenEnv] ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if token.isEmpty {
-                throw VTRemotedError.protocolViolation("token-env \(tokenEnv) is not set")
-            }
-            return token
+            let value = ProcessInfo.processInfo.environment[tokenEnv] ?? ""
+            return try requireNonEmptyToken(
+                value,
+                errorMessage: "token-env \(tokenEnv) is not set"
+            )
         }
         return ""
+    }
+
+    private func requireNonEmptyToken(_ rawValue: String, errorMessage: String) throws -> String {
+        let token = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else {
+            throw VTRemotedError.protocolViolation(errorMessage)
+        }
+        return token
     }
 
     private func parseListenAddress(_ addressString: String) throws -> (ip: String, port: UInt16) {

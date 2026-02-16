@@ -106,10 +106,126 @@
 
         private func takeForceKeyframeNext() -> Bool {
             callbackLock.lock()
-            let v = forceKeyframeNext
+            let shouldForceKeyframe = forceKeyframeNext
             forceKeyframeNext = false
             callbackLock.unlock()
-            return v
+            return shouldForceKeyframe
+        }
+
+        private static func decompressWirePayload(
+            mode: Int,
+            source: UnsafeRawBufferPointer,
+            destination: UnsafeMutableRawPointer,
+            expectedSize: Int
+        ) -> Bool {
+            switch mode {
+            case 1:
+                return LZ4Codec.decompressRaw(source, into: destination, expectedSize: expectedSize)
+            case 2:
+                return ZstdCodec.decompressRaw(source, into: destination, expectedSize: expectedSize)
+            default:
+                return false
+            }
+        }
+
+        private static func compressWirePayload(mode: Int, data: Data) -> Data? {
+            switch mode {
+            case 1:
+                return LZ4Codec.compress(data)
+            case 2:
+                return ZstdCodec.compress(data)
+            default:
+                return data
+            }
+        }
+
+        // `heightHint` lets callers override inferred row count when wire payload includes padding.
+        // swiftlint:disable:next function_parameter_count
+        private static func copyPlaneBytes(
+            source srcBase: UnsafePointer<UInt8>,
+            destination dstBase: UnsafeMutablePointer<UInt8>,
+            expectedSize: Int,
+            stride: Int,
+            destinationStride: Int,
+            rowBytes: Int,
+            heightHint: Int? = nil
+        ) {
+            if stride == destinationStride, stride == rowBytes {
+                memcpy(dstBase, srcBase, expectedSize)
+                return
+            }
+
+            let height = heightHint.map { max(0, $0) } ?? (expectedSize / stride)
+            let copyBytes = min(rowBytes, min(stride, destinationStride))
+            for row in 0 ..< height {
+                memcpy(dstBase.advanced(by: row * destinationStride),
+                       srcBase.advanced(by: row * stride),
+                       copyBytes)
+            }
+        }
+
+        // `flags` and `sideData` mirror FRAME wire fields passed to VideoToolbox.
+        // swiftlint:disable:next function_parameter_count
+        private func encodePreparedFrame(
+            session: VTCompressionSession,
+            pixelBuffer: CVPixelBuffer,
+            ptsTicks: Int64,
+            durTicks: Int64,
+            flags: UInt32,
+            sideData: [Data]
+        ) throws {
+            guard let config else { throw VTRemotedError.protocolViolation("FRAME before CONFIGURE") }
+
+            let pts = cmTimeOrInvalid(fromTicks: ptsTicks, timebase: config.timebase)
+            let duration = durTicks > 0 ? cmTime(fromTicks: durTicks, timebase: config.timebase) : .invalid
+            let forceKey = (flags & 1) != 0 || takeForceKeyframeNext()
+            let props: CFDictionary? = forceKey ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
+
+            let seq = nextEncodeSeq()
+            // Retain the pixel buffer until the encoder callback fires. VideoToolbox may consume frames
+            // asynchronously, and the pool can otherwise recycle the buffer while it is still in use.
+            let frameContext = FrameContext(seq: seq, sideData: sideData, pixelBuffer: pixelBuffer)
+            let ctxPtr = Unmanaged.passRetained(frameContext).toOpaque()
+
+            var infoFlags = VTEncodeInfoFlags()
+            let encodeStatus = VTCompressionSessionEncodeFrame(
+                session,
+                imageBuffer: pixelBuffer,
+                presentationTimeStamp: pts,
+                duration: duration,
+                frameProperties: props,
+                sourceFrameRefcon: ctxPtr,
+                infoFlagsOut: &infoFlags
+            )
+            if encodeStatus != noErr {
+                Unmanaged<FrameContext>.fromOpaque(ctxPtr).release()
+                logger.error(
+                    "VTCompressionSessionEncodeFrame failed seq=\(seq) status=\(encodeStatus) " +
+                        "infoFlags=\(infoFlags.rawValue) ptsTicks=\(ptsTicks) durTicks=\(durTicks)"
+                )
+                throw VTRemotedError.ioError(
+                    code: Int32(encodeStatus),
+                    message: "VTCompressionSessionEncodeFrame failed"
+                )
+            }
+        }
+
+        private func makeCompressionPixelBuffer(session: VTCompressionSession) throws -> CVPixelBuffer {
+            guard let pool = VTCompressionSessionGetPixelBufferPool(session) else {
+                throw VTRemotedError.videoToolboxUnavailable
+            }
+            var pixelBuffer: CVPixelBuffer?
+            let status = CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &pixelBuffer)
+            guard status == kCVReturnSuccess, let pBuffer = pixelBuffer else {
+                throw VTRemotedError.ioError(code: Int32(status), message: "CVPixelBufferPoolCreatePixelBuffer failed")
+            }
+            return pBuffer
+        }
+
+        private static func planeRowBytes(width: Int, pixelFormat: UInt8) -> (y: Int, uv: Int) {
+            let bytesPerSample = (pixelFormat == 2) ? 2 : 1
+            let rowBytes = width * bytesPerSample
+            return (rowBytes, rowBytes)
         }
 
         func configure(_ configuration: SessionConfiguration) throws -> Data {
@@ -203,21 +319,14 @@
             let expectedY = max(0, stride0 * height0)
             let expectedUV = max(0, stride1 * height1)
 
-            guard let pool = VTCompressionSessionGetPixelBufferPool(session) else {
-                throw VTRemotedError.videoToolboxUnavailable
-            }
-            var pixelBuffer: CVPixelBuffer?
-            let status = CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &pixelBuffer)
-            guard status == kCVReturnSuccess, let pBuffer = pixelBuffer else {
-                throw VTRemotedError.ioError(code: Int32(status), message: "CVPixelBufferPoolCreatePixelBuffer failed")
-            }
+            let pBuffer = try makeCompressionPixelBuffer(session: session)
 
             CVPixelBufferLockBaseAddress(pBuffer, [])
             defer { CVPixelBufferUnlockBaseAddress(pBuffer, []) }
 
-            let bytesPerSample = (config.pixelFormat == 2) ? 2 : 1
-            let rowBytesY = config.width * bytesPerSample
-            let rowBytesUV = config.width * bytesPerSample
+            let rowBytes = Self.planeRowBytes(width: config.width, pixelFormat: config.pixelFormat)
+            let rowBytesY = rowBytes.y
+            let rowBytesUV = rowBytes.uv
 
             // Helper to process a plane with zero-copy source access
             func processPlane(
@@ -239,17 +348,14 @@
                         let srcBase = payloadPtr.baseAddress!.advanced(by: rawRange.lowerBound)
                             .assumingMemoryBound(to: UInt8.self)
                         let dstBase = destBase.assumingMemoryBound(to: UInt8.self)
-                        if stride == destStride, stride == rowBytes {
-                            memcpy(dstBase, srcBase, expectedSize)
-                        } else {
-                            let height = expectedSize / stride
-                            let copyBytes = min(rowBytes, min(stride, destStride))
-                            for row in 0 ..< height {
-                                memcpy(dstBase.advanced(by: row * destStride),
-                                       srcBase.advanced(by: row * stride),
-                                       copyBytes)
-                            }
-                        }
+                        Self.copyPlaneBytes(
+                            source: srcBase,
+                            destination: dstBase,
+                            expectedSize: expectedSize,
+                            stride: stride,
+                            destinationStride: destStride,
+                            rowBytes: rowBytes
+                        )
                     }
                     return
                 }
@@ -268,14 +374,13 @@
                         start: payloadPtr.baseAddress!.advanced(by: rawRange.lowerBound),
                         count: rawRange.count
                     )
-                    if config.options.wireCompression == 1 {
-                        return temp.withUnsafeMutableBytes { dstPtr in
-                            LZ4Codec.decompressRaw(rawPtr, into: dstPtr.baseAddress!, expectedSize: expectedSize)
-                        }
-                    } else {
-                        return temp.withUnsafeMutableBytes { dstPtr in
-                            ZstdCodec.decompressRaw(rawPtr, into: dstPtr.baseAddress!, expectedSize: expectedSize)
-                        }
+                    return temp.withUnsafeMutableBytes { dstPtr in
+                        Self.decompressWirePayload(
+                            mode: config.options.wireCompression,
+                            source: rawPtr,
+                            destination: dstPtr.baseAddress!,
+                            expectedSize: expectedSize
+                        )
                     }
                 }
                 guard success else { throw VTRemotedError.protocolViolation("Decompress failed") }
@@ -285,19 +390,14 @@
                     guard let srcBase = srcPtr.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
                     let dstBase = destBase.assumingMemoryBound(to: UInt8.self)
 
-                    if stride == destStride, stride == rowBytes {
-                        // Fast path: single contiguous copy
-                        memcpy(dstBase, srcBase, expectedSize)
-                    } else {
-                        // Strided copy row-by-row
-                        let height = expectedSize / stride
-                        let copyBytes = min(rowBytes, min(stride, destStride))
-                        for row in 0 ..< height {
-                            memcpy(dstBase.advanced(by: row * destStride),
-                                   srcBase.advanced(by: row * stride),
-                                   copyBytes)
-                        }
-                    }
+                    Self.copyPlaneBytes(
+                        source: srcBase,
+                        destination: dstBase,
+                        expectedSize: expectedSize,
+                        stride: stride,
+                        destinationStride: destStride,
+                        rowBytes: rowBytes
+                    )
                 }
             }
 
@@ -342,80 +442,59 @@
                 }
             }
 
-            let pts = cmTimeOrInvalid(fromTicks: ptsTicks, timebase: config.timebase)
-            let duration = durTicks > 0 ? cmTime(fromTicks: durTicks, timebase: config.timebase) : .invalid
-            let forceKey = (flags & 1) != 0 || takeForceKeyframeNext()
-            let props: CFDictionary? = forceKey ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
-
-            let seq = nextEncodeSeq()
-            // Retain the pixel buffer until the encoder callback fires. VideoToolbox may consume frames
-            // asynchronously, and the pool can otherwise recycle the buffer while it is still in use.
-            let frameContext = FrameContext(seq: seq, sideData: sideData, pixelBuffer: pBuffer)
-            let ctxPtr = Unmanaged.passRetained(frameContext).toOpaque()
-
-            var infoFlags = VTEncodeInfoFlags()
-            let encodeStatus = VTCompressionSessionEncodeFrame(
-                session,
-                imageBuffer: pBuffer,
-                presentationTimeStamp: pts,
-                duration: duration,
-                frameProperties: props,
-                sourceFrameRefcon: ctxPtr,
-                infoFlagsOut: &infoFlags
+            try encodePreparedFrame(
+                session: session,
+                pixelBuffer: pBuffer,
+                ptsTicks: ptsTicks,
+                durTicks: durTicks,
+                flags: flags,
+                sideData: sideData
             )
-            if encodeStatus != noErr {
-                Unmanaged<FrameContext>.fromOpaque(ctxPtr).release()
-                logger.error(
-                    "VTCompressionSessionEncodeFrame failed seq=\(seq) status=\(encodeStatus) " +
-                        "infoFlags=\(infoFlags.rawValue) ptsTicks=\(ptsTicks) durTicks=\(durTicks)"
-                )
-                throw VTRemotedError.ioError(code: Int32(encodeStatus), message: "VTCompressionSessionEncodeFrame failed")
-            }
         }
 
-        func handleFrameStream(io: VTRStreamIO, length: Int) throws {
+        func handleFrameStream(streamIO: VTRStreamIO, length: Int) throws {
             guard let config else { throw VTRemotedError.protocolViolation("FRAME before CONFIGURE") }
             guard config.mode == .encode else {
-                try io.skip(length: length)
+                try streamIO.skip(length: length)
                 return
             }
             guard let session = compressionSession else { throw VTRemotedError.videoToolboxUnavailable }
 
             var remaining = length
-            func require(_ n: Int) throws {
-                guard n >= 0, remaining >= n else {
+            func require(_ byteCount: Int) throws {
+                guard byteCount >= 0, remaining >= byteCount else {
                     throw VTRemotedError.protocolViolation("unexpected EOF")
                 }
             }
 
             func readUInt8() throws -> UInt8 {
                 try require(1)
-                var v: UInt8 = 0
-                try withUnsafeMutableBytes(of: &v) { raw in
-                    try io.readExact(into: raw.baseAddress!, count: 1)
+                var value: UInt8 = 0
+                try withUnsafeMutableBytes(of: &value) { raw in
+                    try streamIO.readExact(into: raw.baseAddress!, count: 1)
                 }
                 remaining -= 1
-                return v
+                return value
             }
 
             func readBEUInt32() throws -> UInt32 {
                 try require(4)
-                var v: UInt32 = 0
-                try withUnsafeMutableBytes(of: &v) { raw in
-                    try io.readExact(into: raw.baseAddress!, count: 4)
+                var value: UInt32 = 0
+                try withUnsafeMutableBytes(of: &value) { raw in
+                    try streamIO.readExact(into: raw.baseAddress!, count: 4)
                 }
                 remaining -= 4
-                return UInt32(bigEndian: v)
+                return UInt32(bigEndian: value)
             }
 
             func readBEUInt64() throws -> UInt64 {
                 try require(8)
-                var v: UInt64 = 0
-                try withUnsafeMutableBytes(of: &v) { raw in
-                    try io.readExact(into: raw.baseAddress!, count: 8)
+                var value: UInt64 = 0
+                try withUnsafeMutableBytes(of: &value) { raw in
+                    try streamIO.readExact(into: raw.baseAddress!, count: 8)
                 }
                 remaining -= 8
-                return UInt64(bigEndian: v)
+                return UInt64(bigEndian: value)
             }
 
             let ptsTicks = Int64(bitPattern: try readBEUInt64())
@@ -429,29 +508,24 @@
             let len0 = Int(try readBEUInt32())
             let expectedY = max(0, stride0 * height0)
 
-            guard let pool = VTCompressionSessionGetPixelBufferPool(session) else {
-                throw VTRemotedError.videoToolboxUnavailable
-            }
-            var pixelBuffer: CVPixelBuffer?
-            let status = CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &pixelBuffer)
-            guard status == kCVReturnSuccess, let pBuffer = pixelBuffer else {
-                throw VTRemotedError.ioError(code: Int32(status), message: "CVPixelBufferPoolCreatePixelBuffer failed")
-            }
+            let pBuffer = try makeCompressionPixelBuffer(session: session)
 
             CVPixelBufferLockBaseAddress(pBuffer, [])
             defer { CVPixelBufferUnlockBaseAddress(pBuffer, []) }
 
-            let bytesPerSample = (config.pixelFormat == 2) ? 2 : 1
-            let rowBytesY = config.width * bytesPerSample
-            let rowBytesUV = config.width * bytesPerSample
+            let rowBytes = Self.planeRowBytes(width: config.width, pixelFormat: config.pixelFormat)
+            let rowBytesY = rowBytes.y
+            let rowBytesUV = rowBytes.uv
 
             func skipBytes(_ count: Int) throws {
                 guard count > 0 else { return }
                 try require(count)
-                try io.skip(length: count)
+                try streamIO.skip(length: count)
                 remaining -= count
             }
 
+            // Plane fields mirror wire metadata and destination buffer geometry.
+            // swiftlint:disable:next function_parameter_count
             func processPlane(
                 planeIndex: Int,
                 wireLen: Int,
@@ -476,7 +550,7 @@
 
                     if stride == destStride, stride == rowBytes {
                         // Read directly into the pixel buffer plane (avoids temp buffer + memcpy).
-                        try io.readExact(into: destBase, count: expectedSize)
+                        try streamIO.readExact(into: destBase, count: expectedSize)
                         remaining -= expectedSize
                         try skipBytes(wireLen - expectedSize)
                         return
@@ -490,7 +564,7 @@
                     let dstBase = destBase.assumingMemoryBound(to: UInt8.self)
                     let copyBytes = min(rowBytes, min(stride, destStride))
                     for row in 0 ..< max(0, height) {
-                        try io.readExact(into: &rowBuf, count: stride)
+                        try streamIO.readExact(into: &rowBuf, count: stride)
                         remaining -= stride
                         rowBuf.withUnsafeBytes { srcPtr in
                             guard let srcBase = srcPtr.baseAddress else { return }
@@ -507,7 +581,7 @@
                 var compressed = inputBufferPool.get(capacity: wireLen)
                 defer { inputBufferPool.return(compressed) }
                 if compressed.count != wireLen { compressed.count = wireLen }
-                try io.readExact(into: &compressed, count: wireLen)
+                try streamIO.readExact(into: &compressed, count: wireLen)
                 remaining -= wireLen
 
                 var temp = inputBufferPool.get(capacity: expectedSize)
@@ -519,14 +593,13 @@
                         start: compressedPtr.baseAddress,
                         count: compressed.count
                     )
-                    if config.options.wireCompression == 1 {
-                        return temp.withUnsafeMutableBytes { dstPtr in
-                            LZ4Codec.decompressRaw(rawPtr, into: dstPtr.baseAddress!, expectedSize: expectedSize)
-                        }
-                    } else {
-                        return temp.withUnsafeMutableBytes { dstPtr in
-                            ZstdCodec.decompressRaw(rawPtr, into: dstPtr.baseAddress!, expectedSize: expectedSize)
-                        }
+                    return temp.withUnsafeMutableBytes { dstPtr in
+                        Self.decompressWirePayload(
+                            mode: config.options.wireCompression,
+                            source: rawPtr,
+                            destination: dstPtr.baseAddress!,
+                            expectedSize: expectedSize
+                        )
                     }
                 }
                 guard success else { throw VTRemotedError.protocolViolation("Decompress failed") }
@@ -534,16 +607,15 @@
                 temp.withUnsafeBytes { srcPtr in
                     guard let srcBase = srcPtr.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
                     let dstBase = destBase.assumingMemoryBound(to: UInt8.self)
-                    if stride == destStride, stride == rowBytes {
-                        memcpy(dstBase, srcBase, expectedSize)
-                    } else {
-                        let copyBytes = min(rowBytes, min(stride, destStride))
-                        for row in 0 ..< max(0, height) {
-                            memcpy(dstBase.advanced(by: row * destStride),
-                                   srcBase.advanced(by: row * stride),
-                                   copyBytes)
-                        }
-                    }
+                    Self.copyPlaneBytes(
+                        source: srcBase,
+                        destination: dstBase,
+                        expectedSize: expectedSize,
+                        stride: stride,
+                        destinationStride: destStride,
+                        rowBytes: rowBytes,
+                        heightHint: height
+                    )
                 }
             }
 
@@ -582,7 +654,7 @@
                     try require(size)
                     if type == 2 { // A53_CC
                         var data = Data(count: size)
-                        try io.readExact(into: &data, count: size)
+                        try streamIO.readExact(into: &data, count: size)
                         remaining -= size
                         sideData.append(data)
                     } else {
@@ -593,39 +665,18 @@
 
             // Drain any unknown trailing bytes for forward-compatibility.
             if remaining > 0 {
-                try io.skip(length: remaining)
+                try streamIO.skip(length: remaining)
                 remaining = 0
             }
 
-            let pts = cmTimeOrInvalid(fromTicks: ptsTicks, timebase: config.timebase)
-            let duration = durTicks > 0 ? cmTime(fromTicks: durTicks, timebase: config.timebase) : .invalid
-            let forceKey = (flags & 1) != 0 || takeForceKeyframeNext()
-            let props: CFDictionary? = forceKey ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
-
-            let seq = nextEncodeSeq()
-            // Retain the pixel buffer until the encoder callback fires. VideoToolbox may consume frames
-            // asynchronously, and the pool can otherwise recycle the buffer while it is still in use.
-            let frameContext = FrameContext(seq: seq, sideData: sideData, pixelBuffer: pBuffer)
-            let ctxPtr = Unmanaged.passRetained(frameContext).toOpaque()
-
-            var infoFlags = VTEncodeInfoFlags()
-            let encodeStatus = VTCompressionSessionEncodeFrame(
-                session,
-                imageBuffer: pBuffer,
-                presentationTimeStamp: pts,
-                duration: duration,
-                frameProperties: props,
-                sourceFrameRefcon: ctxPtr,
-                infoFlagsOut: &infoFlags
+            try encodePreparedFrame(
+                session: session,
+                pixelBuffer: pBuffer,
+                ptsTicks: ptsTicks,
+                durTicks: durTicks,
+                flags: flags,
+                sideData: sideData
             )
-            if encodeStatus != noErr {
-                Unmanaged<FrameContext>.fromOpaque(ctxPtr).release()
-                logger.error(
-                    "VTCompressionSessionEncodeFrame failed seq=\(seq) status=\(encodeStatus) " +
-                        "infoFlags=\(infoFlags.rawValue) ptsTicks=\(ptsTicks) durTicks=\(durTicks)"
-                )
-                throw VTRemotedError.ioError(code: Int32(encodeStatus), message: "VTCompressionSessionEncodeFrame failed")
-            }
         }
 
         private func encodePixelBuffer(_ pixelBuffer: CVPixelBuffer, pts: CMTime, duration: CMTime) {
@@ -913,7 +964,11 @@
             callbackLock.unlock()
         }
 
-        private func configureProperties(session: VTCompressionSession, config: SessionConfiguration, codec: VideoCodec) throws {
+        private func configureProperties(
+            session: VTCompressionSession,
+            config: SessionConfiguration,
+            codec: VideoCodec
+        ) throws {
             var hasBFrames = config.options.maxBFrames > 0
             var entropy = config.options.entropy
             let profile = config.options.profile
@@ -932,7 +987,13 @@
             try configureBitrate(session: session, config: config, codec: codec)
             try configureFrameProperties(session: session, config: config)
             try configureColors(session: session, config: config)
-            try configureProfileLevel(session: session, config: config, codec: codec, profile: profile, hasBFrames: hasBFrames)
+            try configureProfileLevel(
+                session: session,
+                config: config,
+                codec: codec,
+                profile: profile,
+                hasBFrames: hasBFrames
+            )
             try configureH264(session: session, config: config, codec: codec, entropy: entropy)
 
             // Misc properties
@@ -1033,11 +1094,15 @@
                                       valueOut: UnsafeMutableRawPointer(ptr))
             }
             if status == noErr, let encoderString = value as? String {
-                logger.debug("DBG EncoderID \(encoderString)")
+                logger.debug("EncoderID \(encoderString)")
             }
         }
 
-        private func configureBitrate(session: VTCompressionSession, config: SessionConfiguration, codec: VideoCodec) throws {
+        private func configureBitrate(
+            session: VTCompressionSession,
+            config: SessionConfiguration,
+            codec: VideoCodec
+        ) throws {
             if (config.options.flags & VideoToolboxConstants.AV_CODEC_FLAG_QSCALE) != 0
                 || config.options.globalQuality > 0 {
                 if (config.options.flags & VideoToolboxConstants.AV_CODEC_FLAG_QSCALE) != 0, !isAppleSilicon() {
@@ -1149,27 +1214,34 @@
             }
         }
 
-        private func configureProfileLevel(session: VTCompressionSession, 
-                                           config: SessionConfiguration,
-                                           codec: VideoCodec,
-                                           profile: Int,
-                                           hasBFrames: Bool) throws {
-             let profileLevel = try VideoToolboxProperties.profileLevelString(
+        private func configureProfileLevel(
+            session: VTCompressionSession,
+            config: SessionConfiguration,
+            codec: VideoCodec,
+            profile: Int,
+            hasBFrames: Bool
+        ) throws {
+            let profileLevel = try VideoToolboxProperties.profileLevelString(
                 codec: codec,
                 profile: profile,
                 level: config.options.level,
                 pixelFormat: config.pixelFormat,
                 hasBFrames: hasBFrames
             )
-             if let prof = profileLevel {
+            if let prof = profileLevel {
                 try setProp(session, kVTCompressionPropertyKey_ProfileLevel, prof, "profile_level")
             }
         }
 
-        private func configureH264(session: VTCompressionSession, config: SessionConfiguration, codec: VideoCodec, entropy: Int) throws {
+        private func configureH264(
+            session: VTCompressionSession,
+            config: SessionConfiguration,
+            codec: VideoCodec,
+            entropy: Int
+        ) throws {
             if codec == .h264, entropy != 0 {
-                let ent = entropy == 2 
-                    ? VideoToolboxProperties.vtH264EntropyCABAC 
+                let ent = entropy == 2
+                    ? VideoToolboxProperties.vtH264EntropyCABAC
                     : VideoToolboxProperties.vtH264EntropyCAVLC
                 try setProp(session, VideoToolboxProperties.vtKeyH264EntropyMode, ent, "entropy")
             }
@@ -1181,8 +1253,13 @@
             if config.options.maxSliceBytes >= 0, codec == .h264 {
                 var val = Int32(clamping: config.options.maxSliceBytes)
                 let num = CFNumberCreate(kCFAllocatorDefault, .intType, &val)
-                try setProp(session, VideoToolboxProperties.vtKeyMaxH264SliceBytes, 
-                            num!, "max_slice_bytes", fatal: true)
+                try setProp(
+                    session,
+                    VideoToolboxProperties.vtKeyMaxH264SliceBytes,
+                    num!,
+                    "max_slice_bytes",
+                    fatal: true
+                )
             }
         }
 
@@ -1216,16 +1293,16 @@
         private func boolCompressionProp(_ session: VTCompressionSession, key: CFString) -> Bool? {
             let (status, value) = copyCompressionProp(session, key: key)
             guard status == noErr, let value else { return nil }
-            if let b = value as? Bool { return b }
-            if let n = value as? NSNumber { return n.boolValue }
+            if let boolValue = value as? Bool { return boolValue }
+            if let numberValue = value as? NSNumber { return numberValue.boolValue }
             return nil
         }
 
         private func intCompressionProp(_ session: VTCompressionSession, key: CFString) -> Int? {
             let (status, value) = copyCompressionProp(session, key: key)
             guard status == noErr, let value else { return nil }
-            if let n = value as? NSNumber { return n.intValue }
-            if let s = value as? String { return Int(s) }
+            if let numberValue = value as? NSNumber { return numberValue.intValue }
+            if let stringValue = value as? String { return Int(stringValue) }
             return nil
         }
 
@@ -1258,7 +1335,10 @@
             if useDtsReorder, nominalFrameDurTicks > 0 {
                 // Add a small cushion to cover mixed 41/42ms timecode patterns (e.g. 24000/1001 into 1/1000).
                 encodeDtsOffsetTicks = Int64(encodeDtsReorderDepth + 1) * nominalFrameDurTicks
-                logger.info("ENCODE dts_offset_ticks=\(encodeDtsOffsetTicks) (depth=\(encodeDtsReorderDepth) dur_ticks=\(nominalFrameDurTicks))")
+                logger.info(
+                    "ENCODE dts_offset_ticks=\(encodeDtsOffsetTicks) " +
+                        "(depth=\(encodeDtsReorderDepth) dur_ticks=\(nominalFrameDurTicks))"
+                )
             } else {
                 encodeDtsOffsetTicks = 0
             }
@@ -1290,7 +1370,7 @@
                 supportedPropertyDictionaryOut: &supported
             )
             if supStatus != noErr {
-                logger.debug("DBG VT supported properties unavailable status=\(supStatus)")
+                logger.debug("VT supported properties unavailable status=\(supStatus)")
             }
             let supportedDict = supported as NSDictionary?
 
@@ -1314,15 +1394,15 @@
                 let supportedStr = (supportedDict?[key] != nil) ? "supported" : "unknown"
                 let (status, val) = copyProp(key)
                 if status == noErr {
-                    logger.debug("DBG VT prop \(name) (\(supportedStr)) = \(describe(val))")
+                    logger.debug("VT prop \(name) (\(supportedStr)) = \(describe(val))")
                 } else if status == VideoToolboxProperties.kVTPropertyNotSupportedErr {
-                    logger.debug("DBG VT prop \(name) (\(supportedStr)) = not supported")
+                    logger.debug("VT prop \(name) (\(supportedStr)) = not supported")
                 } else {
-                    logger.debug("DBG VT prop \(name) (\(supportedStr)) read failed \(status)")
+                    logger.debug("VT prop \(name) (\(supportedStr)) read failed \(status)")
                 }
             }
 
-            logger.debug("DBG VT property dump post-PrepareToEncodeFrames")
+            logger.debug("VT property dump post-PrepareToEncodeFrames")
             logProp("AverageBitRate", kVTCompressionPropertyKey_AverageBitRate)
             logProp("DataRateLimits", kVTCompressionPropertyKey_DataRateLimits)
             logProp("ConstantBitRate", VideoToolboxProperties.vtKeyConstantBitRate)
@@ -1587,14 +1667,14 @@
                 data.withUnsafeBytes { raw in
                     guard let base = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return false }
                     if totalLen < 3 { return false }
-                    var i = 0
-	                    while i + 3 < totalLen {
-	                        if base[i] == 0 && base[i + 1] == 0 {
-	                            if base[i + 2] == 1 { return true }
-	                            if base[i + 2] == 0 && base[i + 3] == 1 { return true }
-	                        }
-	                        i += 1
-	                    }
+                    var scanIndex = 0
+                    while scanIndex + 3 < totalLen {
+                        if base[scanIndex] == 0 && base[scanIndex + 1] == 0 {
+                            if base[scanIndex + 2] == 1 { return true }
+                            if base[scanIndex + 2] == 0 && base[scanIndex + 3] == 1 { return true }
+                        }
+                        scanIndex += 1
+                    }
                     return false
                 }
             }
@@ -1628,11 +1708,9 @@
                         end = index
                     }
                     if valid, index < totalLen {
-                        for i in index ..< totalLen {
-                            if inBase[i] != 0 {
-                                valid = false
-                                break
-                            }
+                        for byteIndex in index ..< totalLen where inBase[byteIndex] != 0 {
+                            valid = false
+                            break
                         }
                     }
                 }
@@ -1715,7 +1793,7 @@
 
         private func warmup() throws {
             guard let session = compressionSession, let config else { return }
-            logger.debug("DBG warmup start")
+            logger.debug("warmup start")
 
             // Prefer allocating from the session's pool so pixel buffers have the expected attachments.
             var buffer: CVPixelBuffer?
@@ -1757,7 +1835,7 @@
             let duration = cmTime(fromTicks: 1, timebase: config.timebase)
             let presentationCandidates = [
                 cmTime(fromTicks: -1, timebase: config.timebase),
-                cmTime(fromTicks: 0, timebase: config.timebase),
+                cmTime(fromTicks: 0, timebase: config.timebase)
             ]
 
             var lastStatus: OSStatus = noErr
@@ -1803,7 +1881,7 @@
                 logger.error("warmup timed out waiting for encoder output")
                 throw VTRemotedError.ioError(code: -1, message: "warmup timed out")
             }
-            logger.debug("DBG warmup done")
+            logger.debug("warmup done")
         }
 
         private func makeDecodedFrameMeta(ptsTicks: Int64, durTicks: Int64) -> Data {
@@ -1956,7 +2034,10 @@
             return session
         }
 
-        private func prepareTranscodePixelBuffer(_ pixelBuffer: CVPixelBuffer, config: SessionConfiguration) -> CVPixelBuffer? {
+        private func prepareTranscodePixelBuffer(
+            _ pixelBuffer: CVPixelBuffer,
+            config: SessionConfiguration
+        ) -> CVPixelBuffer? {
             let inputWidth = CVPixelBufferGetWidth(pixelBuffer)
             let inputHeight = CVPixelBufferGetHeight(pixelBuffer)
             let inputFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
@@ -2153,27 +2234,16 @@
                     raw.count = len
                 }
                 
-                let compressed: Data
-                if config.options.wireCompression == 1 {
-                    if let comp = LZ4Codec.compress(raw) {
-                        compressed = comp
-                    } else {
-                        resultLock.lock()
-                        error = VTRemotedError.protocolViolation("lz4 compress failed")
-                        resultLock.unlock()
-                        return
-                    }
-                } else if config.options.wireCompression == 2 {
-                    if let comp = ZstdCodec.compress(raw) {
-                        compressed = comp
-                    } else {
-                        resultLock.lock()
-                        error = VTRemotedError.protocolViolation("zstd compress failed")
-                        resultLock.unlock()
-                        return
-                    }
-                } else {
-                    compressed = raw
+                guard let compressed = Self.compressWirePayload(
+                    mode: config.options.wireCompression,
+                    data: raw
+                ) else {
+                    let errorMessage = config.options.wireCompression == 1 ?
+                        "lz4 compress failed" : "zstd compress failed"
+                    resultLock.lock()
+                    error = VTRemotedError.protocolViolation(errorMessage)
+                    resultLock.unlock()
+                    return
                 }
                 
                 planeMeta.writeBE(UInt32(compressed.count))

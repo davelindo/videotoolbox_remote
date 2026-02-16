@@ -25,6 +25,11 @@ public struct ClientStats: Sendable {
         latency.discardOne()
     }
 
+    private static func mbps(bytes: Int64, elapsedSeconds: Double) -> Double {
+        guard elapsedSeconds > 0 else { return 0 }
+        return Double(bytes * 8) / (elapsedSeconds * 1_000_000.0)
+    }
+
     public mutating func maybeReport(mode: SessionMode, logger: Logger, intervalSeconds: Double = 1.0) {
         guard logger.level.rawValue >= LogLevel.debug.rawValue else { return }
         let now = DispatchTime.now().uptimeNanoseconds
@@ -35,8 +40,8 @@ public struct ClientStats: Sendable {
         let elapsed = Double(elapsedNs) / 1_000_000_000.0
         let deltaIn = bytesIn - lastReportBytesIn
         let deltaOut = bytesOut - lastReportBytesOut
-        let inMbps = elapsed > 0 ? Double(deltaIn * 8) / (elapsed * 1_000_000.0) : 0
-        let outMbps = elapsed > 0 ? Double(deltaOut * 8) / (elapsed * 1_000_000.0) : 0
+        let inMbps = Self.mbps(bytes: deltaIn, elapsedSeconds: elapsed)
+        let outMbps = Self.mbps(bytes: deltaOut, elapsedSeconds: elapsed)
 
         logger.debug(
             String(
@@ -54,8 +59,8 @@ public struct ClientStats: Sendable {
     public func summary(mode: SessionMode) -> String {
         let elapsedNs = DispatchTime.now().uptimeNanoseconds &- startNanoseconds
         let elapsed = Double(elapsedNs) / 1_000_000_000.0
-        let inMbps = elapsed > 0 ? Double(bytesIn * 8) / (elapsed * 1_000_000.0) : 0
-        let outMbps = elapsed > 0 ? Double(bytesOut * 8) / (elapsed * 1_000_000.0) : 0
+        let inMbps = Self.mbps(bytes: bytesIn, elapsedSeconds: elapsed)
+        let outMbps = Self.mbps(bytes: bytesOut, elapsedSeconds: elapsed)
 
         switch mode {
         case .encode:
