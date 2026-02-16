@@ -259,6 +259,7 @@ External library support:
   --enable-libopenh264     enable H.264 encoding via OpenH264 [no]
   --enable-libopenjpeg     enable JPEG 2000 encoding via OpenJPEG [no]
   --enable-libopenmpt      enable decoding tracked files via libopenmpt [no]
+  --enable-libopencolorio  enable color management via OpenColorIO [no]
   --enable-libopenvino     enable OpenVINO as a DNN module backend
                            for DNN based filters like dnn_processing [no]
   --enable-libopus         enable Opus de/encoding via libopus [no]
@@ -1116,7 +1117,6 @@ check_glslc(){
     log check_glslc "$@"
     name=$1
     shift 1
-    disabled $name && return
     disable $name
     test_glslc "$@" <<EOF && enable $name
 #version 460
@@ -1580,6 +1580,17 @@ check_lib(){
         enable $name && eval ${name}_extralibs="\$@"
 }
 
+check_lib_cpp(){
+    log check_lib_cpp "$@"
+    name="$1"
+    headers="$2"
+    code="$3"
+    shift 3
+    disable $name
+    test_code ld "$headers" "$code" cxx "$@" &&
+        enable $name && eval ${name}_extralibs="\$@"
+}
+
 check_lib_cxx(){
     log check_lib_cxx "$@"
     name="$1"
@@ -1624,7 +1635,7 @@ test_pkg_config_cpp(){
     pkg_cflags=$($pkg_config --cflags $pkg_config_flags $pkg)
     pkg_incdir=$($pkg_config --variable=includedir $pkg_config_flags $pkg)
     pkg_incflags=$($pkg_config --cflags-only-I $pkg_config_flags $pkg)
-    test_cpp_condition "$pkg_incdir/$headers" "$cond" "$@" &&
+    test_cpp_condition "$pkg_incdir/$headers" "$cond" $pkg_cflags "$@" &&
         enable $name &&
         set_sanitized "${name}_cflags" $pkg_cflags &&
         set_sanitized "${name}_incdir" $pkg_incdir &&
@@ -1764,6 +1775,14 @@ require_cxx(){
     name="${1%% *}"
     shift
     check_lib_cxx "$name" "$@" || die "ERROR: $name_version not found"
+}
+
+require_cpp(){
+    log require_cpp "$@"
+    name_version="$1"
+    name="${1%% *}"
+    shift
+    check_lib_cpp "$name" "$@" || die "ERROR: $name_version not found"
 }
 
 require_headers(){
@@ -2029,6 +2048,8 @@ EXTERNAL_LIBRARY_LIST="
     libmysofa
     liboapv
     libopencv
+    libopencolorio
+    libopenimage
     libopenh264
     libopenjpeg
     libopenmpt
@@ -2664,6 +2685,7 @@ CONFIG_EXTRA="
     cbs_vp9
     celp_math
     d3d12_intra_refresh
+    d3d12_motion_estimator
     d3d12va_encode
     d3d12va_me_precision_eighth_pixel
     deflate_wrapper
@@ -3485,6 +3507,7 @@ gfxcapture_filter_deps="cxx17 threads d3d11va IGraphicsCaptureItemInterop __x_AB
 gfxcapture_filter_extralibs="-lstdc++"
 scale_d3d11_filter_deps="d3d11va"
 scale_d3d12_filter_deps="d3d12va ID3D12VideoProcessor"
+mestimate_d3d12_filter_deps="d3d12va ID3D12VideoMotionEstimator d3d12_motion_estimator"
 
 amf_deps_any="libdl LoadLibrary"
 nvenc_deps="ffnvcodec"
@@ -3621,6 +3644,7 @@ vp9_vaapi_encoder_select="vaapi_encode"
 vp9_qsv_encoder_deps="libmfx MFX_CODEC_VP9"
 vp9_qsv_encoder_select="qsvenc"
 vp9_v4l2m2m_decoder_deps="v4l2_m2m vp9_v4l2_m2m"
+amf_capture_filter_deps="amf"
 vvc_qsv_decoder_select="vvc_mp4toannexb_bsf qsvdec"
 
 # parsers
@@ -3900,8 +3924,7 @@ wav_demuxer_select="riffdec"
 wav_muxer_select="riffenc"
 webm_chunk_muxer_select="webm_muxer"
 webm_dash_manifest_demuxer_select="matroska_demuxer"
-whip_muxer_deps_any="dtls_protocol"
-whip_muxer_select="rtp_muxer http_protocol"
+whip_muxer_select="dtls_protocol rtp_muxer http_protocol"
 wtv_demuxer_select="mpegts_demuxer riffdec"
 wtv_muxer_select="mpegts_muxer riffenc"
 xmv_demuxer_select="riffdec"
@@ -4000,8 +4023,8 @@ srtp_protocol_select="rtp_protocol srtp"
 tcp_protocol_select="network"
 tls_protocol_deps_any="gnutls openssl schannel securetransport libtls mbedtls"
 tls_protocol_select="tcp_protocol"
-# TODO: Support libtls, mbedtls, and gnutls.
-dtls_protocol_deps_any="openssl schannel"
+# TODO: Support libtls, mbedtls.
+dtls_protocol_deps_any="openssl schannel gnutls"
 dtls_protocol_select="udp_protocol"
 udp_protocol_select="network"
 udplite_protocol_select="network"
@@ -4118,6 +4141,8 @@ openclsrc_filter_deps="opencl"
 qrencode_filter_deps="libqrencode"
 qrencodesrc_filter_deps="libqrencode"
 quirc_filter_deps="libquirc"
+ocio_filter_deps="libopencolorio"
+libopencolorio_filter_deps="libopencolorio"
 overlay_opencl_filter_deps="opencl"
 overlay_qsv_filter_deps="libmfx"
 overlay_qsv_filter_select="qsvvpp"
@@ -4186,7 +4211,7 @@ zoompan_filter_deps="swscale"
 zscale_filter_deps="libzimg const_nan"
 scale_vaapi_filter_deps="vaapi"
 scale_vt_filter_deps="videotoolbox VTPixelTransferSessionCreate"
-scale_vulkan_filter_deps="vulkan spirv_compiler"
+scale_vulkan_filter_deps="vulkan spirv_compiler spirv_library"
 vpp_qsv_filter_deps="libmfx"
 vpp_qsv_filter_select="qsvvpp"
 xfade_opencl_filter_deps="opencl"
@@ -7025,11 +7050,13 @@ check_type "windows.h d3d12.h" "ID3D12Device"
 check_type "windows.h d3d12video.h" "ID3D12VideoDecoder"
 check_type "windows.h d3d12video.h" "ID3D12VideoEncoder"
 check_type "windows.h d3d12video.h" "ID3D12VideoProcessor"
+check_type "windows.h d3d12video.h" "ID3D12VideoMotionEstimator"
 test_code cc "windows.h d3d12video.h" "D3D12_FEATURE_VIDEO feature = D3D12_FEATURE_VIDEO_ENCODER_CODEC" && \
 test_code cc "windows.h d3d12video.h" "D3D12_FEATURE_DATA_VIDEO_ENCODER_RESOURCE_REQUIREMENTS req" && enable d3d12_encoder_feature
 test_code cc "windows.h d3d12video.h" "D3D12_VIDEO_ENCODER_CODEC c = D3D12_VIDEO_ENCODER_CODEC_AV1; (void)c;" && enable d3d12va_av1_headers
 test_code cc "windows.h d3d12video.h" "D3D12_FEATURE_DATA_VIDEO_ENCODER_INTRA_REFRESH_MODE check = { 0 };" && enable d3d12_intra_refresh
 test_code cc "windows.h d3d12video.h" "D3D12_VIDEO_ENCODER_MOTION_ESTIMATION_PRECISION_MODE m = D3D12_VIDEO_ENCODER_MOTION_ESTIMATION_PRECISION_MODE_EIGHTH_PIXEL; (void)m;" && enable d3d12va_me_precision_eighth_pixel
+test_code cc "windows.h d3d12video.h" "D3D12_FEATURE_DATA_VIDEO_MOTION_ESTIMATOR check = { 0 };" && enable d3d12_motion_estimator
 check_type "windows.h" "DPI_AWARENESS_CONTEXT" -D_WIN32_WINNT=0x0A00
 check_type "windows.h security.h schnlsp.h" SecPkgContext_KeyingMaterialInfo -DSECURITY_WIN32
 check_type "d3d9.h dxva2api.h" DXVA2_ConfigPictureDecode -D_WIN32_WINNT=0x0602
@@ -7278,6 +7305,10 @@ enabled libopencore_amrnb && require libopencore_amrnb opencore-amrnb/interf_dec
 enabled libopencore_amrwb && require libopencore_amrwb opencore-amrwb/dec_if.h D_IF_init -lopencore-amrwb
 enabled libopencv         && { check_pkg_config libopencv opencv4 opencv2/core/core_c.h cvCreateImageHeader ||
                                require libopencv opencv2/core/core_c.h cvCreateImageHeader -lopencv_core -lopencv_imgproc; }
+enabled libopencolorio    && add_cxxflags $(pkg-config --cflags OpenColorIO) &&
+                                OCIO_LIBS=$($pkg_config --libs OpenColorIO) &&
+                            require_cpp OpenColorIO OpenColorIO/OpenColorIO.h "namespace OCIO = OCIO_NAMESPACE; OCIO::ConfigRcPtr cfg = OCIO::Config::Create();" $OCIO_LIBS -lstdc++ &&
+                            append libopencolorio_extralibs "$OCIO_LIBS -lstdc++"
 enabled libopenh264       && require_pkg_config libopenh264 "openh264 >= 1.3.0" wels/codec_api.h WelsGetCodecVersion
 enabled libopenjpeg       && { check_pkg_config libopenjpeg "libopenjp2 >= 2.1.0" openjpeg.h opj_version ||
                                { require_pkg_config libopenjpeg "libopenjp2 >= 2.1.0" openjpeg.h opj_version -DOPJ_STATIC && add_cppflags -DOPJ_STATIC; } }
@@ -7677,7 +7708,7 @@ if enabled_all vulkan vulkan_static; then
         check_lib vulkan "vulkan/vulkan.h" vkGetInstanceProcAddr -lvulkan
 elif enabled vulkan; then
     check_pkg_config_header_only vulkan "vulkan >= 1.3.277" "vulkan/vulkan.h" "defined VK_VERSION_1_3" ||
-        check_cpp_condition vulkan "vulkan/vulkan.h" "defined(VK_VERSION_1_4) || (defined(VK_VERSION_1_3) && VK_HEADER_VERSION >= 277)"
+        check_cpp_condition vulkan "vulkan/vulkan.h" "defined(VK_VERSION_1_4) || (defined(VK_VERSION_1_3) && VK_HEADER_VERSION >= 277)" $vulkan_incflags
 fi
 
 probe_glslc(){
@@ -7721,7 +7752,7 @@ probe_glslc(){
 
 if enabled vulkan; then
     check_pkg_config_header_only vulkan_1_4 "vulkan >= 1.4.317" "vulkan/vulkan.h" "defined VK_VERSION_1_4" ||
-        check_cpp_condition vulkan_1_4 "vulkan/vulkan.h" "defined(VK_VERSION_1_5) || (defined(VK_VERSION_1_4) && VK_HEADER_VERSION >= 317)"
+        check_cpp_condition vulkan_1_4 "vulkan/vulkan.h" "defined(VK_VERSION_1_5) || (defined(VK_VERSION_1_4) && VK_HEADER_VERSION >= 317)" $vulkan_incflags
     for program in $glslc glslc glslang glslangValidator; do
         probe_glslc $program && break
     done

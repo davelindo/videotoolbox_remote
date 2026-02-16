@@ -1485,7 +1485,8 @@ static int decode_block(AVCodecContext *avctx, void *tdata,
                 }
 
                 // Zero out the end if xmax+1 is not w
-                memset(ptr_x, 0, axmax);
+                if (s->desc->flags & AV_PIX_FMT_FLAG_PLANAR || !c)
+                    memset(ptr_x, 0, axmax);
                 channel_buffer[c] += td->channel_line_size;
             }
         }
@@ -1807,12 +1808,17 @@ static int decode_header(EXRContext *s, AVFrame *frame)
                     }
                 }
 
-                s->channels = av_realloc(s->channels,
-                                         ++s->nb_channels * sizeof(EXRChannel));
-                if (!s->channels) {
+                av_assert0(s->nb_channels < INT_MAX); // Impossible due to size of the bitstream
+                EXRChannel *new_channels = av_realloc_array(s->channels,
+                                                            s->nb_channels + 1,
+                                                            sizeof(EXRChannel));
+                if (!new_channels) {
                     ret = AVERROR(ENOMEM);
                     goto fail;
                 }
+                s->nb_channels ++;
+                s->channels = new_channels;
+
                 channel             = &s->channels[s->nb_channels - 1];
                 channel->pixel_type = current_pixel_type;
                 channel->xsub       = xsub;

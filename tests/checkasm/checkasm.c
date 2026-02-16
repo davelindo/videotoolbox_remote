@@ -187,6 +187,7 @@ static const struct {
     #if CONFIG_HEVC_DECODER
         { "hevc_add_res", checkasm_check_hevc_add_res },
         { "hevc_deblock", checkasm_check_hevc_deblock },
+        { "hevc_dequant", checkasm_check_hevc_dequant },
         { "hevc_idct", checkasm_check_hevc_idct },
         { "hevc_pel", checkasm_check_hevc_pel },
         { "hevc_sao", checkasm_check_hevc_sao },
@@ -229,6 +230,9 @@ static const struct {
     #endif
     #if CONFIG_PIXBLOCKDSP
         { "pixblockdsp", checkasm_check_pixblockdsp },
+    #endif
+    #if CONFIG_PNG_DECODER
+        { "png", checkasm_check_png },
     #endif
     #if CONFIG_QPELDSP
         { "qpeldsp", checkasm_check_qpeldsp },

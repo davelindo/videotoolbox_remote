@@ -21,7 +21,6 @@
 #version 460
 #pragma shader_stage(compute)
 #extension GL_GOOGLE_include_directive : require
-#extension GL_EXT_nontemporal_keyword : require
 
 #include "common.comp"
 
@@ -29,7 +28,7 @@ layout (constant_id = 0) const bool big_endian = false;
 layout (constant_id = 1) const bool packed_10bit = false;
 
 layout (set = 0, binding = 0) uniform writeonly uimage2D dst[];
-layout (set = 0, binding = 1, scalar) nontemporal readonly buffer data_buf {
+layout (set = 0, binding = 1, scalar) readonly buffer data_buf {
     uint32_t data[];
 };
 
@@ -92,7 +91,7 @@ i16vec4 parse_packed_in_32(ivec2 pos, int stride)
 void main(void)
 {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
-    if (!IS_WITHIN(pos, imageSize(dst[0])))
+    if (any(greaterThanEqual(pos, imageSize(dst[0]))))
         return;
 
     i16vec4 p;

@@ -27,6 +27,7 @@ FATE_CHECKASM = fate-checkasm-aacencdsp                                 \
                 fate-checkasm-h264qpel                                  \
                 fate-checkasm-hevc_add_res                              \
                 fate-checkasm-hevc_deblock                              \
+                fate-checkasm-hevc_dequant                              \
                 fate-checkasm-hevc_idct                                 \
                 fate-checkasm-hevc_pel                                  \
                 fate-checkasm-hevc_sao                                  \
@@ -44,6 +45,7 @@ FATE_CHECKASM = fate-checkasm-aacencdsp                                 \
                 fate-checkasm-mpegvideoencdsp                           \
                 fate-checkasm-opusdsp                                   \
                 fate-checkasm-pixblockdsp                               \
+                fate-checkasm-png                                       \
                 fate-checkasm-qpeldsp                                   \
                 fate-checkasm-sbrdsp                                    \
                 fate-checkasm-rv34dsp                                   \

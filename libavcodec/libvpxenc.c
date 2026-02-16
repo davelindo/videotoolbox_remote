@@ -202,15 +202,14 @@ static const char *const ctlidstr[] = {
 #endif
 };
 
-static av_cold void log_encoder_error(AVCodecContext *avctx, const char *desc)
+static av_cold void log_encoder_error(void *logctx, struct vpx_codec_ctx *encoder, const char *desc)
 {
-    VPxContext *ctx = avctx->priv_data;
-    const char *error  = vpx_codec_error(&ctx->encoder);
-    const char *detail = vpx_codec_error_detail(&ctx->encoder);
+    const char *error  = vpx_codec_error(encoder);
+    const char *detail = vpx_codec_error_detail(encoder);
 
-    av_log(avctx, AV_LOG_ERROR, "%s: %s\n", desc, error);
+    av_log(logctx, AV_LOG_ERROR, "%s: %s\n", desc, error);
     if (detail)
-        av_log(avctx, AV_LOG_ERROR, "  Additional information: %s\n", detail);
+        av_log(logctx, AV_LOG_ERROR, "  Additional information: %s\n", detail);
 }
 
 static av_cold void dump_enc_cfg(AVCodecContext *avctx,
@@ -477,16 +476,16 @@ static av_cold int codecctl_int(AVCodecContext *avctx,
     if (res != VPX_CODEC_OK) {
         snprintf(buf, sizeof(buf), "Failed to set %s codec control",
                  ctlidstr[id]);
-        log_encoder_error(avctx, buf);
+        log_encoder_error(avctx, &ctx->encoder, buf);
         return AVERROR(EINVAL);
     }
 
-    if (ctx->is_alpha) {
+    if (ctx->is_alpha && id != VP9E_SET_COLOR_SPACE) {
         int res_alpha = vpx_codec_control(&ctx->encoder_alpha, id, val);
         if (res_alpha != VPX_CODEC_OK) {
             snprintf(buf, sizeof(buf), "Failed to set %s alpha codec control",
                      ctlidstr[id]);
-            log_encoder_error(avctx, buf);
+            log_encoder_error(avctx, &ctx->encoder_alpha, buf);
             return AVERROR(EINVAL);
         }
     }
@@ -510,7 +509,7 @@ static av_cold int codecctl_intp(AVCodecContext *avctx,
     if (res != VPX_CODEC_OK) {
         snprintf(buf, sizeof(buf), "Failed to set %s codec control",
                  ctlidstr[id]);
-        log_encoder_error(avctx, buf);
+        log_encoder_error(avctx, &ctx->encoder, buf);
         return AVERROR(EINVAL);
     }
 
@@ -519,7 +518,7 @@ static av_cold int codecctl_intp(AVCodecContext *avctx,
         if (res_alpha != VPX_CODEC_OK) {
             snprintf(buf, sizeof(buf), "Failed to set %s alpha codec control",
                      ctlidstr[id]);
-            log_encoder_error(avctx, buf);
+            log_encoder_error(avctx, &ctx->encoder_alpha, buf);
             return AVERROR(EINVAL);
         }
     }
@@ -826,6 +825,7 @@ static int set_pix_fmt(AVCodecContext *avctx, vpx_codec_caps_t codec_caps,
         *img_fmt = VPX_IMG_FMT_I420;
         return 0;
     case AV_PIX_FMT_YUV422P:
+    case AV_PIX_FMT_YUVA422P:
         enccfg->g_profile = 1;
         *img_fmt = VPX_IMG_FMT_I422;
         return 0;
@@ -834,12 +834,15 @@ static int set_pix_fmt(AVCodecContext *avctx, vpx_codec_caps_t codec_caps,
         *img_fmt = VPX_IMG_FMT_I440;
         return 0;
     case AV_PIX_FMT_GBRP:
+    case AV_PIX_FMT_GBRAP:
         ctx->vpx_cs = VPX_CS_SRGB;
     case AV_PIX_FMT_YUV444P:
+    case AV_PIX_FMT_YUVA444P:
         enccfg->g_profile = 1;
         *img_fmt = VPX_IMG_FMT_I444;
         return 0;
     case AV_PIX_FMT_YUV420P10:
+    case AV_PIX_FMT_YUVA420P10:
     case AV_PIX_FMT_YUV420P12:
         if (codec_caps & VPX_CODEC_CAP_HIGHBITDEPTH) {
             enccfg->g_profile = 2;
@@ -849,6 +852,7 @@ static int set_pix_fmt(AVCodecContext *avctx, vpx_codec_caps_t codec_caps,
         }
         break;
     case AV_PIX_FMT_YUV422P10:
+    case AV_PIX_FMT_YUVA422P10:
     case AV_PIX_FMT_YUV422P12:
         if (codec_caps & VPX_CODEC_CAP_HIGHBITDEPTH) {
             enccfg->g_profile = 3;
@@ -867,10 +871,14 @@ static int set_pix_fmt(AVCodecContext *avctx, vpx_codec_caps_t codec_caps,
         }
         break;
     case AV_PIX_FMT_GBRP10:
+    case AV_PIX_FMT_GBRAP10:
     case AV_PIX_FMT_GBRP12:
+    case AV_PIX_FMT_GBRAP12:
         ctx->vpx_cs = VPX_CS_SRGB;
     case AV_PIX_FMT_YUV444P10:
+    case AV_PIX_FMT_YUVA444P10:
     case AV_PIX_FMT_YUV444P12:
+    case AV_PIX_FMT_YUVA444P12:
         if (codec_caps & VPX_CODEC_CAP_HIGHBITDEPTH) {
             enccfg->g_profile = 3;
             *img_fmt = VPX_IMG_FMT_I44416;
@@ -1005,12 +1013,21 @@ static av_cold int vpx_init(AVCodecContext *avctx,
     vpx_svc_extra_cfg_t svc_params;
 #endif
     const AVDictionaryEntry* en = NULL;
+    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(avctx->pix_fmt);
 
     av_log(avctx, AV_LOG_INFO, "%s\n", vpx_codec_version_str());
     av_log(avctx, AV_LOG_VERBOSE, "%s\n", vpx_codec_build_config());
 
-    if (avctx->pix_fmt == AV_PIX_FMT_YUVA420P)
+    if (desc && (desc->flags & AV_PIX_FMT_FLAG_ALPHA)) {
         ctx->is_alpha = 1;
+        if (avctx->pix_fmt != AV_PIX_FMT_YUVA420P && avctx->strict_std_compliance > FF_COMPLIANCE_EXPERIMENTAL) {
+            av_log(avctx, AV_LOG_ERROR,
+                   "Pixel format '%s' is not widely supported. "
+                   "Use -strict experimental to use it anyway, or use 'yuva420p' pixel format instead.\n",
+                   av_get_pix_fmt_name(avctx->pix_fmt));
+            return AVERROR(EINVAL);
+        }
+    }
 
     if ((res = vpx_codec_enc_config_default(iface, &enccfg, 0)) != VPX_CODEC_OK) {
         av_log(avctx, AV_LOG_ERROR, "Failed to get config: %s\n",
@@ -1183,7 +1200,7 @@ static av_cold int vpx_init(AVCodecContext *avctx,
     res = vpx_codec_enc_init(&ctx->encoder, iface, &enccfg, flags);
     if (res != VPX_CODEC_OK) {
         dump_enc_cfg(avctx, &enccfg, AV_LOG_WARNING);
-        log_encoder_error(avctx, "Failed to initialize encoder");
+        log_encoder_error(avctx, &ctx->encoder, "Failed to initialize encoder");
         return AVERROR(EINVAL);
     }
     dump_enc_cfg(avctx, &enccfg, AV_LOG_DEBUG);
@@ -1205,9 +1222,10 @@ static av_cold int vpx_init(AVCodecContext *avctx,
 #endif
     if (ctx->is_alpha) {
         enccfg_alpha = enccfg;
+        enccfg_alpha.g_profile = (flags & VPX_CODEC_USE_HIGHBITDEPTH) ? 2 : 0;
         res = vpx_codec_enc_init(&ctx->encoder_alpha, iface, &enccfg_alpha, flags);
         if (res != VPX_CODEC_OK) {
-            log_encoder_error(avctx, "Failed to initialize alpha encoder");
+            log_encoder_error(avctx, &ctx->encoder_alpha, "Failed to initialize alpha encoder");
             return AVERROR(EINVAL);
         }
     }
@@ -1637,14 +1655,14 @@ static int vp9_encode_set_roi(AVCodecContext *avctx, int frame_width, int frame_
 
         ret = set_roi_map(avctx, sd, frame_width, frame_height, &roi_map, block_size, segment_cnt);
         if (ret) {
-            log_encoder_error(avctx, "Failed to set_roi_map.\n");
+            log_encoder_error(avctx, &ctx->encoder, "Failed to set_roi_map.\n");
             return ret;
         }
 
         memset(roi_map.ref_frame, -1, sizeof(roi_map.ref_frame));
 
         if (vpx_codec_control(&ctx->encoder, VP9E_SET_ROI_MAP, &roi_map)) {
-            log_encoder_error(avctx, "Failed to set VP9E_SET_ROI_MAP codec control.\n");
+            log_encoder_error(avctx, &ctx->encoder, "Failed to set VP9E_SET_ROI_MAP codec control.\n");
             ret = AVERROR_INVALIDDATA;
         }
         av_freep(&roi_map.roi_map);
@@ -1669,12 +1687,12 @@ static int vp8_encode_set_roi(AVCodecContext *avctx, int frame_width, int frame_
 
     int ret = set_roi_map(avctx, sd, frame_width, frame_height, &roi_map, block_size, segment_cnt);
     if (ret) {
-        log_encoder_error(avctx, "Failed to set_roi_map.\n");
+        log_encoder_error(avctx, &ctx->encoder, "Failed to set_roi_map.\n");
         return ret;
     }
 
     if (vpx_codec_control(&ctx->encoder, VP8E_SET_ROI_MAP, &roi_map)) {
-        log_encoder_error(avctx, "Failed to set VP8E_SET_ROI_MAP codec control.\n");
+        log_encoder_error(avctx, &ctx->encoder, "Failed to set VP8E_SET_ROI_MAP codec control.\n");
         ret = AVERROR_INVALIDDATA;
     }
 
@@ -1693,18 +1711,28 @@ static int realloc_alpha_uv(AVCodecContext *avctx, int width, int height)
         !planes[VPX_PLANE_V] ||
         width  != (int)rawimg_alpha->d_w ||
         height != (int)rawimg_alpha->d_h) {
+        vpx_img_fmt_t alpha_fmt = ctx->rawimg.bit_depth > 8 ?
+                                  VPX_IMG_FMT_I42016 : VPX_IMG_FMT_I420;
         av_freep(&planes[VPX_PLANE_U]);
         av_freep(&planes[VPX_PLANE_V]);
 
-        vpx_img_wrap(rawimg_alpha, VPX_IMG_FMT_I420, width, height, 1,
+        vpx_img_wrap(rawimg_alpha, alpha_fmt, width, height, 1,
                      (unsigned char*)1);
         planes[VPX_PLANE_U] = av_malloc_array(stride[VPX_PLANE_U], height);
         planes[VPX_PLANE_V] = av_malloc_array(stride[VPX_PLANE_V], height);
         if (!planes[VPX_PLANE_U] || !planes[VPX_PLANE_V])
             return AVERROR(ENOMEM);
 
-        memset(planes[VPX_PLANE_U], 0x80, stride[VPX_PLANE_U] * height);
-        memset(planes[VPX_PLANE_V], 0x80, stride[VPX_PLANE_V] * height);
+        if (ctx->rawimg.bit_depth > 8) {
+            int val = 0x80 << (ctx->rawimg.bit_depth - 8);
+            AV_WN16(planes[VPX_PLANE_U], val);
+            AV_WN16(planes[VPX_PLANE_V], val);
+            av_memcpy_backptr(planes[VPX_PLANE_U] + 2, 2, stride[VPX_PLANE_U] * height - 2);
+            av_memcpy_backptr(planes[VPX_PLANE_V] + 2, 2, stride[VPX_PLANE_V] * height - 2);
+        } else {
+            memset(planes[VPX_PLANE_U], 0x80, stride[VPX_PLANE_U] * height);
+            memset(planes[VPX_PLANE_V], 0x80, stride[VPX_PLANE_V] * height);
+        }
     }
 
     return 0;
@@ -1729,7 +1757,7 @@ static int vpx_encode(AVCodecContext *avctx, AVPacket *pkt,
         cfg.rc_max_quantizer = avctx->qmax;
         res = vpx_codec_enc_config_set(&ctx->encoder, &cfg);
         if (res != VPX_CODEC_OK) {
-            log_encoder_error(avctx, "Error reconfiguring encoder");
+            log_encoder_error(avctx, &ctx->encoder, "Error reconfiguring encoder");
             return AVERROR_INVALIDDATA;
         }
     }
@@ -1867,7 +1895,7 @@ static int vpx_encode(AVCodecContext *avctx, AVPacket *pkt,
     res = vpx_codec_encode(&ctx->encoder, rawimg, timestamp,
                            duration, flags, ctx->deadline);
     if (res != VPX_CODEC_OK) {
-        log_encoder_error(avctx, "Error encoding frame");
+        log_encoder_error(avctx, &ctx->encoder, "Error encoding frame");
         return AVERROR_INVALIDDATA;
     }
 
@@ -1875,7 +1903,7 @@ static int vpx_encode(AVCodecContext *avctx, AVPacket *pkt,
         res = vpx_codec_encode(&ctx->encoder_alpha, rawimg_alpha, timestamp,
                                duration, flags, ctx->deadline);
         if (res != VPX_CODEC_OK) {
-            log_encoder_error(avctx, "Error encoding alpha frame");
+            log_encoder_error(avctx, &ctx->encoder_alpha, "Error encoding alpha frame");
             return AVERROR_INVALIDDATA;
         }
     }
@@ -2086,9 +2114,12 @@ static const enum AVPixelFormat vp9_pix_fmts_highcol[] = {
     AV_PIX_FMT_YUV420P,
     AV_PIX_FMT_YUVA420P,
     AV_PIX_FMT_YUV422P,
+    AV_PIX_FMT_YUVA422P,
     AV_PIX_FMT_YUV440P,
     AV_PIX_FMT_YUV444P,
+    AV_PIX_FMT_YUVA444P,
     AV_PIX_FMT_GBRP,
+    AV_PIX_FMT_GBRAP,
     AV_PIX_FMT_NONE
 };
 
@@ -2096,19 +2127,28 @@ static const enum AVPixelFormat vp9_pix_fmts_highbd[] = {
     AV_PIX_FMT_YUV420P,
     AV_PIX_FMT_YUVA420P,
     AV_PIX_FMT_YUV422P,
+    AV_PIX_FMT_YUVA422P,
     AV_PIX_FMT_YUV440P,
     AV_PIX_FMT_YUV444P,
+    AV_PIX_FMT_YUVA444P,
     AV_PIX_FMT_YUV420P10,
+    AV_PIX_FMT_YUVA420P10,
     AV_PIX_FMT_YUV422P10,
+    AV_PIX_FMT_YUVA422P10,
     AV_PIX_FMT_YUV440P10,
     AV_PIX_FMT_YUV444P10,
+    AV_PIX_FMT_YUVA444P10,
     AV_PIX_FMT_YUV420P12,
     AV_PIX_FMT_YUV422P12,
     AV_PIX_FMT_YUV440P12,
     AV_PIX_FMT_YUV444P12,
+    AV_PIX_FMT_YUVA444P12,
     AV_PIX_FMT_GBRP,
+    AV_PIX_FMT_GBRAP,
     AV_PIX_FMT_GBRP10,
+    AV_PIX_FMT_GBRAP10,
     AV_PIX_FMT_GBRP12,
+    AV_PIX_FMT_GBRAP12,
     AV_PIX_FMT_NONE
 };
 

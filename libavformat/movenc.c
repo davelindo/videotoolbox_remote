@@ -6391,7 +6391,7 @@ static int mov_flush_fragment_interleaving(AVFormatContext *s, MOVTrack *track)
 
     offset = avio_tell(mov->mdat_buf);
     avio_write(mov->mdat_buf, buf, buf_size);
-    ffio_free_dyn_buf(&track->mdat_buf);
+    ffio_reset_dyn_buf(track->mdat_buf);
 
     for (i = track->entries_flushed; i < track->entry; i++)
         track->cluster[i].pos += offset;
@@ -6596,7 +6596,7 @@ static int mov_flush_fragment(AVFormatContext *s, int force)
         avio_wb32(s->pb, buf_size + 8);
         ffio_wfourcc(s->pb, "mdat");
         avio_write(s->pb, buf, buf_size);
-        ffio_free_dyn_buf(&mov->mdat_buf);
+        ffio_reset_dyn_buf(mov->mdat_buf);
 
         if (mov->flags & FF_MOV_FLAG_GLOBAL_SIDX)
             mov->reserved_header_pos = avio_tell(s->pb);
@@ -6683,17 +6683,16 @@ static int mov_flush_fragment(AVFormatContext *s, int force)
         if (!mov->frag_interleave) {
             if (!track->mdat_buf)
                 continue;
-            buf_size = avio_close_dyn_buf(track->mdat_buf, &buf);
-            track->mdat_buf = NULL;
+            buf_size = avio_get_dyn_buf(track->mdat_buf, &buf);
+            avio_write(s->pb, buf, buf_size);
+            ffio_reset_dyn_buf(track->mdat_buf);
         } else {
             if (!mov->mdat_buf)
                 continue;
-            buf_size = avio_close_dyn_buf(mov->mdat_buf, &buf);
-            mov->mdat_buf = NULL;
+            buf_size = avio_get_dyn_buf(mov->mdat_buf, &buf);
+            avio_write(s->pb, buf, buf_size);
+            ffio_reset_dyn_buf(mov->mdat_buf);
         }
-
-        avio_write(s->pb, buf, buf_size);
-        av_free(buf);
     }
 
     mov->mdat_size = 0;
@@ -7205,9 +7204,11 @@ static int mov_write_single_packet(AVFormatContext *s, AVPacket *pkt)
         uint8_t *side = av_packet_get_side_data(pkt, AV_PKT_DATA_NEW_EXTRADATA, &side_size);
         /* Overwrite extradata only on flush packets or when no extradata was available during init */
         if (side_size > 0 && (!pkt->size || !trk->extradata_size[trk->last_stsd_index])) {
-            void *newextra = av_memdup(side, side_size);
+            void *newextra = av_malloc(side_size + AV_INPUT_BUFFER_PADDING_SIZE);
             if (!newextra)
                 return AVERROR(ENOMEM);
+            memset((uint8_t*)newextra + side_size, 0, AV_INPUT_BUFFER_PADDING_SIZE);
+            memcpy(newextra, side, side_size);
             av_free(trk->extradata[trk->last_stsd_index]);
             trk->extradata[trk->last_stsd_index] = newextra;
             trk->extradata_size[trk->last_stsd_index] = side_size;
