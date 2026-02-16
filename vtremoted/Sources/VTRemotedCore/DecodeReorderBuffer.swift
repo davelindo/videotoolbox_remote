@@ -17,9 +17,15 @@ final class DecodeReorderBuffer<Payload> {
     }
 
     private let depth: Int
+    private let compactionThreshold = 64
     private var pending: [PendingFrame] = []
+    private var head: Int = 0
     private var seq: Int64 = 0
     private var lastEmittedPts: Int64 = Int64.min
+
+    private var pendingCount: Int {
+        pending.count - head
+    }
 
     init(depth: Int) {
         self.depth = max(0, depth)
@@ -27,6 +33,7 @@ final class DecodeReorderBuffer<Payload> {
 
     func reset() {
         pending.removeAll(keepingCapacity: true)
+        head = 0
         seq = 0
         lastEmittedPts = Int64.min
     }
@@ -43,12 +50,16 @@ final class DecodeReorderBuffer<Payload> {
     }
 
     private func insertPending(_ frame: PendingFrame) {
-        if pending.isEmpty {
+        if pendingCount == 0 {
+            if head > 0 {
+                pending.removeAll(keepingCapacity: true)
+                head = 0
+            }
             pending.append(frame)
             return
         }
         var idx = pending.count
-        while idx > 0 {
+        while idx > head {
             let prev = pending[idx - 1]
             if prev.ptsTicks < frame.ptsTicks || (prev.ptsTicks == frame.ptsTicks && prev.seq <= frame.seq) {
                 break
@@ -61,8 +72,11 @@ final class DecodeReorderBuffer<Payload> {
     private func drain(force: Bool) -> [ReorderedDecodedFrame<Payload>] {
         let targetCount = force ? 0 : depth
         var emitted: [ReorderedDecodedFrame<Payload>] = []
-        while pending.count > targetCount {
-            let frame = pending.removeFirst()
+        let drainCount = max(0, pendingCount - targetCount)
+        emitted.reserveCapacity(drainCount)
+        while pendingCount > targetCount {
+            let frame = pending[head]
+            head += 1
             var pts = frame.ptsTicks
             var clamped = false
             if lastEmittedPts != Int64.min && pts <= lastEmittedPts {
@@ -78,6 +92,21 @@ final class DecodeReorderBuffer<Payload> {
                                                  payload: frame.payload,
                                                  clamped: clamped))
         }
+        compactIfNeeded()
         return emitted
+    }
+
+    private func compactIfNeeded() {
+        guard head > 0 else { return }
+        if head == pending.count {
+            pending.removeAll(keepingCapacity: true)
+            head = 0
+            return
+        }
+        // Compact only after enough front consumption to keep dequeuing amortized O(1).
+        if head >= compactionThreshold && head * 2 >= pending.count {
+            pending = Array(pending[head...])
+            head = 0
+        }
     }
 }

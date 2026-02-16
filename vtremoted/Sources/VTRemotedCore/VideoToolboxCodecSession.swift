@@ -2183,8 +2183,9 @@
                 enqueueTranscodeFrame(pixelBuffer: pixelBuffer, pts: pts, duration: duration)
                 return
             }
-            CVPixelBufferLockBaseAddress(pixelBuffer, [])
-            defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
+
+            CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
 
             guard CVPixelBufferGetPlaneCount(pixelBuffer) >= 2 else { return }
 
@@ -2195,10 +2196,8 @@
                 0
             }
 
-            CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
-            defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
-
             var chunks: [Data] = []
+            chunks.reserveCapacity(5)
             chunks.append(makeDecodedFrameMeta(ptsTicks: ptsTicks, durTicks: durTicks))
 
             struct PlaneResult {

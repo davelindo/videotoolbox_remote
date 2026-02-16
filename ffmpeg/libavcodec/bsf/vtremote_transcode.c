@@ -19,6 +19,9 @@
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#if defined(HAVE_SYS_UIO_H) && HAVE_SYS_UIO_H
+#include <sys/uio.h>
+#endif
 #include <unistd.h>
 #endif
 
@@ -112,6 +115,8 @@ typedef struct VTRemoteTranscodeContext {
     int64_t packets_recv;
     int64_t last_dts;
     VTRemoteWBuf pkt_buf;
+    uint8_t *rx_buf;
+    uint32_t rx_buf_size;
     AVPacket *pkt_queue;
     int pkt_q_size;
     int pkt_q_head;
@@ -155,6 +160,68 @@ static int write_full(int fd, const uint8_t *buf, int size) {
         sent += r;
     }
     return 0;
+}
+
+static int write_full_iov(int fd, const uint8_t *buf0, int size0,
+                          const uint8_t *buf1, int size1)
+{
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+    int ret = write_full(fd, buf0, size0);
+    if (ret < 0 || size1 <= 0)
+        return ret;
+    return write_full(fd, buf1, size1);
+#elif defined(HAVE_SYS_UIO_H) && HAVE_SYS_UIO_H
+    if (size1 <= 0)
+        return write_full(fd, buf0, size0);
+
+    struct iovec iov[2];
+    int iovcnt = 0;
+
+    if (size0 > 0) {
+        iov[iovcnt].iov_base = (void *)buf0;
+        iov[iovcnt].iov_len = size0;
+        iovcnt++;
+    }
+    if (size1 > 0) {
+        iov[iovcnt].iov_base = (void *)buf1;
+        iov[iovcnt].iov_len = size1;
+        iovcnt++;
+    }
+
+    while (iovcnt > 0) {
+        struct msghdr msg = {0};
+        msg.msg_iov = iov;
+        msg.msg_iovlen = iovcnt;
+
+        ssize_t r = sendmsg(fd, &msg, 0);
+        if (r < 0) {
+            int err = vtremote_sock_errno();
+            if (err == EINTR)
+                continue;
+            return AVERROR(err);
+        }
+        if (r == 0)
+            return AVERROR_EOF;
+
+        ssize_t consumed = r;
+        while (iovcnt > 0 && consumed >= (ssize_t)iov[0].iov_len) {
+            consumed -= (ssize_t)iov[0].iov_len;
+            if (iovcnt > 1)
+                iov[0] = iov[1];
+            iovcnt--;
+        }
+        if (iovcnt > 0 && consumed > 0) {
+            iov[0].iov_base = (uint8_t *)iov[0].iov_base + consumed;
+            iov[0].iov_len -= consumed;
+        }
+    }
+    return 0;
+#else
+    int ret = write_full(fd, buf0, size0);
+    if (ret < 0 || size1 <= 0)
+        return ret;
+    return write_full(fd, buf1, size1);
+#endif
 }
 
 static int read_full(int fd, uint8_t *buf, int size) {
@@ -541,18 +608,11 @@ static int vtremote_send_msg(VTRemoteTranscodeContext *s, int msg_type, VTRemote
     int ret = vtremote_write_header(header_buf, sizeof(header_buf), &hdr);
     if (ret < 0)
         return ret;
-    ret = write_full(s->fd, header_buf, VTREMOTE_HEADER_SIZE);
-    if (ret < 0)
-        return ret;
-    if (payload_size) {
-        ret = write_full(s->fd, payload_data, payload_size);
-        if (ret < 0)
-            return ret;
-    }
-    return 0;
+    return write_full_iov(s->fd, header_buf, VTREMOTE_HEADER_SIZE,
+                          payload_data, payload_size);
 }
 
-static int vtremote_read_msg(VTRemoteTranscodeContext *s, VTRemoteMsgHeader *hdr, uint8_t **payload) {
+static int vtremote_read_msg(VTRemoteTranscodeContext *s, VTRemoteMsgHeader *hdr, const uint8_t **payload) {
     uint8_t header_buf[VTREMOTE_HEADER_SIZE];
     if (!s || !hdr || !payload)
         return AVERROR(EINVAL);
@@ -566,19 +626,23 @@ static int vtremote_read_msg(VTRemoteTranscodeContext *s, VTRemoteMsgHeader *hdr
         *payload = NULL;
         return 0;
     }
-    uint8_t *buf = av_malloc(hdr->length);
-    if (!buf)
-        return AVERROR(ENOMEM);
-    ret = read_full(s->fd, buf, hdr->length);
-    if (ret < 0) {
-        av_free(buf);
-        return ret;
+
+    if (hdr->length > s->rx_buf_size) {
+        uint8_t *buf = av_realloc(s->rx_buf, hdr->length);
+        if (!buf)
+            return AVERROR(ENOMEM);
+        s->rx_buf = buf;
+        s->rx_buf_size = hdr->length;
     }
-    *payload = buf;
+
+    ret = read_full(s->fd, s->rx_buf, hdr->length);
+    if (ret < 0)
+        return ret;
+    *payload = s->rx_buf;
     return 0;
 }
 
-static int vtremote_read_msg_nonblock(VTRemoteTranscodeContext *s, VTRemoteMsgHeader *hdr, uint8_t **payload) {
+static int vtremote_read_msg_nonblock(VTRemoteTranscodeContext *s, VTRemoteMsgHeader *hdr, const uint8_t **payload) {
     if (!s || !hdr || !payload)
         return AVERROR(EINVAL);
     int ready = check_readable(s->fd, 0);
@@ -730,23 +794,20 @@ static int vtremote_read_expected_ack(AVBSFContext *ctx, uint8_t expected_type,
 {
     VTRemoteTranscodeContext *s = ctx->priv_data;
     VTRemoteMsgHeader hdr;
-    uint8_t *payload = NULL;
+    const uint8_t *payload = NULL;
     int ret = vtremote_read_msg(s, &hdr, &payload);
     if (ret < 0)
         return ret;
 
     if (hdr.type == VTREMOTE_MSG_ERROR) {
         vtremote_log_error_payload(ctx, payload, hdr.length);
-        av_free(payload);
         return AVERROR(EIO);
     }
     if (hdr.type != expected_type) {
-        av_free(payload);
         return AVERROR_INVALIDDATA;
     }
 
     ret = handler(ctx, payload, hdr.length);
-    av_free(payload);
     return ret;
 }
 
@@ -1038,7 +1099,7 @@ static int vtremote_drain_available_packets(AVBSFContext *ctx) {
 
     while (s->pkt_q_count < s->pkt_q_size) {
         VTRemoteMsgHeader hdr;
-        uint8_t *payload = NULL;
+        const uint8_t *payload = NULL;
         int ret = vtremote_read_msg_nonblock(s, &hdr, &payload);
         if (ret == AVERROR(EAGAIN))
             break;
@@ -1048,28 +1109,23 @@ static int vtremote_drain_available_packets(AVBSFContext *ctx) {
         switch (hdr.type) {
         case VTREMOTE_MSG_PACKET:
             ret = enqueue_packet(ctx, payload, hdr.length);
-            av_free(payload);
             if (ret < 0)
                 return ret;
             packets_read++;
             break;
         case VTREMOTE_MSG_DONE:
-            av_free(payload);
             s->done = 1;
             return packets_read;
         case VTREMOTE_MSG_PING: {
             VTRemoteWBuf empty = {0};
             vtremote_send_msg(s, VTREMOTE_MSG_PONG, &empty);
-            av_free(payload);
             break;
         }
         case VTREMOTE_MSG_ERROR: {
             vtremote_log_error_payload(ctx, payload, hdr.length);
-            av_free(payload);
             return AVERROR(EIO);
         }
         default:
-            av_free(payload);
             break;
         }
     }
@@ -1081,7 +1137,7 @@ static int vtremote_receive_packet_blocking(AVBSFContext *ctx) {
     VTRemoteTranscodeContext *s = ctx->priv_data;
     for (;;) {
         VTRemoteMsgHeader hdr;
-        uint8_t *payload = NULL;
+        const uint8_t *payload = NULL;
         int ret = vtremote_read_msg(s, &hdr, &payload);
         if (ret < 0)
             return ret;
@@ -1089,25 +1145,20 @@ static int vtremote_receive_packet_blocking(AVBSFContext *ctx) {
         switch (hdr.type) {
         case VTREMOTE_MSG_PACKET:
             ret = enqueue_packet(ctx, payload, hdr.length);
-            av_free(payload);
             return ret;
         case VTREMOTE_MSG_DONE:
-            av_free(payload);
             s->done = 1;
             return 0;
         case VTREMOTE_MSG_PING: {
             VTRemoteWBuf empty = {0};
             vtremote_send_msg(s, VTREMOTE_MSG_PONG, &empty);
-            av_free(payload);
             break;
         }
         case VTREMOTE_MSG_ERROR: {
             vtremote_log_error_payload(ctx, payload, hdr.length);
-            av_free(payload);
             return AVERROR(EIO);
         }
         default:
-            av_free(payload);
             break;
         }
     }
@@ -1142,6 +1193,7 @@ static int vtremote_transcode_init(AVBSFContext *ctx) {
     s->packets_sent = 0;
     s->packets_recv = 0;
     s->last_dts = AV_NOPTS_VALUE;
+    s->rx_buf_size = 0;
 
     if (!s->host) {
         av_log(ctx, AV_LOG_ERROR, "vt_remote_host is required\n");
@@ -1326,6 +1378,8 @@ static void vtremote_transcode_close(AVBSFContext *ctx) {
         VTR_CLOSE_SOCKET(s->fd);
     vtremote_net_close();
     vtremote_wbuf_free(&s->pkt_buf);
+    av_freep(&s->rx_buf);
+    s->rx_buf_size = 0;
     if (s->pkt_queue) {
         for (int i = 0; i < s->pkt_q_size; i++)
             av_packet_unref(&s->pkt_queue[i]);

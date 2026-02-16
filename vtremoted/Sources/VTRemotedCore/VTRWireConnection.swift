@@ -3,32 +3,95 @@ import Foundation
 public final class VTRWireConnection: @unchecked Sendable {
     public let fileDescriptor: Int32
     private let sendLock = NSLock()
+    private var sendHeaderBuf = Data(count: VTRProtocol.headerSize)
+    private var sendPartsBuf: [Data] = []
 
     public init(fd fileDescriptor: Int32) {
         self.fileDescriptor = fileDescriptor
     }
 
-    private func encodeHeader(type: VTRMessageType, bodyLength: Int) -> Data {
-        VTRMessageHeader(
-            type: type.rawValue,
-            length: UInt32(bodyLength)
-        ).encoded()
+    private func encodeHeader(type: VTRMessageType, bodyLength: Int) {
+        let magic = VTRProtocol.magic
+        let version = VTRProtocol.version
+        let messageType = type.rawValue
+        let length = UInt32(bodyLength)
+
+        sendHeaderBuf.withUnsafeMutableBytes { raw in
+            guard raw.count >= VTRProtocol.headerSize else { return }
+            raw[0] = UInt8((magic >> 24) & 0xFF)
+            raw[1] = UInt8((magic >> 16) & 0xFF)
+            raw[2] = UInt8((magic >> 8) & 0xFF)
+            raw[3] = UInt8(magic & 0xFF)
+
+            raw[4] = UInt8((version >> 8) & 0xFF)
+            raw[5] = UInt8(version & 0xFF)
+
+            raw[6] = UInt8((messageType >> 8) & 0xFF)
+            raw[7] = UInt8(messageType & 0xFF)
+
+            raw[8] = UInt8((length >> 24) & 0xFF)
+            raw[9] = UInt8((length >> 16) & 0xFF)
+            raw[10] = UInt8((length >> 8) & 0xFF)
+            raw[11] = UInt8(length & 0xFF)
+        }
     }
 
     public func send(type: VTRMessageType, body: Data = Data()) throws {
-        try sendMessage(type: type, bodyParts: [body])
+        sendLock.lock()
+        defer { sendLock.unlock() }
+        encodeHeader(type: type, bodyLength: body.count)
+        if body.isEmpty {
+            try POSIXIO.writeAll(fd: fileDescriptor, data: sendHeaderBuf)
+            return
+        }
+        sendPartsBuf.removeAll(keepingCapacity: true)
+        sendPartsBuf.reserveCapacity(2)
+        sendPartsBuf.append(sendHeaderBuf)
+        sendPartsBuf.append(body)
+        try POSIXIO.writev(fd: fileDescriptor, parts: sendPartsBuf)
     }
 
     public func sendMessage(type: VTRMessageType, bodyParts: [Data]) throws {
         sendLock.lock()
         defer { sendLock.unlock() }
-        let totalLen = bodyParts.reduce(0) { $0 + $1.count }
-        let header = encodeHeader(type: type, bodyLength: totalLen)
 
-        var chunks = [header]
-        chunks.append(contentsOf: bodyParts)
+        let partCount = bodyParts.count
+        let totalLen: Int
+        switch partCount {
+        case 0:
+            totalLen = 0
+        case 1:
+            totalLen = bodyParts[0].count
+        case 2:
+            totalLen = bodyParts[0].count + bodyParts[1].count
+        default:
+            var sum = 0
+            for part in bodyParts {
+                sum += part.count
+            }
+            totalLen = sum
+        }
 
-        try POSIXIO.writev(fd: fileDescriptor, parts: chunks)
+        encodeHeader(type: type, bodyLength: totalLen)
+        if totalLen == 0 {
+            try POSIXIO.writeAll(fd: fileDescriptor, data: sendHeaderBuf)
+            return
+        }
+
+        sendPartsBuf.removeAll(keepingCapacity: true)
+        sendPartsBuf.reserveCapacity(partCount + 1)
+        sendPartsBuf.append(sendHeaderBuf)
+        switch partCount {
+        case 1:
+            sendPartsBuf.append(bodyParts[0])
+        case 2:
+            sendPartsBuf.append(bodyParts[0])
+            sendPartsBuf.append(bodyParts[1])
+        default:
+            sendPartsBuf.append(contentsOf: bodyParts)
+        }
+
+        try POSIXIO.writev(fd: fileDescriptor, parts: sendPartsBuf)
     }
 
     private var headerBuf = Data(count: VTRProtocol.headerSize)
