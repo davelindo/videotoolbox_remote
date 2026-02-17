@@ -94,6 +94,23 @@ public final class VTRClientHandler: @unchecked Sendable {
         }
     }
 
+    private func totalBodyByteCount(_ bodyParts: [Data]) -> Int {
+        switch bodyParts.count {
+        case 0:
+            return 0
+        case 1:
+            return bodyParts[0].count
+        case 2:
+            return bodyParts[0].count + bodyParts[1].count
+        default:
+            var runningTotal = 0
+            for part in bodyParts {
+                runningTotal += part.count
+            }
+            return runningTotal
+        }
+    }
+
     private func transcodeLogSuffix(for config: SessionConfiguration) -> String {
         guard config.mode == .transcode else { return "" }
         return " out=\(config.outputWidth)x\(config.outputHeight) " +
@@ -187,7 +204,7 @@ public final class VTRClientHandler: @unchecked Sendable {
         let mode = config.mode
         let session = sessionFactory { [weak self] type, bodyParts in
             guard let self else { return }
-            let totalCount = bodyParts.reduce(0) { $0 + $1.count }
+            let totalCount = totalBodyByteCount(bodyParts)
             stats.bytesOut += Int64(VTRProtocol.headerSize + totalCount)
             if type == .packet { stats.packetsOut += 1; stats.recordOutput() }
             if type == .frame { stats.framesOut += 1 }

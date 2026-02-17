@@ -2204,14 +2204,11 @@
                 let meta: Data
                 let data: Data
             }
-            
-            var results = [PlaneResult?](repeating: nil, count: 2)
-            let resultLock = NSLock()
-            var error: Error?
 
-            DispatchQueue.concurrentPerform(iterations: 2) { plane in
-                if error != nil { return }
-                
+            let compressionErrorMessage = config.options.wireCompression == 1 ?
+                "lz4 compress failed" : "zstd compress failed"
+
+            let makePlaneResult: (Int) -> PlaneResult? = { plane in
                 let stride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, plane)
                 let height = CVPixelBufferGetHeightOfPlane(pixelBuffer, plane)
                 let len = stride * height
@@ -2221,8 +2218,8 @@
                 planeMeta.writeBE(UInt32(height))
                 
                 // Always copy to system memory first to avoid reading from WC memory during compression
-                var raw = outputBufferPool.get(capacity: len)
-                defer { outputBufferPool.return(raw) }
+                var raw = self.outputBufferPool.get(capacity: len)
+                defer { self.outputBufferPool.return(raw) }
                 
                 if let base = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, plane) {
                     raw.count = len
@@ -2237,20 +2234,45 @@
                     mode: config.options.wireCompression,
                     data: raw
                 ) else {
-                    let errorMessage = config.options.wireCompression == 1 ?
-                        "lz4 compress failed" : "zstd compress failed"
-                    resultLock.lock()
-                    error = VTRemotedError.protocolViolation(errorMessage)
-                    resultLock.unlock()
-                    return
+                    return nil
                 }
                 
                 planeMeta.writeBE(UInt32(compressed.count))
-                let res = PlaneResult(meta: planeMeta.data, data: compressed)
-                
-                resultLock.lock()
-                results[plane] = res
-                resultLock.unlock()
+                return PlaneResult(meta: planeMeta.data, data: compressed)
+            }
+
+            var results = [PlaneResult?](repeating: nil, count: 2)
+            var error: Error?
+
+            let totalPlaneBytes =
+                CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0) * CVPixelBufferGetHeightOfPlane(pixelBuffer, 0)
+                + CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 1) * CVPixelBufferGetHeightOfPlane(pixelBuffer, 1)
+            let serialCompressionThresholdBytes = 256 * 1024
+
+            if totalPlaneBytes <= serialCompressionThresholdBytes {
+                for plane in 0..<2 {
+                    guard let res = makePlaneResult(plane) else {
+                        error = VTRemotedError.protocolViolation(compressionErrorMessage)
+                        break
+                    }
+                    results[plane] = res
+                }
+            } else {
+                let resultLock = NSLock()
+                DispatchQueue.concurrentPerform(iterations: 2) { plane in
+                    guard let res = makePlaneResult(plane) else {
+                        resultLock.lock()
+                        if error == nil {
+                            error = VTRemotedError.protocolViolation(compressionErrorMessage)
+                        }
+                        resultLock.unlock()
+                        return
+                    }
+
+                    resultLock.lock()
+                    results[plane] = res
+                    resultLock.unlock()
+                }
             }
             
             if let err = error {

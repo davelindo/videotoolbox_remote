@@ -115,6 +115,11 @@ typedef struct VTRemoteTranscodeContext {
     int64_t packets_recv;
     int64_t last_dts;
     VTRemoteWBuf pkt_buf;
+    uint8_t rx_header_buf[VTREMOTE_HEADER_SIZE];
+    VTRemoteMsgHeader rx_header;
+    int rx_header_read;
+    int rx_payload_read;
+    int rx_have_header;
     uint8_t *rx_buf;
     uint32_t rx_buf_size;
     AVPacket *pkt_queue;
@@ -224,31 +229,13 @@ static int write_full_iov(int fd, const uint8_t *buf0, int size0,
 #endif
 }
 
-static int read_full(int fd, uint8_t *buf, int size) {
-    int got = 0;
-    while (got < size) {
-        int r = (int)recv(fd, buf + got, size - got, 0);
-        if (r < 0) {
-            int err = vtremote_sock_errno();
-#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
-            if (err == WSAEINTR)
-                continue;
-#endif
-            if (err == EINTR)
-                continue;
-            if (err == EAGAIN || err == EWOULDBLOCK
-#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
-                || err == WSAEWOULDBLOCK
-#endif
-            )
-                return got == 0 ? AVERROR(EAGAIN) : AVERROR(EIO);
-            return AVERROR(err);
-        }
-        if (r == 0)
-            return AVERROR_EOF;
-        got += r;
-    }
-    return 0;
+static void vtremote_reset_rx_state(VTRemoteTranscodeContext *s)
+{
+    if (!s)
+        return;
+    s->rx_header_read = 0;
+    s->rx_payload_read = 0;
+    s->rx_have_header = 0;
 }
 
 static int check_readable(int fd, int timeout_ms) {
@@ -612,43 +599,125 @@ static int vtremote_send_msg(VTRemoteTranscodeContext *s, int msg_type, VTRemote
                           payload_data, payload_size);
 }
 
-static int vtremote_read_msg(VTRemoteTranscodeContext *s, VTRemoteMsgHeader *hdr, const uint8_t **payload) {
-    uint8_t header_buf[VTREMOTE_HEADER_SIZE];
-    if (!s || !hdr || !payload)
-        return AVERROR(EINVAL);
-    int ret = read_full(s->fd, header_buf, VTREMOTE_HEADER_SIZE);
-    if (ret < 0)
-        return ret;
-    ret = vtremote_read_header(header_buf, VTREMOTE_HEADER_SIZE, hdr);
-    if (ret < 0)
-        return ret;
-    if (hdr->length == 0) {
-        *payload = NULL;
+static int vtremote_ensure_rx_capacity(VTRemoteTranscodeContext *s, uint32_t size)
+{
+    if (size <= s->rx_buf_size)
         return 0;
-    }
-
-    if (hdr->length > s->rx_buf_size) {
-        uint8_t *buf = av_realloc(s->rx_buf, hdr->length);
-        if (!buf)
-            return AVERROR(ENOMEM);
-        s->rx_buf = buf;
-        s->rx_buf_size = hdr->length;
-    }
-
-    ret = read_full(s->fd, s->rx_buf, hdr->length);
-    if (ret < 0)
-        return ret;
-    *payload = s->rx_buf;
+    uint8_t *buf = av_realloc(s->rx_buf, size);
+    if (!buf)
+        return AVERROR(ENOMEM);
+    s->rx_buf = buf;
+    s->rx_buf_size = size;
     return 0;
 }
 
-static int vtremote_read_msg_nonblock(VTRemoteTranscodeContext *s, VTRemoteMsgHeader *hdr, const uint8_t **payload) {
+static int vtremote_recv_some(VTRemoteTranscodeContext *s, uint8_t *dst, int size,
+                              int nonblock, int had_partial_read)
+{
+    if (size <= 0)
+        return 0;
+
+    if (!s || !dst)
+        return AVERROR(EINVAL);
+
+    while (1) {
+        if (nonblock) {
+            int ready = check_readable(s->fd, 0);
+            if (ready == 0)
+                return AVERROR(EAGAIN);
+            if (ready < 0)
+                return AVERROR(vtremote_sock_errno());
+        }
+
+        int r = (int)recv(s->fd, dst, size, 0);
+        if (r < 0) {
+            int err = vtremote_sock_errno();
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+            if (err == WSAEINTR)
+                continue;
+#endif
+            if (err == EINTR)
+                continue;
+            if (err == EAGAIN || err == EWOULDBLOCK
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+                || err == WSAEWOULDBLOCK
+#endif
+            ) {
+                if (nonblock)
+                    return AVERROR(EAGAIN);
+                return had_partial_read ? AVERROR(EIO) : AVERROR(EAGAIN);
+            }
+            return AVERROR(err);
+        }
+        if (r == 0)
+            return AVERROR_EOF;
+        return r;
+    }
+}
+
+static int vtremote_read_msg_internal(VTRemoteTranscodeContext *s, VTRemoteMsgHeader *hdr,
+                                      const uint8_t **payload, int nonblock)
+{
+    int ret;
     if (!s || !hdr || !payload)
         return AVERROR(EINVAL);
-    int ready = check_readable(s->fd, 0);
-    if (ready <= 0)
-        return AVERROR(EAGAIN);
-    return vtremote_read_msg(s, hdr, payload);
+
+    if (!s->rx_have_header) {
+        while (s->rx_header_read < VTREMOTE_HEADER_SIZE) {
+            ret = vtremote_recv_some(s,
+                                     s->rx_header_buf + s->rx_header_read,
+                                     VTREMOTE_HEADER_SIZE - s->rx_header_read,
+                                     nonblock,
+                                     s->rx_header_read > 0);
+            if (ret < 0)
+                return ret;
+            s->rx_header_read += ret;
+        }
+
+        ret = vtremote_read_header(s->rx_header_buf, VTREMOTE_HEADER_SIZE, &s->rx_header);
+        if (ret < 0) {
+            vtremote_reset_rx_state(s);
+            return ret;
+        }
+        s->rx_have_header = 1;
+        s->rx_payload_read = 0;
+    }
+
+    if (s->rx_header.length == 0) {
+        *hdr = s->rx_header;
+        *payload = NULL;
+        vtremote_reset_rx_state(s);
+        return 0;
+    }
+
+    ret = vtremote_ensure_rx_capacity(s, s->rx_header.length);
+    if (ret < 0)
+        return ret;
+
+    const int payload_len = (int)s->rx_header.length;
+    while (s->rx_payload_read < payload_len) {
+        ret = vtremote_recv_some(s,
+                                 s->rx_buf + s->rx_payload_read,
+                                 payload_len - s->rx_payload_read,
+                                 nonblock,
+                                 s->rx_payload_read > 0);
+        if (ret < 0)
+            return ret;
+        s->rx_payload_read += ret;
+    }
+
+    *hdr = s->rx_header;
+    *payload = s->rx_buf;
+    vtremote_reset_rx_state(s);
+    return 0;
+}
+
+static int vtremote_read_msg(VTRemoteTranscodeContext *s, VTRemoteMsgHeader *hdr, const uint8_t **payload) {
+    return vtremote_read_msg_internal(s, hdr, payload, 0);
+}
+
+static int vtremote_read_msg_nonblock(VTRemoteTranscodeContext *s, VTRemoteMsgHeader *hdr, const uint8_t **payload) {
+    return vtremote_read_msg_internal(s, hdr, payload, 1);
 }
 
 static void vtremote_log_error_payload(AVBSFContext *ctx, const uint8_t *payload, int len)
@@ -998,6 +1067,7 @@ static int vtremote_handshake(AVBSFContext *ctx) {
         av_log(ctx, AV_LOG_ERROR, "Failed to connect to %s\n", hostport);
         return s->fd;
     }
+    vtremote_reset_rx_state(s);
 
     ret = vtremote_send_hello(ctx);
     if (ret < 0)
@@ -1017,6 +1087,7 @@ static int vtremote_handshake(AVBSFContext *ctx) {
 
 fail:
     vtremote_free_opts(&opts, opt_count);
+    vtremote_reset_rx_state(s);
     if (s->fd >= 0) {
         VTR_CLOSE_SOCKET(s->fd);
         s->fd = -1;
@@ -1032,7 +1103,9 @@ static int enqueue_packet(AVBSFContext *ctx, const uint8_t *payload, int payload
         return ret;
     if (!s->pkt_queue)
         return AVERROR_BUG;
-    int idx = (s->pkt_q_head + s->pkt_q_count) % s->pkt_q_size;
+    int idx = s->pkt_q_head + s->pkt_q_count;
+    if (idx >= s->pkt_q_size)
+        idx -= s->pkt_q_size;
     AVPacket *dst = &s->pkt_queue[idx];
     av_packet_unref(dst);
     ret = av_new_packet(dst, view.data_len);
@@ -1064,11 +1137,13 @@ static int pop_packet(VTRemoteTranscodeContext *s, AVPacket *pkt) {
     if (s->pkt_q_count <= 0)
         return AVERROR(EAGAIN);
     AVPacket *src = &s->pkt_queue[s->pkt_q_head];
-    int ret = av_packet_ref(pkt, src);
-    av_packet_unref(src);
-    s->pkt_q_head = (s->pkt_q_head + 1) % s->pkt_q_size;
+    av_packet_unref(pkt);
+    av_packet_move_ref(pkt, src);
+    s->pkt_q_head++;
+    if (s->pkt_q_head >= s->pkt_q_size)
+        s->pkt_q_head = 0;
     s->pkt_q_count--;
-    return ret;
+    return 0;
 }
 
 static int vtremote_send_packet(VTRemoteTranscodeContext *s, const AVPacket *pkt) {
@@ -1194,6 +1269,7 @@ static int vtremote_transcode_init(AVBSFContext *ctx) {
     s->packets_recv = 0;
     s->last_dts = AV_NOPTS_VALUE;
     s->rx_buf_size = 0;
+    vtremote_reset_rx_state(s);
 
     if (!s->host) {
         av_log(ctx, AV_LOG_ERROR, "vt_remote_host is required\n");
@@ -1362,6 +1438,7 @@ static void vtremote_transcode_flush(AVBSFContext *ctx) {
     s->packets_sent = 0;
     s->packets_recv = 0;
     s->last_dts = AV_NOPTS_VALUE;
+    vtremote_reset_rx_state(s);
     if (s->pkt_queue) {
         for (int i = 0; i < s->pkt_q_size; i++)
             av_packet_unref(&s->pkt_queue[i]);
@@ -1378,6 +1455,7 @@ static void vtremote_transcode_close(AVBSFContext *ctx) {
         VTR_CLOSE_SOCKET(s->fd);
     vtremote_net_close();
     vtremote_wbuf_free(&s->pkt_buf);
+    vtremote_reset_rx_state(s);
     av_freep(&s->rx_buf);
     s->rx_buf_size = 0;
     if (s->pkt_queue) {

@@ -38,6 +38,10 @@ public final class BufferPool: @unchecked Sendable {
             var bestCap = Int.max
             for index in buffers.indices {
                 let cap = buffers[index].capacityHint
+                if cap == want {
+                    bestIdx = index
+                    break
+                }
                 if cap >= want, cap < bestCap {
                     bestIdx = index
                     bestCap = cap

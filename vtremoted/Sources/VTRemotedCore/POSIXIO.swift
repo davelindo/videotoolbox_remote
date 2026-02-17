@@ -41,10 +41,15 @@ public enum POSIXIO {
             buffer.count = count
         }
 
-        try readExactLoop(count: count) { got in
-            buffer.withUnsafeMutableBytes { ptr in
-                guard let base = ptr.baseAddress else { return Int(-1) }
-                return read(fileDescriptor, base.advanced(by: got), count - got)
+        try buffer.withUnsafeMutableBytes { ptr in
+            if let base = ptr.baseAddress {
+                try readExactLoop(count: count) { got in
+                    read(fileDescriptor, base.advanced(by: got), count - got)
+                }
+            } else {
+                try readExactLoop(count: count) { _ in
+                    Int(-1)
+                }
             }
         }
     }
