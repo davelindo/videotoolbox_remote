@@ -78,8 +78,18 @@ ffmpeg -i input.mkv \
   -vt_remote_transcode \
   -vt_remote_host <MAC_IP>:5555 \
   -b:v 6000k \
-  output.mkv
+output.mkv
 ```
+
+## Optional: OBS Plugin Smoke Test (Experimental)
+
+To validate the OBS plugin protocol client path:
+
+```bash
+make test-obs-plugin
+```
+
+This runs a mock-backed smoke test for connect/configure/frame/packet flow.
 
 ## Important Notes
 

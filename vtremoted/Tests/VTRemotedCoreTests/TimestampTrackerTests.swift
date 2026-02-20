@@ -53,18 +53,19 @@ final class TimestampTrackerTests: XCTestCase {
         XCTAssertEqual(dts3, 102)
     }
     
-    func testDTSMonotonicityMayAdjustPTS() {
+    func testDTSCanLeadPTSWithoutForcedPTSAdjustment() {
         let tracker = TimestampTracker()
         
-        // DTS > PTS should bump PTS when enforcing monotonic PTS.
+        // DTS > PTS should not force PTS adjustment on first frame.
+        // We preserve PTS semantics unless monotonic-by-history requires a bump.
         let result = tracker.process(ptsTicks: 100, dtsTicks: 200)
         guard case .emit(let pts, let dts, let adjusted) = result else {
             XCTFail("Expected emit")
             return
         }
         XCTAssertEqual(dts, 200)
-        XCTAssertEqual(pts, 200)
-        XCTAssertTrue(adjusted)
+        XCTAssertEqual(pts, 100)
+        XCTAssertFalse(adjusted)
     }
     
     func testDTSMonotonicityEnforced() {

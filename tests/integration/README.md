@@ -5,6 +5,7 @@ This tree holds VideoToolbox Remote integration tests and benchmarks.
 - `mock_vtremoted/`: portable Python mock server to exercise protocol framing and message flow. It responds to HELLO/CONFIGURE/FRAME/FLUSH, emits dummy Annex B packets, and exits after FLUSH (see its README for usage).
 - `run_mock_roundtrip.sh`: spins up the Python mock and runs `h264_videotoolbox_remote` against it using a built ffmpeg binary (defaults to `ffmpeg/ffmpeg` in the repo root).
 - `run_mock_decode.sh`: spins up the Python mock and runs the `h264_videotoolbox_remote` *decoder* against it (forces `-vt_remote_wire_compression none` since the mock does not compress).
+- `run_obs_plugin_client_mock.sh`: compiles the OBS plugin client (`obs-plugin/src/vtremoted-client.cpp`) with a local OBS logging stub and runs a protocol smoke test against the Python mock server.
 - `run_complex_chain_test.sh`: exercises a complex filter chain via the mock server to validate framing + options under load.
 - `check_pts_dts.sh`: ffprobe-based validator that fails on **non-monotonic DTS** (muxer requirement) and missing keyframes. Note: `pts < dts` is valid when B-frames are used.
 - `check_frame_packet_count.sh`: validates that decoded frame count equals packet count (guards against warmup/extra packets).
@@ -44,6 +45,9 @@ Bench defaults:
 - `VTREMOTE_BENCH_TRANSCODE_OUT_CODEC=hevc`
 - `VTREMOTE_BENCH_TRANSCODE_PIX_FMT=1` (1=nv12, 2=p010)
 - `FFMPEG_LOCAL` defaults to the repo `ffmpeg/ffmpeg` for local encodes (set `FFMPEG_LOCAL=ffmpeg` to use your system build).
+
+Run-all toggles:
+- `VTREMOTE_RUN_OBS_PLUGIN=1` runs the OBS plugin client protocol smoke test.
 
 FFmpeg build note: enable the local + remote codecs during configure on macOS, e.g.
 `./configure --enable-videotoolbox --enable-videotoolbox-remote`

@@ -10,6 +10,7 @@ Notes for contributors working on the client codecs, protocol, or daemon.
 
 - **`vtremoted/`**: Swift macOS daemon exposing VideoToolbox over TCP.
 - **`ffmpeg/`**: FFmpeg fork containing the remote codec implementations.
+- **`obs-plugin/`**: OBS plugin prototype using the same remote protocol.
 - **`tests/`**: Integration tests and benchmarks.
 - **`docs/`**: Protocol and architecture documentation.
 
@@ -53,6 +54,7 @@ export VTREMOTED="$PWD/vtremoted/.build/release/vtremoted"
 - **`run_all.sh`**: Standard integration suite.
 - **`bench_vtremote.sh`**: Perform encoding/transcoding benchmarks.
 - **`run_vtremoted_roundtrip.sh`**: Verify H.264/HEVC roundtrip correctness.
+- **`run_obs_plugin_client_mock.sh`**: OBS plugin protocol smoke test against the Python mock server.
 
 ### Running a Benchmark
 To reproduce the performance numbers:

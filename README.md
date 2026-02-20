@@ -11,6 +11,7 @@ VideoToolbox Remote offloads hardware-accelerated H.264 and HEVC encoding/decodi
 The system consists of:
 - **Server (`vtremoted`)**: A lightweight Swift daemon running on macOS that wraps the VideoToolbox API.
 - **Client**: A modified FFmpeg with custom `h264_videotoolbox_remote` and `hevc_videotoolbox_remote` codecs.
+- **OBS Plugin (`obs-plugin/`)**: Experimental OBS encoder plugin using the same vtremoted protocol client.
 
 ## How users can get started
 
@@ -82,6 +83,7 @@ ffmpeg -i input.mkv \
 ## Where users can get help
 
 - **Architecture**: [docs/architecture.md](docs/architecture.md) - System design and data flow.
+- **OBS Plugin**: [docs/obs-plugin.md](docs/obs-plugin.md) - Experimental plugin build/testing notes.
 - **Protocol**: [docs/protocol.md](docs/protocol.md) - Wire protocol specification.
 - **Troubleshooting**: [docs/troubleshooting.md](docs/troubleshooting.md) - Common issues and fixes.
 - **Security**: [docs/security.md](docs/security.md) - Recommended secure deployment.

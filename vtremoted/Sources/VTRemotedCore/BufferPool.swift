@@ -23,7 +23,7 @@ public final class BufferPool: @unchecked Sendable {
     private func checkout(_ item: Item, want: Int) -> Data {
         pooledBytes = max(0, pooledBytes - item.capacityHint)
         var buf = item.data
-        buf.count = 0
+        buf.removeAll(keepingCapacity: true)
         if want > 0 { buf.reserveCapacity(want) }
         return buf
     }
@@ -47,12 +47,10 @@ public final class BufferPool: @unchecked Sendable {
                     bestCap = cap
                 }
             }
-            if let idx = bestIdx {
-                return checkout(buffers.remove(at: idx), want: want)
-            }
 
             // Fallback: pop last.
-            return checkout(buffers.removeLast(), want: want)
+            let idx = bestIdx ?? (buffers.count - 1)
+            return checkout(buffers.remove(at: idx), want: want)
         }
 
         var buf = Data()

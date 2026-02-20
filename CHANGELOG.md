@@ -5,6 +5,32 @@ All notable changes to this project are documented in this file.
 The format follows Keep a Changelog principles, using repository release tags (`v*`) in reverse chronological order.
 The non-version `nightly` tag is intentionally excluded.
 
+## [v0.2.5] - 2026-02-20
+
+### Added
+- Added experimental OBS plugin source tree under `obs-plugin/`.
+- Added OBS plugin client smoke test harness:
+  - `tests/integration/run_obs_plugin_client_mock.sh`
+  - `tests/integration/obs_plugin_client_smoke.cpp`
+  - `tests/integration/obs_plugin_test_stubs/obs-module.h`
+- Added `make test-obs-plugin` convenience target.
+- Added dedicated OBS plugin documentation (`docs/obs-plugin.md` and `obs-plugin/README.md`).
+
+### Changed
+- Updated docs and integration references to include OBS plugin support and testing entry points.
+- Updated buffer-pool reuse behavior in `BufferPool` to clear returned `Data` with `removeAll(keepingCapacity:)`.
+- Simplified best-fit fallback path in `BufferPool.get(capacity:)`.
+- Aligned `TimestampTracker` baseline test expectations with current PTS/DTS semantics.
+
+### Fixed
+- Fixed OBS plugin `CONFIGURE` option encoding to use length-prefixed UTF-8 key/value pairs expected by `vtremoted`.
+- Fixed OBS plugin `CONFIGURE_ACK` parsing (status + extradata length/body handling).
+- Hardened Python mock parsing for strict CONFIGURE payload validation and bounds checks.
+
+### CI
+- Added `obs-plugin-smoke` Linux job in GitHub Actions.
+- Added `obs_plugin` change detection in CI path filters to trigger plugin smoke validation when relevant files change.
+
 ## [v0.2.4] - 2026-02-17
 
 ### Changed

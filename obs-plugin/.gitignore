@@ -1,0 +1,11 @@
+# Generated build artifacts
+build/
+
+# CMake user/build files
+CMakeCache.txt
+cmake_install.cmake
+install_manifest.txt
+CMakeFiles/
+
+# macOS metadata
+.DS_Store

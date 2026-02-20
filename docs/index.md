@@ -44,6 +44,7 @@ ffmpeg -i input.mkv \
 ## Documentation
 
 - [Getting Started](getting-started.html): Installation and setup.
+- [OBS Plugin](obs-plugin.html): Experimental OBS plugin build/test notes.
 - [Architecture](architecture.html): System design and data flow.
 - [Protocol](protocol.html): Wire specification.
 - [Troubleshooting](troubleshooting.html): Common resolutions.

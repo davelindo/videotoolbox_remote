@@ -71,6 +71,8 @@ def read_u64(buf: memoryview, offset: int) -> Tuple[int, int]:
 
 def read_str(buf: memoryview, offset: int) -> Tuple[str, int]:
     length, offset = read_u16(buf, offset)
+    if offset + length > len(buf):
+        raise ValueError("string length exceeds payload")
     s = bytes(buf[offset : offset + length]).decode("utf-8")
     offset += length
     return s, offset
@@ -129,8 +131,33 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                     _tb_den, off = read_u32(payload, off)
                     _fr_num, off = read_u32(payload, off)
                     _fr_den, off = read_u32(payload, off)
-                    # options map (count + key/value pairs) may follow; skip rest
-                    # For mock we ignore options and return empty extradata.
+
+                    if args.strict_config_options:
+                        options = {}
+                        opt_count, off = read_u16(payload, off)
+                        for _ in range(opt_count):
+                            key, off = read_str(payload, off)
+                            value, off = read_str(payload, off)
+                            options[key] = value
+
+                        extradata_len, off = read_u32(payload, off)
+                        if off + extradata_len > len(payload):
+                            raise ValueError("extradata length exceeds payload")
+                        off += extradata_len
+
+                        required = ("bitrate", "gop", "wire_compression")
+                        missing = [key for key in required if key not in options]
+                        if missing:
+                            raise ValueError(f"missing configure options: {missing}")
+
+                        for key in required:
+                            if not options[key].isdigit():
+                                raise ValueError(f"non-numeric configure option: {key}={options[key]}")
+
+                        if off != len(payload):
+                            raise ValueError("unexpected trailing bytes in CONFIGURE payload")
+
+                    # For mock we return empty extradata.
                     extradata = b""
                     status = 0  # ok
                     body = struct.pack(">B", status) + struct.pack(">H", len(extradata)) + extradata
@@ -266,6 +293,11 @@ def main() -> int:
         choices=["frame", "packet"],
         default="frame",
         help="Reply to PACKET with FRAME (decode) or PACKET (transcode-style) (default: frame)",
+    )
+    parser.add_argument(
+        "--strict-config-options",
+        action="store_true",
+        help="Validate CONFIGURE options as length-prefixed UTF-8 key/value pairs",
     )
     parser.add_argument("--once", action="store_true", help="handle a single connection then exit")
     args = parser.parse_args()

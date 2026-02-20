@@ -49,6 +49,7 @@ jobs:
     outputs:
       ffmpeg: ${{ github.event_name == 'schedule' && steps.filter_schedule.outputs.ffmpeg || github.event_name == 'schedule' && steps.filter_schedule_fallback.outputs.ffmpeg || steps.filter.outputs.ffmpeg }}
       vtremoted: ${{ github.event_name == 'schedule' && steps.filter_schedule.outputs.vtremoted || github.event_name == 'schedule' && steps.filter_schedule_fallback.outputs.vtremoted || steps.filter.outputs.vtremoted }}
+      obs_plugin: ${{ github.event_name == 'schedule' && steps.filter_schedule.outputs.obs_plugin || github.event_name == 'schedule' && steps.filter_schedule_fallback.outputs.obs_plugin || steps.filter.outputs.obs_plugin }}
       docs: ${{ github.event_name == 'schedule' && steps.filter_schedule.outputs.docs || github.event_name == 'schedule' && steps.filter_schedule_fallback.outputs.docs || steps.filter.outputs.docs }}
       ci: ${{ github.event_name == 'schedule' && steps.filter_schedule.outputs.ci || github.event_name == 'schedule' && steps.filter_schedule_fallback.outputs.ci || steps.filter.outputs.ci }}
     steps:
@@ -77,6 +78,15 @@ jobs:
               - 'tests/integration/**'
             vtremoted:
               - 'vtremoted/**'
+            obs_plugin:
+              - 'obs-plugin/**'
+              - 'tests/integration/run_obs_plugin_client_mock.sh'
+              - 'tests/integration/obs_plugin_client_smoke.cpp'
+              - 'tests/integration/obs_plugin_test_stubs/**'
+              - 'tests/integration/mock_vtremoted/mock_vtremoted.py'
+              - 'tests/integration/run_all.sh'
+              - 'tests/integration/README.md'
+              - 'Makefile'
             docs:
               - 'docs/**'
               - 'README.md'
@@ -88,6 +98,7 @@ jobs:
         run: |
           echo "ffmpeg=true" >> "$GITHUB_OUTPUT"
           echo "vtremoted=true" >> "$GITHUB_OUTPUT"
+          echo "obs_plugin=true" >> "$GITHUB_OUTPUT"
           echo "docs=true" >> "$GITHUB_OUTPUT"
           echo "ci=true" >> "$GITHUB_OUTPUT"
       - uses: dorny/paths-filter@v3
@@ -100,6 +111,15 @@ jobs:
               - 'tests/integration/**'
             vtremoted:
               - 'vtremoted/**'
+            obs_plugin:
+              - 'obs-plugin/**'
+              - 'tests/integration/run_obs_plugin_client_mock.sh'
+              - 'tests/integration/obs_plugin_client_smoke.cpp'
+              - 'tests/integration/obs_plugin_test_stubs/**'
+              - 'tests/integration/mock_vtremoted/mock_vtremoted.py'
+              - 'tests/integration/run_all.sh'
+              - 'tests/integration/README.md'
+              - 'Makefile'
             docs:
               - 'docs/**'
               - 'README.md'
@@ -362,6 +382,21 @@ jobs:
           path: |
             ffmpeg-${{ matrix.label }}.tar.gz
             ffmpeg-${{ matrix.label }}.tar.gz.sha256
+
+  obs-plugin-smoke:
+    name: OBS plugin smoke (Linux)
+    needs: changes
+    if: (github.event_name == 'schedule' && (needs.changes.outputs.obs_plugin == 'true' || needs.changes.outputs.ci == 'true')) || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/') || needs.changes.outputs.obs_plugin == 'true' || needs.changes.outputs.ci == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ pkg-config liblz4-dev python3
+      - name: Run OBS plugin smoke test
+        run: |
+          make test-obs-plugin
 
   publish-assets:
     name: Publish nightly / release assets
