@@ -90,5 +90,5 @@ const FFCodec ff_h264_videotoolbox_remote_encoder = {
     .init           = vtremote_h264_init,
     .close          = vtremote_h264_close,
     FF_CODEC_ENCODE_CB(ff_vtremote_encode),
-    CODEC_PIXFMTS(AV_PIX_FMT_NV12),
+    CODEC_PIXFMTS(AV_PIX_FMT_NV12, AV_PIX_FMT_YUV420P),
 };

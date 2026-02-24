@@ -181,6 +181,200 @@ static double vtremote_guess_fps(const AVCodecContext *avctx) {
   return 0.0;
 }
 
+static int vtremote_pix_fmt_depth(enum AVPixelFormat pix_fmt) {
+  const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(pix_fmt);
+  if (!desc || desc->nb_components <= 0)
+    return 8;
+  return desc->comp[0].depth;
+}
+
+static int vtremote_is_p010_pix_fmt(enum AVPixelFormat pix_fmt) {
+  return pix_fmt == AV_PIX_FMT_P010LE || pix_fmt == AV_PIX_FMT_P010;
+}
+
+static int vtremote_is_upload_pix_fmt(enum AVPixelFormat pix_fmt) {
+  return pix_fmt == AV_PIX_FMT_NV12 || vtremote_is_p010_pix_fmt(pix_fmt);
+}
+
+static enum AVPixelFormat
+vtremote_target_upload_pix_fmt(const AVFrame *frame, int codec_id) {
+  if (codec_id == AV_CODEC_ID_H264)
+    return AV_PIX_FMT_NV12;
+
+  if (!frame)
+    return AV_PIX_FMT_NV12;
+
+  return vtremote_pix_fmt_depth(frame->format) > 8 ? AV_PIX_FMT_P010LE
+                                                    : AV_PIX_FMT_NV12;
+}
+
+static int vtremote_wire_pix_fmt_for_context(const AVCodecContext *avctx,
+                                             int codec_id) {
+  if (codec_id == AV_CODEC_ID_H264)
+    return 1;
+
+  if (!avctx)
+    return 1;
+
+  if (vtremote_is_p010_pix_fmt(avctx->pix_fmt) ||
+      avctx->pix_fmt == AV_PIX_FMT_P210 || vtremote_pix_fmt_depth(avctx->pix_fmt) > 8)
+    return 2;
+
+  return 1;
+}
+
+static void vtremote_copy_plane_rows(uint8_t *dst, int dst_linesize,
+                                     const uint8_t *src, int src_linesize,
+                                     int row_bytes, int rows) {
+  if (src_linesize < 0)
+    src += (rows - 1) * (int64_t)src_linesize;
+  if (dst_linesize < 0)
+    dst += (rows - 1) * (int64_t)dst_linesize;
+
+  for (int y = 0; y < rows; y++) {
+    memcpy(dst + y * dst_linesize, src + y * src_linesize, row_bytes);
+  }
+}
+
+static int vtremote_prepare_upload_frame(AVCodecContext *avctx,
+                                         const AVFrame *frame,
+                                         const AVFrame **out_frame) {
+  VTRemoteEncContext *s = avctx->priv_data;
+  enum AVPixelFormat dst_fmt;
+  const AVPixFmtDescriptor *src_desc;
+  int ret;
+
+  if (!frame || !out_frame)
+    return AVERROR(EINVAL);
+
+  dst_fmt = vtremote_target_upload_pix_fmt(frame, s->codec_id);
+  if (frame->format == dst_fmt && vtremote_is_upload_pix_fmt(dst_fmt)) {
+    *out_frame = frame;
+    return 0;
+  }
+
+  src_desc = av_pix_fmt_desc_get(frame->format);
+  if (src_desc && (src_desc->flags & AV_PIX_FMT_FLAG_HWACCEL)) {
+    av_log(avctx, AV_LOG_ERROR,
+           "Remote encode does not accept hardware frames (%s) directly; "
+           "use hwdownload/format first.\n",
+           av_get_pix_fmt_name(frame->format));
+    return AVERROR(EINVAL);
+  }
+
+  if (!s->convert_frame) {
+    s->convert_frame = av_frame_alloc();
+    if (!s->convert_frame)
+      return AVERROR(ENOMEM);
+  }
+
+  if (s->convert_frame->format != dst_fmt ||
+      s->convert_frame->width != frame->width ||
+      s->convert_frame->height != frame->height) {
+    av_frame_unref(s->convert_frame);
+    s->convert_frame->format = dst_fmt;
+    s->convert_frame->width = frame->width;
+    s->convert_frame->height = frame->height;
+    ret = av_frame_get_buffer(s->convert_frame, 32);
+    if (ret < 0)
+      return ret;
+  }
+
+  ret = av_frame_make_writable(s->convert_frame);
+  if (ret < 0)
+    return ret;
+
+  if (frame->format == AV_PIX_FMT_YUV420P || frame->format == AV_PIX_FMT_YUVJ420P) {
+    const int width = frame->width;
+    const int height = frame->height;
+    const int cw = (width + 1) >> 1;
+    const int ch = (height + 1) >> 1;
+
+    if (dst_fmt == AV_PIX_FMT_NV12) {
+      vtremote_copy_plane_rows(s->convert_frame->data[0], s->convert_frame->linesize[0],
+                               frame->data[0], frame->linesize[0], width, height);
+      for (int y = 0; y < ch; y++) {
+        const uint8_t *u = frame->data[1] + y * frame->linesize[1];
+        const uint8_t *v = frame->data[2] + y * frame->linesize[2];
+        uint8_t *uv = s->convert_frame->data[1] + y * s->convert_frame->linesize[1];
+        for (int x = 0; x < cw; x++) {
+          uv[2 * x + 0] = u[x];
+          uv[2 * x + 1] = v[x];
+        }
+      }
+    } else if (dst_fmt == AV_PIX_FMT_P010LE) {
+      for (int y = 0; y < height; y++) {
+        const uint8_t *src_y = frame->data[0] + y * frame->linesize[0];
+        uint8_t *dst_y = s->convert_frame->data[0] + y * s->convert_frame->linesize[0];
+        for (int x = 0; x < width; x++) {
+          AV_WL16(dst_y + 2 * x, ((uint16_t)src_y[x]) << 8);
+        }
+      }
+      for (int y = 0; y < ch; y++) {
+        const uint8_t *u = frame->data[1] + y * frame->linesize[1];
+        const uint8_t *v = frame->data[2] + y * frame->linesize[2];
+        uint8_t *uv = s->convert_frame->data[1] + y * s->convert_frame->linesize[1];
+        for (int x = 0; x < cw; x++) {
+          AV_WL16(uv + 4 * x + 0, ((uint16_t)u[x]) << 8);
+          AV_WL16(uv + 4 * x + 2, ((uint16_t)v[x]) << 8);
+        }
+      }
+    } else {
+      av_log(avctx, AV_LOG_ERROR, "Unsupported conversion target %s\n",
+             av_get_pix_fmt_name(dst_fmt));
+      return AVERROR(EINVAL);
+    }
+  } else if ((frame->format == AV_PIX_FMT_YUV420P10LE ||
+              frame->format == AV_PIX_FMT_YUV420P10BE) &&
+             dst_fmt == AV_PIX_FMT_P010LE) {
+    const int width = frame->width;
+    const int height = frame->height;
+    const int cw = (width + 1) >> 1;
+    const int ch = (height + 1) >> 1;
+    const int be = frame->format == AV_PIX_FMT_YUV420P10BE;
+
+    if (!be) {
+      vtremote_copy_plane_rows(s->convert_frame->data[0], s->convert_frame->linesize[0],
+                               frame->data[0], frame->linesize[0], width * 2, height);
+    } else {
+      for (int y = 0; y < height; y++) {
+        const uint8_t *src_y = frame->data[0] + y * frame->linesize[0];
+        uint8_t *dst_y = s->convert_frame->data[0] + y * s->convert_frame->linesize[0];
+        for (int x = 0; x < width; x++) {
+          uint16_t y10 = AV_RB16(src_y + 2 * x);
+          AV_WL16(dst_y + 2 * x, y10);
+        }
+      }
+    }
+
+    for (int y = 0; y < ch; y++) {
+      const uint8_t *u = frame->data[1] + y * frame->linesize[1];
+      const uint8_t *v = frame->data[2] + y * frame->linesize[2];
+      uint8_t *uv = s->convert_frame->data[1] + y * s->convert_frame->linesize[1];
+      for (int x = 0; x < cw; x++) {
+        uint16_t u10 = be ? AV_RB16(u + 2 * x) : AV_RL16(u + 2 * x);
+        uint16_t v10 = be ? AV_RB16(v + 2 * x) : AV_RL16(v + 2 * x);
+        AV_WL16(uv + 4 * x + 0, u10);
+        AV_WL16(uv + 4 * x + 2, v10);
+      }
+    }
+  } else {
+    av_log(avctx, AV_LOG_ERROR,
+           "Unsupported frame format %s for remote upload (expected NV12/P010-compatible).\n",
+           av_get_pix_fmt_name(frame->format));
+    return AVERROR(EINVAL);
+  }
+
+  s->convert_frame->pts = frame->pts;
+  s->convert_frame->duration = frame->duration;
+  s->convert_frame->pict_type = frame->pict_type;
+  s->convert_frame->flags &= ~AV_FRAME_FLAG_KEY;
+  s->convert_frame->flags |= (frame->flags & AV_FRAME_FLAG_KEY);
+
+  *out_frame = s->convert_frame;
+  return 0;
+}
+
 static double vtremote_estimate_raw_mbps(const AVCodecContext *avctx) {
   if (!avctx || avctx->width <= 0 || avctx->height <= 0)
     return 0.0;
@@ -188,9 +382,8 @@ static double vtremote_estimate_raw_mbps(const AVCodecContext *avctx) {
   if (fps <= 0.0)
     fps = 30.0;
 
-  double bytes_per_pixel = 1.5;
-  if (avctx->pix_fmt == AV_PIX_FMT_P010LE || avctx->pix_fmt == AV_PIX_FMT_P010)
-    bytes_per_pixel = 3.0;
+  double bytes_per_pixel =
+      vtremote_wire_pix_fmt_for_context(avctx, avctx->codec_id) == 2 ? 3.0 : 1.5;
 
   double bytes_per_frame = bytes_per_pixel * (double)avctx->width *
                            (double)avctx->height;
@@ -1477,15 +1670,8 @@ static int vtremote_handshake(AVCodecContext *avctx) {
       goto cfg_fail;
   }
 
-  int wire_pix_fmt = 0;
-  switch (avctx->pix_fmt) {
-  case AV_PIX_FMT_NV12:
-    wire_pix_fmt = 1;
-    break;
-  case AV_PIX_FMT_P010LE:
-    wire_pix_fmt = 2;
-    break;
-  default:
+  int wire_pix_fmt = vtremote_wire_pix_fmt_for_context(avctx, s->codec_id);
+  if (wire_pix_fmt != 1 && wire_pix_fmt != 2) {
     av_log(avctx, AV_LOG_ERROR, "Unsupported pix_fmt for vtremote: %s\n",
            av_get_pix_fmt_name(avctx->pix_fmt));
     ret = AVERROR(EINVAL);
@@ -1623,6 +1809,7 @@ int ff_vtremote_common_init(AVCodecContext *avctx) {
   s->send_q_tail = 0;
   s->send_q_count = 0;
   s->queued_frames = 0;
+  s->convert_frame = NULL;
 
   if (!s->host) {
     av_log(avctx, AV_LOG_ERROR, "vt_remote_host is required\n");
@@ -1693,6 +1880,7 @@ int ff_vtremote_common_close(AVCodecContext *avctx) {
       vtremote_sendbuf_reset(&s->send_queue[i]);
     av_freep(&s->send_queue);
   }
+  av_frame_free(&s->convert_frame);
   if (vtremote_log_enabled(s, AV_LOG_INFO) && s->start_time_us > 0) {
     int64_t elapsed_us = av_gettime_relative() - s->start_time_us;
     double elapsed = elapsed_us > 0 ? (double)elapsed_us / 1000000.0 : 0.0;
@@ -1722,6 +1910,7 @@ int ff_vtremote_common_close(AVCodecContext *avctx) {
 
 int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame) {
   VTRemoteEncContext *s = avctx->priv_data;
+  const AVFrame *upload_frame = frame;
   int ret;
   if (!s->connected)
     return AVERROR(EPIPE);
@@ -1734,8 +1923,11 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame) {
     return vtremote_sendq_pump(avctx, 1);
   }
 
-  if (frame->format != AV_PIX_FMT_NV12 && frame->format != AV_PIX_FMT_P010LE &&
-      frame->format != AV_PIX_FMT_P010) {
+  ret = vtremote_prepare_upload_frame(avctx, frame, &upload_frame);
+  if (ret < 0)
+    return ret;
+
+  if (!vtremote_is_upload_pix_fmt(upload_frame->format)) {
     av_log(avctx, AV_LOG_ERROR, "VTRemote supports NV12/P010 only\n");
     return AVERROR(EINVAL);
   }
@@ -1745,34 +1937,35 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame) {
       s->inflight_blocked++;
     return AVERROR(EAGAIN);
   }
-  if (s->codec_id == AV_CODEC_ID_H264 && frame->format != AV_PIX_FMT_NV12) {
+  if (s->codec_id == AV_CODEC_ID_H264 &&
+      upload_frame->format != AV_PIX_FMT_NV12) {
     av_log(avctx, AV_LOG_ERROR, "H.264 VTRemote only supports NV12\n");
     return AVERROR(EINVAL);
   }
 
-  const uint8_t *planes[2] = {frame->data[0], frame->data[1]};
-  uint32_t strides[2] = {frame->linesize[0], frame->linesize[1]};
-  uint32_t heights[2] = {(uint32_t)frame->height,
-                         (uint32_t)(frame->height / 2)};
+  const uint8_t *planes[2] = {upload_frame->data[0], upload_frame->data[1]};
+  uint32_t strides[2] = {upload_frame->linesize[0], upload_frame->linesize[1]};
+  uint32_t heights[2] = {(uint32_t)upload_frame->height,
+                         (uint32_t)(upload_frame->height / 2)};
   uint32_t sizes[2] = {strides[0] * heights[0], strides[1] * heights[1]};
 
   VTRemoteSideData sd[16];
   int sd_count = 0;
   if (frame->nb_side_data > 0) {
     for (int i = 0; i < frame->nb_side_data && sd_count < 16; i++) {
-      AVFrameSideData *s = frame->side_data[i];
+      AVFrameSideData *frame_sd = frame->side_data[i];
       // Only send A53 CC for now as per MVP request/parity
-      if (s->type == AV_FRAME_DATA_A53_CC) {
-        sd[sd_count].type = (uint32_t)s->type;
-        sd[sd_count].size = (uint32_t)s->size;
-        sd[sd_count].data = s->data;
+      if (frame_sd->type == AV_FRAME_DATA_A53_CC) {
+        sd[sd_count].type = (uint32_t)frame_sd->type;
+        sd[sd_count].size = (uint32_t)frame_sd->size;
+        sd[sd_count].data = frame_sd->data;
         sd_count++;
       }
     }
   }
 
   ret = vtremote_sendq_enqueue_frame(
-      avctx, s, frame, planes, strides, heights, sizes,
+      avctx, s, upload_frame, planes, strides, heights, sizes,
       sd_count > 0 ? sd : NULL, sd_count);
   if (ret < 0)
     return ret;

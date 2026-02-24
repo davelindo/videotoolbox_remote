@@ -68,5 +68,6 @@ const FFCodec ff_hevc_videotoolbox_remote_encoder = {
     .init           = vtremote_hevc_init,
     .close          = vtremote_hevc_close,
     FF_CODEC_ENCODE_CB(ff_vtremote_encode),
-    CODEC_PIXFMTS(AV_PIX_FMT_NV12, AV_PIX_FMT_P010LE),
+    CODEC_PIXFMTS(AV_PIX_FMT_NV12, AV_PIX_FMT_YUV420P, AV_PIX_FMT_P010LE,
+                  AV_PIX_FMT_YUV420P10LE, AV_PIX_FMT_YUV420P10BE),
 };

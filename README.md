@@ -70,6 +70,20 @@ ffmpeg -i input.mkv \
   output.mkv
 ```
 
+## Parity Status
+
+Current coverage:
+- Encoder option-surface parity checks for `h264/hevc_videotoolbox` vs `h264/hevc_videotoolbox_remote` (excluding `vt_remote_*` transport options) via `tests/integration/run_option_surface_parity.sh`.
+- Remote encoder software-frame upload parity for common 4:2:0 paths:
+  - H.264: `nv12`, `yuv420p`
+  - HEVC: `nv12`, `yuv420p`, `p010le`, `yuv420p10le`, `yuv420p10be`
+
+Backlog:
+- Extend encoder pixel-format parity beyond 4:2:0 for HEVC inputs supported by local VideoToolbox (`bgra`, `ayuv`, `p210`).
+- Add remote encoder hardware-frame ingest parity for `AV_PIX_FMT_VIDEOTOOLBOX` inputs (avoid mandatory `hwdownload,format=...` pre-step).
+- Expand remote side-data forwarding beyond A53 CC where local VideoToolbox behavior supports additional side data.
+- Evaluate optional remote-decoder hardware-frame output mode (`AV_PIX_FMT_VIDEOTOOLBOX`) for hw-frame pipelines.
+
 ## Why the project is useful
 
 - **Hardware Acceleration Everywhere**: Enable hardware encoding on Linux/Windows machines that lack capable GPUs by using a networked Mac.

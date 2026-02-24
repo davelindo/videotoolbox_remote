@@ -5,6 +5,25 @@ All notable changes to this project are documented in this file.
 The format follows Keep a Changelog principles, using repository release tags (`v*`) in reverse chronological order.
 The non-version `nightly` tag is intentionally excluded.
 
+## [v0.2.6] - 2026-02-24
+
+### Added
+- Added integration option-surface parity check:
+  - `tests/integration/run_option_surface_parity.sh`
+- Added optional run-all toggle to execute encoder option parity checks:
+  - `VTREMOTE_RUN_OPTION_PARITY=1`
+
+### Changed
+- Expanded remote encoder accepted software input formats to align with local VideoToolbox 4:2:0 paths:
+  - `h264_videotoolbox_remote`: `nv12`, `yuv420p`
+  - `hevc_videotoolbox_remote`: `nv12`, `yuv420p`, `p010le`, `yuv420p10le`, `yuv420p10be`
+- Added upload-frame conversion in the remote encoder path for supported 4:2:0 software inputs (to NV12/P010 wire-ready layouts).
+- Updated docs to include parity status and backlog.
+
+### Fixed
+- Fixed 10-bit big-endian (`yuv420p10be`) software upload conversion to correctly produce little-endian P010 wire data.
+- Fixed raw-wire bandwidth estimation and configure wire pixel-format selection to follow the effective remote upload format.
+
 ## [v0.2.5] - 2026-02-20
 
 ### Added

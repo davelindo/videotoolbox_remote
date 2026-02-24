@@ -14,6 +14,7 @@ This tree holds VideoToolbox Remote integration tests and benchmarks.
 - `run_vtremoted_roundtrip.sh`: launches `vtremoted` on loopback, runs short H.264 + HEVC `*_videotoolbox_remote` encodes, validates PTS/DTS via `check_pts_dts.sh`, and decodes the result with `ffmpeg -xerror` to catch bad bytestream/packet formatting.
 - `run_vtremoted_decode.sh`: generates short local H.264/HEVC inputs and validates remote decode with `h264_videotoolbox_remote` / `hevc_videotoolbox_remote`.
 - `run_transcode_test.sh`: simultaneous remote decode + encode pipeline (sanity + stability).
+- `run_option_surface_parity.sh`: compares local (`*_videotoolbox`) vs remote (`*_videotoolbox_remote`) encoder option surfaces for H.264/HEVC and fails on drift (ignoring `vt_remote_*` transport-only options).
 - `run_vtremoted_transcode_bsf_long.sh`: long-run vtremote_transcode bitstream filter test (optional; 10 minutes by default) to catch timestamp/ordering bugs that only appear after many frames.
 - `run_speed_decode_async.sh`: sync vs async remote decode speed test.
 - `run_speed_decode_matrix.sh`: matrix runner over async/sync, reorder depth, and wire compression (outputs CSV).
@@ -48,6 +49,7 @@ Bench defaults:
 
 Run-all toggles:
 - `VTREMOTE_RUN_OBS_PLUGIN=1` runs the OBS plugin client protocol smoke test.
+- `VTREMOTE_RUN_OPTION_PARITY=1` runs local-vs-remote encoder option parity checks.
 
 FFmpeg build note: enable the local + remote codecs during configure on macOS, e.g.
 `./configure --enable-videotoolbox --enable-videotoolbox-remote`

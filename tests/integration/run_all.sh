@@ -8,6 +8,7 @@ set -euo pipefail
 #   VTREMOTE_RUN_BENCH=1      include bench_vtremote.sh
 #   VTREMOTE_RUN_LONG=1       include long vtremote_transcode test (10min by default)
 #   VTREMOTE_RUN_OBS_PLUGIN=1 include obs-plugin client protocol smoke test
+#   VTREMOTE_RUN_OPTION_PARITY=1 include local-vs-remote encoder option parity check
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
@@ -52,6 +53,9 @@ run_step "complex_chain"       bash "${ROOT}/tests/integration/run_complex_chain
 run_step "vtremoted_roundtrip" bash "${ROOT}/tests/integration/run_vtremoted_roundtrip.sh"
 run_step "vtremoted_decode"    bash "${ROOT}/tests/integration/run_vtremoted_decode.sh"
 run_step "transcode_test"      bash "${ROOT}/tests/integration/run_transcode_test.sh"
+if [[ "${VTREMOTE_RUN_OPTION_PARITY:-0}" != "0" ]]; then
+  run_step "option_surface_parity" bash "${ROOT}/tests/integration/run_option_surface_parity.sh"
+fi
 
 if [[ "${VTREMOTE_SKIP_SPEED:-0}" == "0" ]]; then
   run_step "speed_decode_async"  bash "${ROOT}/tests/integration/run_speed_decode_async.sh"
