@@ -8919,6 +8919,7 @@ static int mov_read_iloc(MOVContext *c, AVIOContext *pb, MOVAtom atom)
         HEIFItem *item = NULL;
         int item_id = (version < 2) ? avio_rb16(pb) : avio_rb32(pb);
         int offset_type = (version > 0) ? avio_rb16(pb) & 0xf : 0;
+        int j;
 
         if (avio_feof(pb))
             return AVERROR_INVALIDDATA;
@@ -8942,7 +8943,7 @@ static int mov_read_iloc(MOVContext *c, AVIOContext *pb, MOVAtom atom)
             base_offset > INT64_MAX - extent_offset)
             return AVERROR_INVALIDDATA;
 
-        for (int j = 0; j < c->nb_heif_item; j++) {
+        for (j = 0; j < c->nb_heif_item; j++) {
             item = c->heif_item[j];
             if (!item)
                 item = c->heif_item[j] = av_mallocz(sizeof(*item));
@@ -8952,6 +8953,8 @@ static int mov_read_iloc(MOVContext *c, AVIOContext *pb, MOVAtom atom)
         }
         if (!item)
             return AVERROR(ENOMEM);
+        if (j == c->nb_heif_item)
+            return AVERROR_INVALIDDATA;
 
         item->item_id = item_id;
 
@@ -8975,7 +8978,7 @@ static int mov_read_infe(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     int64_t size = atom.size;
     uint32_t item_type;
     int item_id;
-    int version, ret;
+    int i, version, ret;
 
     version = avio_r8(pb);
     avio_rb24(pb);  // flags.
@@ -9010,7 +9013,7 @@ static int mov_read_infe(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     if (size > 0)
         avio_skip(pb, size);
 
-    for (int i = 0; i < c->nb_heif_item; i++) {
+    for (i = 0; i < c->nb_heif_item; i++) {
         item = c->heif_item[i];
         if (!item)
             item = c->heif_item[i] = av_mallocz(sizeof(*item));
@@ -9021,6 +9024,10 @@ static int mov_read_infe(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     if (!item) {
         av_bprint_finalize(&item_name, NULL);
         return AVERROR(ENOMEM);
+    }
+    if (i == c->nb_heif_item) {
+        av_bprint_finalize(&item_name, NULL);
+        return AVERROR_INVALIDDATA;
     }
 
     av_freep(&item->name);
@@ -9144,8 +9151,13 @@ static int mov_read_iref_dimg(MOVContext *c, AVIOContext *pb, int version)
     if (!grid->tile_id_list || !grid->tile_item_list || !grid->tile_idx_list)
         return AVERROR(ENOMEM);
     /* 'to' item ids */
-    for (i = 0; i < entries; i++)
+    for (i = 0; i < entries; i++) {
         grid->tile_id_list[i] = version ? avio_rb32(pb) : avio_rb16(pb);
+
+        if (avio_feof(pb))
+            return AVERROR_INVALIDDATA;
+    }
+
     grid->nb_tiles = entries;
     grid->item = item;
 
@@ -9172,6 +9184,10 @@ static int mov_read_iref_cdsc(MOVContext *c, AVIOContext *pb, uint32_t type, int
     /* 'to' item ids */
     for (int i = 0; i < entries; i++) {
         HEIFItem *item = get_heif_item(c, version ? avio_rb32(pb) : avio_rb16(pb));
+
+        if (avio_feof(pb))
+            return AVERROR_INVALIDDATA;
+
         if (!item) {
             av_log(c->fc, AV_LOG_WARNING, "Missing stream referenced by %s item\n",
                    av_fourcc2str(type));
