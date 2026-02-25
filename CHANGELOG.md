@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format follows Keep a Changelog principles, using repository release tags (`v*`) in reverse chronological order.
 The non-version `nightly` tag is intentionally excluded.
 
+## [v0.2.7] - 2026-02-25
+
+### Changed
+- Aligned remote `max_ref_frames` handling with local VideoToolbox behavior: unsupported `ReferenceBufferCount` is now best-effort (warning) instead of a fatal configure error.
+
+### Fixed
+- Fixed HEVC Main10 remote upload conversion for `yuv420p10le`/`yuv420p10be` inputs by packing 10-bit samples into P010's high bits. This resolves severe bitrate/fidelity collapse observed on remote Main10 sweeps.
+
 ## [v0.2.6] - 2026-02-24
 
 ### Added

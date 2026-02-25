@@ -196,6 +196,10 @@ static int vtremote_is_upload_pix_fmt(enum AVPixelFormat pix_fmt) {
   return pix_fmt == AV_PIX_FMT_NV12 || vtremote_is_p010_pix_fmt(pix_fmt);
 }
 
+static inline uint16_t vtremote_pack_p010_sample(uint16_t sample) {
+  return (uint16_t)((sample & 0x03FF) << 6);
+}
+
 static enum AVPixelFormat
 vtremote_target_upload_pix_fmt(const AVFrame *frame, int codec_id) {
   if (codec_id == AV_CODEC_ID_H264)
@@ -333,17 +337,14 @@ static int vtremote_prepare_upload_frame(AVCodecContext *avctx,
     const int ch = (height + 1) >> 1;
     const int be = frame->format == AV_PIX_FMT_YUV420P10BE;
 
-    if (!be) {
-      vtremote_copy_plane_rows(s->convert_frame->data[0], s->convert_frame->linesize[0],
-                               frame->data[0], frame->linesize[0], width * 2, height);
-    } else {
-      for (int y = 0; y < height; y++) {
-        const uint8_t *src_y = frame->data[0] + y * frame->linesize[0];
-        uint8_t *dst_y = s->convert_frame->data[0] + y * s->convert_frame->linesize[0];
-        for (int x = 0; x < width; x++) {
-          uint16_t y10 = AV_RB16(src_y + 2 * x);
-          AV_WL16(dst_y + 2 * x, y10);
-        }
+    // yuv420p10 stores sample values in the low 10 bits of each 16-bit word.
+    // P010 expects them in the high 10 bits (low 6 bits zero).
+    for (int y = 0; y < height; y++) {
+      const uint8_t *src_y = frame->data[0] + y * frame->linesize[0];
+      uint8_t *dst_y = s->convert_frame->data[0] + y * s->convert_frame->linesize[0];
+      for (int x = 0; x < width; x++) {
+        uint16_t y10 = be ? AV_RB16(src_y + 2 * x) : AV_RL16(src_y + 2 * x);
+        AV_WL16(dst_y + 2 * x, vtremote_pack_p010_sample(y10));
       }
     }
 
@@ -354,8 +355,8 @@ static int vtremote_prepare_upload_frame(AVCodecContext *avctx,
       for (int x = 0; x < cw; x++) {
         uint16_t u10 = be ? AV_RB16(u + 2 * x) : AV_RL16(u + 2 * x);
         uint16_t v10 = be ? AV_RB16(v + 2 * x) : AV_RL16(v + 2 * x);
-        AV_WL16(uv + 4 * x + 0, u10);
-        AV_WL16(uv + 4 * x + 2, v10);
+        AV_WL16(uv + 4 * x + 0, vtremote_pack_p010_sample(u10));
+        AV_WL16(uv + 4 * x + 2, vtremote_pack_p010_sample(v10));
       }
     }
   } else {

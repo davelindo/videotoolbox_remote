@@ -1039,12 +1039,12 @@
             if config.options.maxReferenceFrames > 0 {
                 var val = Int32(clamping: config.options.maxReferenceFrames)
                 let num = CFNumberCreate(kCFAllocatorDefault, .intType, &val)
+                // Keep parity with local FFmpeg VideoToolbox behavior: best-effort when unsupported.
                 try setProp(
                     session,
                     VideoToolboxProperties.vtKeyReferenceBufferCount,
                     num!,
-                    "max_ref_frames",
-                    fatal: true
+                    "max_ref_frames"
                 )
             }
             if config.options.spatialAQ >= 0 {
