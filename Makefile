@@ -156,21 +156,40 @@ build-ffmpeg:
 			fi; \
 		fi; \
 		need_config=0; \
+		need_reason=""; \
 		if [ ! -f ffbuild/config.mak ]; then \
 			need_config=1; \
-	else \
-		current=$$(sed -n 's/^FFMPEG_CONFIGURATION=//p' ffbuild/config.mak); \
-		if [ "$$current" != "$$config_flags" ]; then \
-			need_config=1; \
+			need_reason="missing ffbuild/config.mak"; \
+		else \
+			current=$$(sed -n 's/^FFMPEG_CONFIGURATION=//p' ffbuild/config.mak); \
+			if [ "$$current" != "$$config_flags" ]; then \
+				need_config=1; \
+				need_reason="FFMPEG_CONFIGURATION mismatch"; \
+			fi; \
 		fi; \
-	fi; \
-	if [ "$$need_config" = "1" ]; then \
-		echo "Reconfiguring ffmpeg (FFMPEG_CONFIGURATION mismatch or missing)"; \
-		env darwin=yes CC="$$cc" CXX="$$cxx" OBJCC="$$objcc" SDKROOT="$$sdkroot" MACOSX_DEPLOYMENT_TARGET="$(MACOSX_DEPLOYMENT_TARGET)" \
-		PKG_CONFIG="$(PKG_CONFIG)" PKG_CONFIG_PATH="$(PKG_CONFIG_PATH)" \
-		CPPFLAGS="$$cppflags" CFLAGS="$$cflags" OBJCFLAGS="$$objcflags" LDFLAGS="$$ldflags" \
-		./configure $$config_flags; \
-	fi
+		if [ "$$need_config" = "0" ] && [ ffbuild/config.mak -ot configure ]; then \
+			need_config=1; \
+			need_reason="configure script newer than ffbuild/config.mak"; \
+		fi; \
+		if [ "$$need_config" = "0" ] && [ ! -f ffbuild/config_components.h ]; then \
+			need_config=1; \
+			need_reason="missing ffbuild/config_components.h"; \
+		fi; \
+		if [ "$$need_config" = "0" ] && [ ffbuild/config_components.h -ot libavformat/protocols.c ]; then \
+			need_config=1; \
+			need_reason="stale component config for protocols"; \
+		fi; \
+		if [ "$$need_config" = "0" ] && [ ffbuild/config_components.h -ot libavfilter/allfilters.c ]; then \
+			need_config=1; \
+			need_reason="stale component config for filters"; \
+		fi; \
+		if [ "$$need_config" = "1" ]; then \
+			echo "Reconfiguring ffmpeg ($$need_reason)"; \
+			env darwin=yes CC="$$cc" CXX="$$cxx" OBJCC="$$objcc" SDKROOT="$$sdkroot" MACOSX_DEPLOYMENT_TARGET="$(MACOSX_DEPLOYMENT_TARGET)" \
+			PKG_CONFIG="$(PKG_CONFIG)" PKG_CONFIG_PATH="$(PKG_CONFIG_PATH)" \
+			CPPFLAGS="$$cppflags" CFLAGS="$$cflags" OBJCFLAGS="$$objcflags" LDFLAGS="$$ldflags" \
+			./configure $$config_flags; \
+		fi
 	@$(MAKE) -C $(FFMPEG_DIR) -j$(JOBS)
 
 build-vtremoted:
