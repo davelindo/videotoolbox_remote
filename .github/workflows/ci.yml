@@ -52,6 +52,7 @@ jobs:
       obs_plugin: ${{ github.event_name == 'schedule' && steps.filter_schedule.outputs.obs_plugin || github.event_name == 'schedule' && steps.filter_schedule_fallback.outputs.obs_plugin || steps.filter.outputs.obs_plugin }}
       docs: ${{ github.event_name == 'schedule' && steps.filter_schedule.outputs.docs || github.event_name == 'schedule' && steps.filter_schedule_fallback.outputs.docs || steps.filter.outputs.docs }}
       ci: ${{ github.event_name == 'schedule' && steps.filter_schedule.outputs.ci || github.event_name == 'schedule' && steps.filter_schedule_fallback.outputs.ci || steps.filter.outputs.ci }}
+      publishable: ${{ steps.publishable.outputs.value }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -130,10 +131,21 @@ jobs:
             ci:
               - '.github/workflows/ci.yml'
 
+      - name: Compute publishable changes
+        id: publishable
+        run: |
+          ffmpeg_changed="${{ github.event_name == 'schedule' && steps.filter_schedule.outputs.ffmpeg || github.event_name == 'schedule' && steps.filter_schedule_fallback.outputs.ffmpeg || steps.filter.outputs.ffmpeg }}"
+          vtremoted_changed="${{ github.event_name == 'schedule' && steps.filter_schedule.outputs.vtremoted || github.event_name == 'schedule' && steps.filter_schedule_fallback.outputs.vtremoted || steps.filter.outputs.vtremoted }}"
+          if [ "${ffmpeg_changed}" = "true" ] || [ "${vtremoted_changed}" = "true" ]; then
+            echo "value=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=false" >> "$GITHUB_OUTPUT"
+          fi
+
   swift-macos-arm64:
     name: Swift (vtremoted) macOS arm64
     needs: changes
-    if: (github.event_name == 'schedule' && (needs.changes.outputs.ffmpeg == 'true' || needs.changes.outputs.vtremoted == 'true' || needs.changes.outputs.ci == 'true')) || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/') || needs.changes.outputs.vtremoted == 'true' || needs.changes.outputs.ci == 'true'
+    if: (github.event_name == 'schedule' && needs.changes.outputs.publishable == 'true') || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/') || (github.event_name != 'schedule' && (needs.changes.outputs.vtremoted == 'true' || needs.changes.outputs.ci == 'true'))
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -171,7 +183,7 @@ jobs:
   swift-macos-x86_64:
     name: Swift (vtremoted) macOS x86_64
     needs: changes
-    if: (github.event_name == 'schedule' && (needs.changes.outputs.ffmpeg == 'true' || needs.changes.outputs.vtremoted == 'true' || needs.changes.outputs.ci == 'true')) || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/') || needs.changes.outputs.vtremoted == 'true' || needs.changes.outputs.ci == 'true'
+    if: (github.event_name == 'schedule' && needs.changes.outputs.publishable == 'true') || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/') || (github.event_name != 'schedule' && (needs.changes.outputs.vtremoted == 'true' || needs.changes.outputs.ci == 'true'))
     runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
@@ -209,7 +221,7 @@ jobs:
   ffmpeg-build:
     name: FFmpeg (${{ matrix.label }})
     needs: changes
-    if: (github.event_name == 'schedule' && (needs.changes.outputs.ffmpeg == 'true' || needs.changes.outputs.vtremoted == 'true' || needs.changes.outputs.ci == 'true')) || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/') || needs.changes.outputs.ffmpeg == 'true' || needs.changes.outputs.ci == 'true'
+    if: (github.event_name == 'schedule' && needs.changes.outputs.publishable == 'true') || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/') || (github.event_name != 'schedule' && (needs.changes.outputs.ffmpeg == 'true' || needs.changes.outputs.ci == 'true'))
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -390,7 +402,7 @@ jobs:
   obs-plugin:
     name: OBS plugin tests (Linux)
     needs: changes
-    if: (github.event_name == 'schedule' && (needs.changes.outputs.obs_plugin == 'true' || needs.changes.outputs.ci == 'true')) || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/') || needs.changes.outputs.obs_plugin == 'true' || needs.changes.outputs.ci == 'true'
+    if: (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/') || (github.event_name != 'schedule' && (needs.changes.outputs.obs_plugin == 'true' || needs.changes.outputs.ci == 'true'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -406,8 +418,9 @@ jobs:
     name: Publish nightly / release assets
     runs-on: ubuntu-latest
     needs: [changes, swift-macos-arm64, swift-macos-x86_64, ffmpeg-build]
-    if: github.event_name != 'pull_request' && ((github.event_name == 'schedule' && (needs.changes.outputs.ffmpeg == 'true' || needs.changes.outputs.vtremoted == 'true' || needs.changes.outputs.ci == 'true')) || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/'))
+    if: github.event_name != 'pull_request' && ((github.event_name == 'schedule' && needs.changes.outputs.publishable == 'true') || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/'))
     steps:
+      - uses: actions/checkout@v4
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
