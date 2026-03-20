@@ -397,7 +397,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake g++ pkg-config liblz4-dev libzstd-dev libobs-dev python3
+          sudo apt-get install -y cmake g++ pkg-config liblz4-dev libzstd-dev libobs-dev python3 xvfb xauth
       - name: Run OBS plugin tests
         run: |
           make test-obs-plugin

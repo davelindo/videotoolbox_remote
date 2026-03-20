@@ -118,6 +118,7 @@ OBS_CFLAGS=""
 OBS_LIBS=""
 PLUGIN_CMAKE_ARGS=()
 HARNESS_ENV=()
+HARNESS_PREFIX=()
 
 if pkg-config --exists libobs; then
   OBS_CFLAGS="$(sanitize_pkg_config_flags "$(pkg-config --cflags libobs)")"
@@ -139,6 +140,15 @@ elif [[ "$(uname -s)" == "Darwin" ]] \
 else
   echo "SKIP: libobs dev package not found; skipping OBS plugin libobs integration test"
   exit 0
+fi
+
+if [[ "$(uname -s)" == "Linux" ]] && [[ -z "${DISPLAY:-}" ]] && [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
+  if command -v xvfb-run >/dev/null 2>&1; then
+    HARNESS_PREFIX=(xvfb-run -a)
+  else
+    echo "ERROR: headless Linux libobs integration requires xvfb-run" >&2
+    exit 1
+  fi
 fi
 
 SERVER_TOKEN="${VTREMOTE_OBS_PLUGIN_TOKEN:-obs-plugin-test-token}"
@@ -242,7 +252,7 @@ run_case() {
     "${client_args[@]}"
   )
 
-  if run_with_timeout "$CLIENT_TIMEOUT_SECS" env "${HARNESS_ENV[@]}" "${harness_cmd[@]}" >"$client_log" 2>&1; then
+  if run_with_timeout "$CLIENT_TIMEOUT_SECS" env "${HARNESS_ENV[@]}" "${HARNESS_PREFIX[@]}" "${harness_cmd[@]}" >"$client_log" 2>&1; then
     client_rc=0
   else
     client_rc=$?
