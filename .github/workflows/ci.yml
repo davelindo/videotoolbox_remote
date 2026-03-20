@@ -81,7 +81,9 @@ jobs:
             obs_plugin:
               - 'obs-plugin/**'
               - 'tests/integration/run_obs_plugin_client_mock.sh'
+              - 'tests/integration/run_obs_plugin_integration.sh'
               - 'tests/integration/obs_plugin_client_smoke.cpp'
+              - 'tests/integration/obs_plugin_integration.cpp'
               - 'tests/integration/obs_plugin_test_stubs/**'
               - 'tests/integration/mock_vtremoted/mock_vtremoted.py'
               - 'tests/integration/run_all.sh'
@@ -114,7 +116,9 @@ jobs:
             obs_plugin:
               - 'obs-plugin/**'
               - 'tests/integration/run_obs_plugin_client_mock.sh'
+              - 'tests/integration/run_obs_plugin_integration.sh'
               - 'tests/integration/obs_plugin_client_smoke.cpp'
+              - 'tests/integration/obs_plugin_integration.cpp'
               - 'tests/integration/obs_plugin_test_stubs/**'
               - 'tests/integration/mock_vtremoted/mock_vtremoted.py'
               - 'tests/integration/run_all.sh'
@@ -383,8 +387,8 @@ jobs:
             ffmpeg-${{ matrix.label }}.tar.gz
             ffmpeg-${{ matrix.label }}.tar.gz.sha256
 
-  obs-plugin-smoke:
-    name: OBS plugin smoke (Linux)
+  obs-plugin:
+    name: OBS plugin tests (Linux)
     needs: changes
     if: (github.event_name == 'schedule' && (needs.changes.outputs.obs_plugin == 'true' || needs.changes.outputs.ci == 'true')) || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/') || needs.changes.outputs.obs_plugin == 'true' || needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
@@ -393,8 +397,8 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y g++ pkg-config liblz4-dev python3
-      - name: Run OBS plugin smoke test
+          sudo apt-get install -y cmake g++ pkg-config liblz4-dev libzstd-dev libobs-dev python3
+      - name: Run OBS plugin tests
         run: |
           make test-obs-plugin
 

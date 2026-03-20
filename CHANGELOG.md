@@ -5,6 +5,25 @@ All notable changes to this project are documented in this file.
 The format follows Keep a Changelog principles, using repository release tags (`v*`) in reverse chronological order.
 The non-version `nightly` tag is intentionally excluded.
 
+## [v0.2.9] - 2026-03-19
+
+### Added
+- Added a real `libobs`-backed OBS plugin integration test:
+  - `tests/integration/obs_plugin_integration.cpp`
+  - `tests/integration/run_obs_plugin_integration.sh`
+- Added `make test-obs-plugin-integration`.
+
+### Changed
+- Expanded OBS plugin test coverage and docs to include both client smoke validation and full encoder lifecycle integration coverage.
+- Updated OBS plugin build/test wiring to support `libzstd` and `libobs` discovery across CI and local environments.
+
+### Fixed
+- Fixed the OBS plugin `wire_compression=Zstd` path to actually Zstd-compress frame payloads instead of sending raw bytes.
+- Hardened OBS plugin receive paths against oversized peer-controlled message bodies before allocation.
+
+### CI
+- Updated the Linux OBS plugin job to install `libzstd-dev` and `libobs-dev` and run both the smoke and `libobs` integration tests.
+
 ## [v0.2.8] - 2026-02-25
 
 ### Changed

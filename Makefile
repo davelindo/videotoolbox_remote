@@ -58,7 +58,7 @@ VTREMOTED_SYSTEM ?=
 # and Codex), sandbox-exec can fail with "Operation not permitted". Allow overriding to re-enable.
 SWIFT_BUILD_SANDBOX_FLAGS ?= --disable-sandbox
 
-.PHONY: build build-ffmpeg build-vtremoted install install-ffmpeg install-vtremoted clean clean-ffmpeg clean-vtremoted test-obs-plugin
+.PHONY: build build-ffmpeg build-vtremoted install install-ffmpeg install-vtremoted clean clean-ffmpeg clean-vtremoted test-obs-plugin test-obs-plugin-integration
 .SILENT: build-ffmpeg
 
 build: build-ffmpeg build-vtremoted
@@ -240,3 +240,7 @@ endif
 
 test-obs-plugin:
 	@bash tests/integration/run_obs_plugin_client_mock.sh
+	@bash tests/integration/run_obs_plugin_integration.sh
+
+test-obs-plugin-integration:
+	@bash tests/integration/run_obs_plugin_integration.sh

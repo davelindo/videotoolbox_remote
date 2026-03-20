@@ -7,7 +7,7 @@ set -euo pipefail
 #   VTREMOTE_RUN_MATRIX=1     include speed matrix runner
 #   VTREMOTE_RUN_BENCH=1      include bench_vtremote.sh
 #   VTREMOTE_RUN_LONG=1       include long vtremote_transcode test (10min by default)
-#   VTREMOTE_RUN_OBS_PLUGIN=1 include obs-plugin client protocol smoke test
+#   VTREMOTE_RUN_OBS_PLUGIN=1 include obs-plugin smoke + libobs integration tests
 #   VTREMOTE_RUN_OPTION_PARITY=1 include local-vs-remote encoder option parity check
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -48,6 +48,7 @@ run_step "mock_transcode_pts_dts" bash "${ROOT}/tests/integration/run_mock_trans
 run_step "mock_decode"         bash "${ROOT}/tests/integration/run_mock_decode.sh"
 if [[ "${VTREMOTE_RUN_OBS_PLUGIN:-0}" != "0" ]]; then
   run_step "obs_plugin_client_mock" bash "${ROOT}/tests/integration/run_obs_plugin_client_mock.sh"
+  run_step "obs_plugin_libobs_integration" bash "${ROOT}/tests/integration/run_obs_plugin_integration.sh"
 fi
 run_step "complex_chain"       bash "${ROOT}/tests/integration/run_complex_chain_test.sh"
 run_step "vtremoted_roundtrip" bash "${ROOT}/tests/integration/run_vtremoted_roundtrip.sh"

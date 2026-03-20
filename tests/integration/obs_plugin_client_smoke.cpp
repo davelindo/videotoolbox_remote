@@ -13,6 +13,7 @@ struct Args {
   std::string host = "127.0.0.1";
   int port = VTR_PORT;
   std::string token;
+  int wire_compression = VTR_WIRE_NONE;
 };
 
 bool parse_args(int argc, char **argv, Args &args) {
@@ -23,6 +24,19 @@ bool parse_args(int argc, char **argv, Args &args) {
       args.port = std::atoi(argv[++i]);
     } else if (std::strcmp(argv[i], "--token") == 0 && i + 1 < argc) {
       args.token = argv[++i];
+    } else if (std::strcmp(argv[i], "--wire-compression") == 0 &&
+               i + 1 < argc) {
+      const char *value = argv[++i];
+      if (std::strcmp(value, "none") == 0) {
+        args.wire_compression = VTR_WIRE_NONE;
+      } else if (std::strcmp(value, "lz4") == 0) {
+        args.wire_compression = VTR_WIRE_LZ4;
+      } else if (std::strcmp(value, "zstd") == 0) {
+        args.wire_compression = VTR_WIRE_ZSTD;
+      } else {
+        std::fprintf(stderr, "unknown wire compression: %s\n", value);
+        return false;
+      }
     } else {
       std::fprintf(stderr, "unknown arg: %s\n", argv[i]);
       return false;
@@ -36,7 +50,10 @@ bool parse_args(int argc, char **argv, Args &args) {
 int main(int argc, char **argv) {
   Args args;
   if (!parse_args(argc, argv, args)) {
-    std::fprintf(stderr, "usage: %s [--host HOST] [--port PORT] [--token TOKEN]\n", argv[0]);
+    std::fprintf(stderr,
+                 "usage: %s [--host HOST] [--port PORT] [--token TOKEN] "
+                 "[--wire-compression none|lz4|zstd]\n",
+                 argv[0]);
     return 2;
   }
 
@@ -65,7 +82,7 @@ int main(int argc, char **argv) {
       1,
       1'000'000,
       60,
-      VTR_WIRE_NONE);
+      args.wire_compression);
 
   if (!configured) {
     std::fprintf(stderr, "configure failed\n");

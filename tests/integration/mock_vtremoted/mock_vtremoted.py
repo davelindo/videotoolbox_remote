@@ -6,15 +6,18 @@ Purpose: exercise VideoToolbox Remote framing/handshake without VideoToolbox. It
 single connection, validates the token, echoes CONFIGURE_ACK, and emits dummy
 PACKETs in Annex B form when FRAMEs arrive. On FLUSH it sends DONE and exits.
 
-This is intentionally small and dependency-free (Python 3 standard library).
+Compressed FRAME payload validation uses system liblz4/libzstd via ctypes, so
+no extra Python packages are required.
 """
 
 import argparse
+import ctypes
+import ctypes.util
 import socket
 import struct
 import sys
 import threading
-from typing import Tuple
+from typing import Dict, Tuple
 
 MAGIC = 0x56545231  # 'VTR1'
 VERSION = 1
@@ -32,6 +35,75 @@ MSG_PING = 10
 MSG_PONG = 11
 
 HEADER_STRUCT = struct.Struct(">IHHI")  # magic, version, type, length
+STREAM_CHUNK_BYTES = 64 * 1024
+
+_LZ4 = None
+_ZSTD = None
+
+
+def _load_lz4():
+    global _LZ4
+    if _LZ4 is not None:
+        return _LZ4
+    path = ctypes.util.find_library("lz4")
+    if not path:
+        raise RuntimeError("liblz4 not found")
+    lib = ctypes.CDLL(path)
+    lib.LZ4_decompress_safe.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_int,
+    ]
+    lib.LZ4_decompress_safe.restype = ctypes.c_int
+    _LZ4 = lib
+    return lib
+
+
+def _load_zstd():
+    global _ZSTD
+    if _ZSTD is not None:
+        return _ZSTD
+    path = ctypes.util.find_library("zstd")
+    if not path:
+        raise RuntimeError("libzstd not found")
+    lib = ctypes.CDLL(path)
+    lib.ZSTD_decompress.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+    ]
+    lib.ZSTD_decompress.restype = ctypes.c_size_t
+    lib.ZSTD_isError.argtypes = [ctypes.c_size_t]
+    lib.ZSTD_isError.restype = ctypes.c_uint
+    lib.ZSTD_getErrorName.argtypes = [ctypes.c_size_t]
+    lib.ZSTD_getErrorName.restype = ctypes.c_char_p
+    _ZSTD = lib
+    return lib
+
+
+def lz4_decompress(data: bytes, expected_size: int) -> bytes:
+    lib = _load_lz4()
+    src = ctypes.create_string_buffer(data)
+    dst = ctypes.create_string_buffer(expected_size)
+    decoded = lib.LZ4_decompress_safe(src, dst, len(data), expected_size)
+    if decoded != expected_size:
+        raise ValueError(f"lz4 decode failed: got={decoded} expected={expected_size}")
+    return dst.raw[:decoded]
+
+
+def zstd_decompress(data: bytes, expected_size: int) -> bytes:
+    lib = _load_zstd()
+    src = ctypes.create_string_buffer(data)
+    dst = ctypes.create_string_buffer(expected_size)
+    decoded = lib.ZSTD_decompress(dst, expected_size, src, len(data))
+    if lib.ZSTD_isError(decoded):
+        err = lib.ZSTD_getErrorName(decoded).decode("utf-8", "replace")
+        raise ValueError(f"zstd decode failed: {err}")
+    if decoded != expected_size:
+        raise ValueError(f"zstd decode size mismatch: got={decoded} expected={expected_size}")
+    return dst.raw[:decoded]
 
 
 def read_exact(conn: socket.socket, n: int) -> bytes:
@@ -55,6 +127,21 @@ def read_header(conn: socket.socket) -> Tuple[int, int]:
 def write_msg(conn: socket.socket, msg_type: int, payload: bytes = b"") -> None:
     header = HEADER_STRUCT.pack(MAGIC, VERSION, msg_type, len(payload))
     conn.sendall(header + payload)
+
+
+def write_filled_msg(conn: socket.socket, msg_type: int, length: int, fill: bytes = b"\0") -> None:
+    if len(fill) != 1:
+        raise ValueError("fill byte must be exactly one byte")
+    header = HEADER_STRUCT.pack(MAGIC, VERSION, msg_type, length)
+    conn.sendall(header)
+    if length <= 0:
+        return
+    chunk = fill * min(STREAM_CHUNK_BYTES, length)
+    remaining = length
+    while remaining > 0:
+        to_send = min(len(chunk), remaining)
+        conn.sendall(chunk[:to_send])
+        remaining -= to_send
 
 
 def read_u16(buf: memoryview, offset: int) -> Tuple[int, int]:
@@ -83,9 +170,91 @@ def write_str(s: str) -> bytes:
     return struct.pack(">H", len(encoded)) + encoded
 
 
+def parse_config_options(buf: memoryview, offset: int) -> Tuple[Dict[str, str], int]:
+    options: Dict[str, str] = {}
+    if offset + 2 > len(buf):
+        return options, offset
+    opt_count, offset = read_u16(buf, offset)
+    for _ in range(opt_count):
+        key, offset = read_str(buf, offset)
+        value, offset = read_str(buf, offset)
+        options[key] = value
+    return options, offset
+
+
+def validate_frame_plane(wire_compression: int, plane_data: bytes, expected_size: int) -> None:
+    if wire_compression == 0:
+        if len(plane_data) != expected_size:
+            raise ValueError(f"raw plane size mismatch: got={len(plane_data)} expected={expected_size}")
+        return
+    if wire_compression == 1:
+        lz4_decompress(plane_data, expected_size)
+        return
+    if wire_compression == 2:
+        zstd_decompress(plane_data, expected_size)
+        return
+    raise ValueError(f"unsupported wire_compression={wire_compression}")
+
+
+def validate_required_config_options(config_options: Dict[str, str]) -> None:
+    required = ("bitrate", "gop", "wire_compression")
+    missing = [key for key in required if key not in config_options]
+    if missing:
+        raise ValueError(f"missing configure options: {missing}")
+
+    for key in required:
+        if not config_options[key].isdigit():
+            raise ValueError(f"non-numeric configure option: {key}={config_options[key]}")
+
+
+def make_configure_ack(pix_fmt: int, extradata: bytes = b"") -> bytes:
+    body = struct.pack(">B", 0) + struct.pack(">H", len(extradata)) + extradata
+    body += struct.pack(">B", pix_fmt)
+    body += struct.pack(">B", 0)
+    return body
+
+
+def make_dummy_packet_body(pts: int, dts: int, duration: int, flags: int) -> bytes:
+    data = b"\x00\x00\x00\x01\x65\x88"
+    pkt_flags = 1 if (flags & 0x1) else 0
+    return (
+        struct.pack(">q", pts)
+        + struct.pack(">q", dts)
+        + struct.pack(">q", duration)
+        + struct.pack(">I", pkt_flags)
+        + struct.pack(">I", len(data))
+        + data
+    )
+
+
+def make_dummy_frame_body(pts: int, duration: int) -> bytes:
+    width = 320
+    height = 180
+    y_stride = width
+    y_height = height
+    uv_stride = width
+    uv_height = height // 2
+
+    y_data = b"\x80" * (y_stride * y_height)
+    uv_data = b"\x80" * (uv_stride * uv_height)
+
+    body = bytearray()
+    body.extend(struct.pack(">q", pts))
+    body.extend(struct.pack(">q", duration))
+    body.extend(struct.pack(">I", 0))
+    body.extend(struct.pack(">B", 2))
+    body.extend(struct.pack(">III", y_stride, y_height, len(y_data)))
+    body.extend(y_data)
+    body.extend(struct.pack(">III", uv_stride, uv_height, len(uv_data)))
+    body.extend(uv_data)
+    return bytes(body)
+
+
 def handle_client(conn: socket.socket, expected_token: str, args: argparse.Namespace) -> None:
     with conn:
         try:
+            config_options: Dict[str, str] = {}
+
             msg_type, length = read_header(conn)
             if msg_type != MSG_HELLO:
                 write_msg(conn, MSG_ERROR, b"\x00\x00\x00\x03bad first msg")
@@ -95,6 +264,7 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
             requested_codec, off = read_str(payload, off)
             client_name, off = read_str(payload, off)
             client_build, _ = read_str(payload, off)
+            _ = requested_codec, client_name, client_build
 
             def hello_ack(status: int) -> bytes:
                 codecs = ["h264", "hevc"]
@@ -110,6 +280,10 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                 write_msg(conn, MSG_HELLO_ACK, hello_ack(2))
                 return
 
+            if args.hello_ack_bytes > 0:
+                write_filled_msg(conn, MSG_HELLO_ACK, args.hello_ack_bytes)
+                return
+
             write_msg(conn, MSG_HELLO_ACK, hello_ack(0))
 
             while True:
@@ -121,7 +295,6 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                     continue
 
                 if msg_type == MSG_CONFIGURE:
-                    # width, height (u32), pix_fmt (u8), time_base num/den (u32), framerate num/den (u32)
                     off = 0
                     width, off = read_u32(payload, off)
                     height, off = read_u32(payload, off)
@@ -131,39 +304,50 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                     _tb_den, off = read_u32(payload, off)
                     _fr_num, off = read_u32(payload, off)
                     _fr_den, off = read_u32(payload, off)
+                    _ = width, height
+
+                    config_options, off = parse_config_options(payload, off)
+
+                    if off + 4 > len(payload):
+                        raise ValueError("missing extradata length")
+                    extradata_len, off = read_u32(payload, off)
+                    if off + extradata_len > len(payload):
+                        raise ValueError("extradata length exceeds payload")
+                    off += extradata_len
 
                     if args.strict_config_options:
-                        options = {}
-                        opt_count, off = read_u16(payload, off)
-                        for _ in range(opt_count):
-                            key, off = read_str(payload, off)
-                            value, off = read_str(payload, off)
-                            options[key] = value
-
-                        extradata_len, off = read_u32(payload, off)
-                        if off + extradata_len > len(payload):
-                            raise ValueError("extradata length exceeds payload")
-                        off += extradata_len
-
-                        required = ("bitrate", "gop", "wire_compression")
-                        missing = [key for key in required if key not in options]
-                        if missing:
-                            raise ValueError(f"missing configure options: {missing}")
-
-                        for key in required:
-                            if not options[key].isdigit():
-                                raise ValueError(f"non-numeric configure option: {key}={options[key]}")
-
+                        validate_required_config_options(config_options)
                         if off != len(payload):
                             raise ValueError("unexpected trailing bytes in CONFIGURE payload")
 
-                    # For mock we return empty extradata.
-                    extradata = b""
-                    status = 0  # ok
-                    body = struct.pack(">B", status) + struct.pack(">H", len(extradata)) + extradata
-                    body += struct.pack(">B", pix_fmt)
-                    body += struct.pack(">B", 0)  # warnings count
-                    write_msg(conn, MSG_CONFIGURE_ACK, body)
+                    if args.expect_wire_compression is not None:
+                        actual = config_options.get("wire_compression")
+                        expected = str(args.expect_wire_compression)
+                        if actual != expected:
+                            raise ValueError(
+                                f"wire_compression mismatch: expected={expected} actual={actual}"
+                            )
+
+                    if args.expect_bitrate is not None:
+                        actual = config_options.get("bitrate")
+                        expected = str(args.expect_bitrate)
+                        if actual != expected:
+                            raise ValueError(
+                                f"bitrate mismatch: expected={expected} actual={actual}"
+                            )
+
+                    if args.expect_gop is not None:
+                        actual = config_options.get("gop")
+                        expected = str(args.expect_gop)
+                        if actual != expected:
+                            raise ValueError(f"gop mismatch: expected={expected} actual={actual}")
+
+                    if args.configure_ack_bytes > 0:
+                        write_filled_msg(conn, MSG_CONFIGURE_ACK, args.configure_ack_bytes)
+                        return
+
+                    extradata = bytes.fromhex(args.configure_extradata_hex)
+                    write_msg(conn, MSG_CONFIGURE_ACK, make_configure_ack(pix_fmt, extradata))
                     continue
 
                 if msg_type == MSG_FRAME:
@@ -173,80 +357,56 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                     flags, off = read_u32(payload, off)
                     plane_count = payload[off]
                     off += 1
+
+                    wire_compression = int(config_options.get("wire_compression", "0"))
+
                     for _ in range(plane_count):
-                        _, off = read_u32(payload, off)  # stride
-                        _, off = read_u32(payload, off)  # height
+                        stride, off = read_u32(payload, off)
+                        plane_height, off = read_u32(payload, off)
                         data_len, off = read_u32(payload, off)
+                        if off + data_len > len(payload):
+                            raise ValueError("frame plane length exceeds payload")
+                        plane_data = bytes(payload[off : off + data_len])
                         off += data_len
-                    # Dummy Annex B IDR slice (non-compliant but frame-like)
-                    data = b"\x00\x00\x00\x01\x65\x88"
-                    pkt_flags = 1 if (flags & 0x1) else 0  # keyframe if requested
+                        validate_frame_plane(wire_compression, plane_data, stride * plane_height)
+
+                    if off < len(payload):
+                        side_data_count = payload[off]
+                        off += 1
+                        for _ in range(side_data_count):
+                            _side_type, off = read_u32(payload, off)
+                            side_size, off = read_u32(payload, off)
+                            if off + side_size > len(payload):
+                                raise ValueError("side-data length exceeds payload")
+                            off += side_size
+
+                    if off != len(payload):
+                        raise ValueError("unexpected trailing bytes in FRAME payload")
+
+                    if args.packet_bytes > 0:
+                        write_filled_msg(conn, MSG_PACKET, args.packet_bytes)
+                        return
+
                     dts = pts + int(getattr(args, "packet_dts_offset", 0))
-                    body = (
-                        struct.pack(">q", pts)
-                        + struct.pack(">q", dts)
-                        + struct.pack(">q", duration)
-                        + struct.pack(">I", pkt_flags)
-                        + struct.pack(">I", len(data))
-                        + data
-                    )
-                    write_msg(conn, MSG_PACKET, body)
+                    write_msg(conn, MSG_PACKET, make_dummy_packet_body(pts, dts, duration, flags))
                     continue
 
                 if msg_type == MSG_PACKET:
-                    # Packet format: pts(8), dts(8), dur(8), flags(4), payload_len(4), payload...
                     off = 0
                     pts, off = read_u64(payload, off)
                     dts, off = read_u64(payload, off)
                     dur, off = read_u64(payload, off)
                     flags, off = read_u32(payload, off)
                     data_len, off = read_u32(payload, off)
-                    # consume payload
                     off += data_len
+                    _ = dts
 
                     if getattr(args, "packet_reply", "frame") == "packet":
-                        # Reply with a dummy Annex B packet (non-compliant but packet-like).
-                        data = b"\x00\x00\x00\x01\x65\x88"
-                        pkt_flags = 1 if (flags & 0x1) else 0  # keyframe if requested
                         out_dts = pts + int(getattr(args, "packet_dts_offset", 0))
-                        body = (
-                            struct.pack(">q", pts)
-                            + struct.pack(">q", out_dts)
-                            + struct.pack(">q", dur)
-                            + struct.pack(">I", pkt_flags)
-                            + struct.pack(">I", len(data))
-                            + data
-                        )
-                        write_msg(conn, MSG_PACKET, body)
+                        write_msg(conn, MSG_PACKET, make_dummy_packet_body(pts, out_dts, dur, flags))
                         continue
-                    
-                    # Respond with dummy NV12 frame
-                    # Frame format: pts(8), dur(8), flags(4), plane_count(1), [stride(4), height(4), len(4), data]...
-                    # We'll send 2 planes for NV12 (mocking 100x100 for simplicity)
-                    f_width = 320
-                    f_height = 180
-                    y_stride = f_width
-                    y_height = f_height
-                    uv_stride = f_width
-                    uv_height = f_height // 2
-                    
-                    y_data = b'\x80' * (y_stride * y_height)
-                    uv_data = b'\x80' * (uv_stride * uv_height)
-                    
-                    body = bytearray()
-                    body.extend(struct.pack(">q", pts))
-                    body.extend(struct.pack(">q", dur))
-                    body.extend(struct.pack(">I", 0)) # flags
-                    body.extend(struct.pack(">B", 2)) # plane count
-                    
-                    # Plane 0
-                    body.extend(struct.pack(">III", y_stride, y_height, len(y_data)))
-                    body.extend(y_data)
-                    # Plane 1
-                    body.extend(struct.pack(">III", uv_stride, uv_height, len(uv_data)))
-                    body.extend(uv_data)
-                    
-                    write_msg(conn, MSG_FRAME, body)
+
+                    write_msg(conn, MSG_FRAME, make_dummy_frame_body(pts, dur))
                     continue
 
                 if msg_type == MSG_FLUSH:
@@ -298,6 +458,48 @@ def main() -> int:
         "--strict-config-options",
         action="store_true",
         help="Validate CONFIGURE options as length-prefixed UTF-8 key/value pairs",
+    )
+    parser.add_argument(
+        "--expect-wire-compression",
+        type=int,
+        choices=[0, 1, 2],
+        default=None,
+        help="Expected CONFIGURE wire_compression value (0=none, 1=lz4, 2=zstd)",
+    )
+    parser.add_argument(
+        "--expect-bitrate",
+        type=int,
+        default=None,
+        help="Expected CONFIGURE bitrate value",
+    )
+    parser.add_argument(
+        "--expect-gop",
+        type=int,
+        default=None,
+        help="Expected CONFIGURE gop value",
+    )
+    parser.add_argument(
+        "--hello-ack-bytes",
+        type=int,
+        default=0,
+        help="Send HELLO_ACK with this many body bytes, then exit",
+    )
+    parser.add_argument(
+        "--configure-ack-bytes",
+        type=int,
+        default=0,
+        help="Send CONFIGURE_ACK with this many body bytes, then exit",
+    )
+    parser.add_argument(
+        "--packet-bytes",
+        type=int,
+        default=0,
+        help="Send PACKET with this many body bytes after FRAME, then exit",
+    )
+    parser.add_argument(
+        "--configure-extradata-hex",
+        default="",
+        help="Hex-encoded extradata payload to send in CONFIGURE_ACK",
     )
     parser.add_argument("--once", action="store_true", help="handle a single connection then exit")
     args = parser.parse_args()

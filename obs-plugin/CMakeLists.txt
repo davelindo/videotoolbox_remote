@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
 
+find_package(PkgConfig REQUIRED)
+
 # OBS paths - can be set via environment or cmake args
 # OBS_SOURCE_DIR: path to obs-studio source (contains libobs/)
 # OBS_BUILD_DIR: path to obs-studio build directory (contains libobs.so/dylib)
@@ -14,8 +16,11 @@ set(OBS_BUILD_DIR "$ENV{OBS_BUILD_DIR}" CACHE PATH "OBS Studio build directory")
 
 # Try to find OBS via package first
 find_package(libobs QUIET)
-
 if(NOT libobs_FOUND)
+    pkg_check_modules(LIBOBS QUIET libobs)
+endif()
+
+if(NOT libobs_FOUND AND NOT LIBOBS_FOUND)
     # Fall back to manual path configuration
     if(NOT OBS_SOURCE_DIR OR NOT EXISTS "${OBS_SOURCE_DIR}/libobs")
         # Try common paths
@@ -51,8 +56,8 @@ if(NOT libobs_FOUND)
 endif()
 
 # Find LZ4
-find_package(PkgConfig REQUIRED)
 pkg_check_modules(LZ4 REQUIRED liblz4)
+pkg_check_modules(ZSTD REQUIRED libzstd)
 
 # Plugin sources
 set(PLUGIN_SOURCES
@@ -67,18 +72,32 @@ add_library(obs-vtremoted MODULE ${PLUGIN_SOURCES})
 target_include_directories(obs-vtremoted PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${LZ4_INCLUDE_DIRS}
+    ${ZSTD_INCLUDE_DIRS}
 )
 
 if(libobs_FOUND)
     target_link_libraries(obs-vtremoted PRIVATE
         OBS::libobs
         ${LZ4_LIBRARIES}
+        ${ZSTD_LIBRARIES}
+    )
+elseif(LIBOBS_FOUND)
+    target_include_directories(obs-vtremoted PRIVATE ${LIBOBS_INCLUDE_DIRS})
+    target_link_directories(obs-vtremoted PRIVATE
+        ${LIBOBS_LIBRARY_DIRS}
+        ${LZ4_LIBRARY_DIRS}
+        ${ZSTD_LIBRARY_DIRS}
+    )
+    target_link_libraries(obs-vtremoted PRIVATE
+        ${LIBOBS_LIBRARIES}
+        ${LZ4_LIBRARIES}
+        ${ZSTD_LIBRARIES}
     )
 else()
     # Header-only mode: include OBS headers, no linking (plugin loaded by OBS)
     target_include_directories(obs-vtremoted PRIVATE ${OBS_INCLUDE_DIRS})
-    target_link_directories(obs-vtremoted PRIVATE ${LZ4_LIBRARY_DIRS})
-    target_link_libraries(obs-vtremoted PRIVATE ${LZ4_LIBRARIES})
+    target_link_directories(obs-vtremoted PRIVATE ${LZ4_LIBRARY_DIRS} ${ZSTD_LIBRARY_DIRS})
+    target_link_libraries(obs-vtremoted PRIVATE ${LZ4_LIBRARIES} ${ZSTD_LIBRARIES})
     
     # We need to link against libobs if we have a build dir
     if(OBS_BUILD_DIR AND EXISTS "${OBS_BUILD_DIR}")

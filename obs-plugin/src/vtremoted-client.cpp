@@ -6,9 +6,12 @@
 #include "vtremoted-protocol.h"
 
 #include <lz4.h>
+#include <zstd.h>
 
 #include <obs-module.h>
 
+#include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstdarg>
 #include <cstdio>
@@ -37,6 +40,112 @@ typedef int socket_t;
 #define SOCKET_ERROR_VAL (-1)
 #define close_socket close
 #endif
+
+static bool read_exact(socket_t sock, void *buf, size_t len);
+static void log_err(const char *fmt, ...);
+
+namespace {
+
+constexpr uint32_t HELLO_ACK_MAX_BYTES = 64 * 1024;
+constexpr uint32_t CONFIGURE_ACK_MAX_BYTES = 4 * 1024 * 1024;
+constexpr uint32_t INBOUND_MESSAGE_MAX_BYTES = 8 * 1024 * 1024;
+
+const char *wire_compression_name(int mode) {
+  switch (mode) {
+  case VTR_WIRE_NONE:
+    return "none";
+  case VTR_WIRE_LZ4:
+    return "lz4";
+  case VTR_WIRE_ZSTD:
+    return "zstd";
+  default:
+    return "unknown";
+  }
+}
+
+bool is_supported_wire_compression(int mode) {
+  return mode == VTR_WIRE_NONE || mode == VTR_WIRE_LZ4 ||
+         mode == VTR_WIRE_ZSTD;
+}
+
+bool validate_inbound_length(uint16_t type, uint32_t length, uint32_t cap) {
+  if (length > cap) {
+    log_err("Rejecting message type=%u len=%u cap=%u", (unsigned)type, length,
+            cap);
+    return false;
+  }
+  return true;
+}
+
+bool discard_exact(socket_t sock, uint32_t len) {
+  std::array<uint8_t, 16 * 1024> scratch{};
+  uint32_t remaining = len;
+  while (remaining > 0) {
+    const size_t chunk = std::min<size_t>(remaining, scratch.size());
+    if (!read_exact(sock, scratch.data(), chunk))
+      return false;
+    remaining -= (uint32_t)chunk;
+  }
+  return true;
+}
+
+bool compress_plane_payload(const uint8_t *src, uint32_t src_size,
+                            int wire_compression,
+                            std::vector<uint8_t> &compress_buf,
+                            const uint8_t *&payload,
+                            size_t &payload_size) {
+  payload = src;
+  payload_size = src_size;
+
+  switch (wire_compression) {
+  case VTR_WIRE_NONE:
+    return true;
+  case VTR_WIRE_LZ4: {
+    const int max_dst = LZ4_compressBound((int)src_size);
+    if (max_dst <= 0) {
+      log_err("Invalid LZ4 bound for src_size=%u", src_size);
+      return false;
+    }
+    if (compress_buf.size() < (size_t)max_dst)
+      compress_buf.resize((size_t)max_dst);
+    const int compressed =
+        LZ4_compress_default((const char *)src, (char *)compress_buf.data(),
+                             (int)src_size, max_dst);
+    if (compressed <= 0) {
+      log_err("LZ4 compression failed src_size=%u", src_size);
+      return false;
+    }
+    payload = compress_buf.data();
+    payload_size = (size_t)compressed;
+    return true;
+  }
+  case VTR_WIRE_ZSTD: {
+    const size_t max_dst = ZSTD_compressBound((size_t)src_size);
+    if (max_dst == 0 || ZSTD_isError(max_dst)) {
+      log_err("Invalid Zstd bound for src_size=%u", src_size);
+      return false;
+    }
+    if (compress_buf.size() < max_dst)
+      compress_buf.resize(max_dst);
+    const size_t compressed =
+        ZSTD_compress(compress_buf.data(), max_dst, src, (size_t)src_size,
+                      ZSTD_CLEVEL_DEFAULT);
+    if (ZSTD_isError(compressed) || compressed == 0) {
+      log_err("Zstd compression failed src_size=%u err=%s", src_size,
+              ZSTD_getErrorName(compressed));
+      return false;
+    }
+    payload = compress_buf.data();
+    payload_size = compressed;
+    return true;
+  }
+  default:
+    log_err("Unsupported wire compression mode=%d", wire_compression);
+    return false;
+  }
+}
+
+} // namespace
 
 /* Big-endian helpers */
 static inline uint16_t be16(uint16_t v) {
@@ -242,10 +351,14 @@ bool vtremoted_client_connect(VTRemotedClient *client, const char *host,
     vtremoted_client_disconnect(client);
     return false;
   }
+  if (!validate_inbound_length(hdr.type, hdr.length, HELLO_ACK_MAX_BYTES)) {
+    vtremoted_client_disconnect(client);
+    return false;
+  }
   log_err("Received HELLO_ACK header, len=%d", hdr.length);
 
   std::vector<uint8_t> ack_body(hdr.length);
-  if (!read_exact(client->sock, ack_body.data(), hdr.length)) {
+  if (hdr.length > 0 && !read_exact(client->sock, ack_body.data(), hdr.length)) {
     log_err("Recv HELLO_ACK body failed");
     vtremoted_client_disconnect(client);
     return false;
@@ -285,6 +398,10 @@ bool vtremoted_client_configure(VTRemotedClient *client, uint32_t width,
                                 int gop, int wire_compression) {
   if (!client || !client->connected)
     return false;
+  if (!is_supported_wire_compression(wire_compression)) {
+    log_err("Unsupported wire compression mode=%d", wire_compression);
+    return false;
+  }
 
   client->width = width;
   client->height = height;
@@ -366,6 +483,10 @@ bool vtremoted_client_configure(VTRemotedClient *client, uint32_t width,
     log_err("Expected CONFIGURE_ACK (4), got %d", hdr.type);
     return false;
   }
+  if (!validate_inbound_length(hdr.type, hdr.length, CONFIGURE_ACK_MAX_BYTES)) {
+    vtremoted_client_disconnect(client);
+    return false;
+  }
   log_err("Received CONFIGURE_ACK, len=%d", hdr.length);
 
   std::vector<uint8_t> ack_body(hdr.length);
@@ -436,18 +557,11 @@ bool vtremoted_client_send_frame(VTRemotedClient *client, int64_t pts,
     const uint8_t *payload = planes[i];
     size_t payload_size = sizes[i];
 
-    if (client->wire_compression == VTR_WIRE_LZ4) {
-      int max_dst = LZ4_compressBound((int)sizes[i]);
-      if (client->compress_buf.size() < (size_t)max_dst) {
-        client->compress_buf.resize(max_dst);
-      }
-      int compressed = LZ4_compress_default((const char *)planes[i],
-                                            (char *)client->compress_buf.data(),
-                                            (int)sizes[i], max_dst);
-      if (compressed > 0) {
-        payload = client->compress_buf.data();
-        payload_size = compressed;
-      }
+    if (!compress_plane_payload(planes[i], sizes[i], client->wire_compression,
+                                client->compress_buf, payload, payload_size)) {
+      log_err("Failed to compress plane=%d mode=%s", i,
+              wire_compression_name(client->wire_compression));
+      return false;
     }
 
     write_be32(meta + 8, (uint32_t)payload_size);
@@ -472,22 +586,23 @@ bool vtremoted_client_receive_packet(VTRemotedClient *client,
   struct vtr_header hdr;
   if (!recv_header(client->sock, &hdr))
     return false;
+  if (!validate_inbound_length(hdr.type, hdr.length,
+                               INBOUND_MESSAGE_MAX_BYTES)) {
+    vtremoted_client_disconnect(client);
+    return false;
+  }
 
   if (hdr.type == VTR_MSG_ERROR || hdr.type == VTR_MSG_DONE) {
     /* Skip body */
-    if (hdr.length > 0) {
-      std::vector<uint8_t> tmp(hdr.length);
-      read_exact(client->sock, tmp.data(), hdr.length);
-    }
+    if (hdr.length > 0 && !discard_exact(client->sock, hdr.length))
+      vtremoted_client_disconnect(client);
     return false;
   }
 
   if (hdr.type != VTR_MSG_PACKET) {
     /* Unexpected message, skip */
-    if (hdr.length > 0) {
-      std::vector<uint8_t> tmp(hdr.length);
-      read_exact(client->sock, tmp.data(), hdr.length);
-    }
+    if (hdr.length > 0 && !discard_exact(client->sock, hdr.length))
+      vtremoted_client_disconnect(client);
     return false;
   }
 

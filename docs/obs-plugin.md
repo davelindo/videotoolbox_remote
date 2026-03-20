@@ -8,7 +8,7 @@ The `obs-plugin/` tree contains an experimental OBS encoder plugin that connects
 
 ## Scope
 
-Current plugin scope is focused on protocol/client integration and smoke validation.
+Current plugin scope is focused on protocol/client integration, encoder lifecycle validation, and smoke coverage.
 
 - Source: `obs-plugin/src/`
 - Locale/resources: `obs-plugin/data/`
@@ -38,8 +38,12 @@ Run the protocol smoke test from repo root:
 make test-obs-plugin
 ```
 
-This compiles the plugin client and validates HELLO/CONFIGURE/FRAME/PACKET flow against the Python mock server.
+This runs:
+- the fast client smoke test, which compiles `vtremoted-client.cpp` with local stubs and validates HELLO/CONFIGURE/FRAME/PACKET flow against the Python mock server
+- the `libobs` integration test, which builds the real plugin module, loads it via OBS, and exercises defaults/properties/create/update/encode/get_extra_data/destroy against the same mock server
+
+If `libobs` dev headers/libs are unavailable, the integration runner skips locally. CI installs `libobs` and runs both paths.
 
 ## CI
 
-GitHub Actions includes an `obs-plugin-smoke` job on Linux that runs the same smoke test whenever OBS plugin or related integration files change.
+GitHub Actions includes an `obs-plugin` Linux job that installs `libobs` and runs both the smoke and `libobs` integration tests whenever OBS plugin or related integration files change.
