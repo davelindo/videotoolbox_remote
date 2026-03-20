@@ -8,6 +8,15 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 BUILD_DIR="$(mktemp -d /tmp/obs-plugin-integration.XXXXXX)"
 PLUGIN_BUILD_DIR="$BUILD_DIR/plugin"
 SERVER_PID=""
+CLIENT_TIMEOUT_SECS="${CLIENT_TIMEOUT_SECS:-60}"
+SERVER_TIMEOUT_SECS="${SERVER_TIMEOUT_SECS:-10}"
+TIMEOUT_BIN=""
+
+if command -v timeout >/dev/null 2>&1; then
+  TIMEOUT_BIN="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT_BIN="gtimeout"
+fi
 
 cleanup() {
   if [[ -n "${SERVER_PID:-}" ]]; then
@@ -48,6 +57,53 @@ if ! pkg-config --exists libzstd; then
   exit 1
 fi
 
+sanitize_pkg_config_flags() {
+  local raw="$1"
+  local -a filtered=()
+  local token
+  for token in $raw; do
+    if [[ "$token" == *'$<'* ]]; then
+      continue
+    fi
+    filtered+=("$token")
+  done
+  printf '%s ' "${filtered[@]}"
+}
+
+run_with_timeout() {
+  local seconds="$1"
+  shift
+
+  if [[ -n "$TIMEOUT_BIN" ]]; then
+    "$TIMEOUT_BIN" --signal=TERM --kill-after=5 "$seconds" "$@"
+  else
+    "$@"
+  fi
+}
+
+wait_for_pid_exit() {
+  local pid="$1"
+  local seconds="$2"
+  local label="$3"
+  local deadline=$((SECONDS + seconds))
+
+  while kill -0 "$pid" 2>/dev/null; do
+    if (( SECONDS >= deadline )); then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      echo "ERROR: ${label} did not exit within ${seconds}s" >&2
+      return 124
+    fi
+    sleep 0.2
+  done
+
+  if wait "$pid"; then
+    return 0
+  fi
+
+  return $?
+}
+
 DL_LIBS=""
 if [[ "$(uname -s)" == "Linux" ]]; then
   DL_LIBS="-ldl"
@@ -64,7 +120,7 @@ PLUGIN_CMAKE_ARGS=()
 HARNESS_ENV=()
 
 if pkg-config --exists libobs; then
-  OBS_CFLAGS="$(pkg-config --cflags libobs)"
+  OBS_CFLAGS="$(sanitize_pkg_config_flags "$(pkg-config --cflags libobs)")"
   OBS_LIBS="$(pkg-config --libs libobs)"
 elif [[ "$(uname -s)" == "Darwin" ]] \
   && [[ -d "$OBS_SOURCE_DIR_FALLBACK/libobs" ]] \
@@ -103,6 +159,7 @@ PY
 }
 
 build_plugin() {
+  echo "Building OBS plugin"
   cmake -S "$ROOT/obs-plugin" -B "$PLUGIN_BUILD_DIR" -DCMAKE_BUILD_TYPE=Release "${PLUGIN_CMAKE_ARGS[@]}" >/dev/null
   cmake --build "$PLUGIN_BUILD_DIR" >/dev/null
 }
@@ -115,6 +172,7 @@ find_plugin_binary() {
 }
 
 build_harness() {
+  echo "Building OBS integration harness"
   "$CXX" -std=c++17 \
     "$ROOT/tests/integration/obs_plugin_integration.cpp" \
     -I"$ROOT/obs-plugin/src" \
@@ -128,6 +186,7 @@ run_case() {
   local name="$1"
   local expected="$2"
   local client_rc=0
+  local server_rc=0
   shift 2
 
   local -a server_args=()
@@ -155,6 +214,8 @@ run_case() {
   local client_log="$BUILD_DIR/${name}.client.log"
   local -a harness_cmd=("$BUILD_DIR/obs_plugin_integration")
 
+  echo "Running OBS integration case: $name"
+
   "$PYTHON_BIN" "$ROOT/tests/integration/mock_vtremoted/mock_vtremoted.py" \
     --listen "$server_addr" \
     --token "$SERVER_TOKEN" \
@@ -181,14 +242,33 @@ run_case() {
     "${client_args[@]}"
   )
 
-  if env "${HARNESS_ENV[@]}" "${harness_cmd[@]}" >"$client_log" 2>&1; then
+  if run_with_timeout "$CLIENT_TIMEOUT_SECS" env "${HARNESS_ENV[@]}" "${harness_cmd[@]}" >"$client_log" 2>&1; then
     client_rc=0
   else
     client_rc=$?
   fi
 
-  wait "$SERVER_PID"
+  if wait_for_pid_exit "$SERVER_PID" "$SERVER_TIMEOUT_SECS" \
+    "mock server for case '$name'"; then
+    server_rc=0
+  else
+    server_rc=$?
+  fi
   SERVER_PID=""
+
+  if [[ "$client_rc" -eq 124 ]]; then
+    echo "ERROR: case '$name' timed out after ${CLIENT_TIMEOUT_SECS}s" >&2
+    cat "$server_log" >&2
+    cat "$client_log" >&2
+    exit 1
+  fi
+
+  if [[ "$server_rc" -ne 0 ]]; then
+    echo "ERROR: mock server failed for case '$name' with status $server_rc" >&2
+    cat "$server_log" >&2
+    cat "$client_log" >&2
+    exit 1
+  fi
 
   if [[ "$expected" == "success" && "$client_rc" -ne 0 ]]; then
     echo "ERROR: case '$name' unexpectedly failed" >&2

@@ -33,6 +33,15 @@ fi
 
 BUILD_DIR="$(mktemp -d /tmp/obs-plugin-smoke.XXXXXX)"
 SERVER_PID=""
+CLIENT_TIMEOUT_SECS="${CLIENT_TIMEOUT_SECS:-30}"
+SERVER_TIMEOUT_SECS="${SERVER_TIMEOUT_SECS:-10}"
+TIMEOUT_BIN=""
+
+if command -v timeout >/dev/null 2>&1; then
+  TIMEOUT_BIN="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT_BIN="gtimeout"
+fi
 
 cleanup() {
   if [[ -n "${SERVER_PID:-}" ]]; then
@@ -48,6 +57,40 @@ LZ4_LIBS="$(pkg-config --libs liblz4)"
 ZSTD_CFLAGS="$(pkg-config --cflags libzstd)"
 ZSTD_LIBS="$(pkg-config --libs libzstd)"
 SERVER_TOKEN="${VTREMOTE_OBS_PLUGIN_TOKEN:-obs-plugin-test-token}"
+
+run_with_timeout() {
+  local seconds="$1"
+  shift
+
+  if [[ -n "$TIMEOUT_BIN" ]]; then
+    "$TIMEOUT_BIN" --signal=TERM --kill-after=5 "$seconds" "$@"
+  else
+    "$@"
+  fi
+}
+
+wait_for_pid_exit() {
+  local pid="$1"
+  local seconds="$2"
+  local label="$3"
+  local deadline=$((SECONDS + seconds))
+
+  while kill -0 "$pid" 2>/dev/null; do
+    if (( SECONDS >= deadline )); then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      echo "ERROR: ${label} did not exit within ${seconds}s" >&2
+      return 124
+    fi
+    sleep 0.2
+  done
+
+  if wait "$pid"; then
+    return 0
+  fi
+
+  return $?
+}
 
 pick_port() {
   "$PYTHON_BIN" - <<'PY'
@@ -74,6 +117,7 @@ run_case() {
   local name="$1"
   local expected="$2"
   local client_rc=0
+  local server_rc=0
   shift 2
 
   local -a server_args=()
@@ -100,6 +144,8 @@ run_case() {
   local server_log="$BUILD_DIR/${name}.server.log"
   local client_log="$BUILD_DIR/${name}.client.log"
 
+  echo "Running OBS client smoke case: $name"
+
   "$PYTHON_BIN" "$ROOT/tests/integration/mock_vtremoted/mock_vtremoted.py" \
     --listen "$server_addr" \
     --token "$SERVER_TOKEN" \
@@ -111,7 +157,7 @@ run_case() {
 
   sleep 0.2
 
-  if "$BUILD_DIR/obs_plugin_client_smoke" \
+  if run_with_timeout "$CLIENT_TIMEOUT_SECS" "$BUILD_DIR/obs_plugin_client_smoke" \
     --host 127.0.0.1 \
     --port "$port" \
     --token "$SERVER_TOKEN" \
@@ -122,8 +168,27 @@ run_case() {
     client_rc=$?
   fi
 
-  wait "$SERVER_PID"
+  if wait_for_pid_exit "$SERVER_PID" "$SERVER_TIMEOUT_SECS" \
+    "mock server for case '$name'"; then
+    server_rc=0
+  else
+    server_rc=$?
+  fi
   SERVER_PID=""
+
+  if [[ "$client_rc" -eq 124 ]]; then
+    echo "ERROR: case '$name' timed out after ${CLIENT_TIMEOUT_SECS}s" >&2
+    cat "$server_log" >&2
+    cat "$client_log" >&2
+    exit 1
+  fi
+
+  if [[ "$server_rc" -ne 0 ]]; then
+    echo "ERROR: mock server failed for case '$name' with status $server_rc" >&2
+    cat "$server_log" >&2
+    cat "$client_log" >&2
+    exit 1
+  fi
 
   if [[ "$expected" == "success" && "$client_rc" -ne 0 ]]; then
     echo "ERROR: case '$name' unexpectedly failed" >&2

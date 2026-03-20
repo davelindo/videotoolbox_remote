@@ -148,17 +148,27 @@ struct ObsPropertiesHandle {
 
 struct ObsEncoderHandle {
   obs_encoder_t *ptr = nullptr;
-  ~ObsEncoderHandle() {
-    if (ptr)
+  void reset() {
+    if (ptr) {
       obs_encoder_release(ptr);
+      ptr = nullptr;
+    }
+  }
+  ~ObsEncoderHandle() {
+    reset();
   }
 };
 
 struct VideoHandle {
   video_t *ptr = nullptr;
-  ~VideoHandle() {
-    if (ptr)
+  void reset() {
+    if (ptr) {
       video_output_close(ptr);
+      ptr = nullptr;
+    }
+  }
+  ~VideoHandle() {
+    reset();
   }
 };
 
@@ -169,9 +179,14 @@ struct ModuleHandle {
 struct EncoderDataHandle {
   const struct obs_encoder_info *info = nullptr;
   void *ptr = nullptr;
-  ~EncoderDataHandle() {
-    if (info && ptr)
+  void reset() {
+    if (info && ptr) {
       info->destroy(ptr);
+      ptr = nullptr;
+    }
+  }
+  ~EncoderDataHandle() {
+    reset();
   }
 };
 
@@ -401,6 +416,10 @@ int run(const Args &args) {
     if (i == 0)
       validate_extradata(info, data.ptr, expected_extradata);
   }
+
+  data.reset();
+  encoder.reset();
+  video.reset();
   return 0;
 }
 
