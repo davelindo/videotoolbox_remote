@@ -69,3 +69,28 @@ VTREMOTED=/bin/true tests/integration/bench_vtremote.sh
 -vt_remote_wire_compression auto   # pick LZ4 vs Zstd based on resolution/FPS
 -vt_remote_inflight auto           # adjust inflight over time
 ```
+
+## GitHub Metadata and Release Notes
+
+The repository includes small `gh`-based helpers for keeping the public GitHub surfaces in sync.
+
+Prerequisite:
+
+```bash
+gh auth status
+```
+
+Key commands:
+
+```bash
+make sync-github-metadata
+make release-notes TAG=v0.2.9
+make release-notes-all
+bash scripts/generate_release_notes.sh v0.2.9
+```
+
+What they do:
+- `make sync-github-metadata` updates the repo description, homepage, and topics.
+- `make release-notes TAG=...` regenerates and applies the onboarding-style release body for one GitHub release.
+- `make release-notes-all` backfills all existing GitHub releases with the generated notes format.
+- `bash scripts/generate_release_notes.sh <tag>` previews the generated release body locally without editing GitHub.

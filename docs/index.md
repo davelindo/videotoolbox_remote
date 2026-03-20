@@ -5,18 +5,23 @@ title: VideoToolbox Remote
 <div class="hero">
   <h1>VideoToolbox Remote</h1>
   <p>
-    <strong>Turn your Mac into a dedicated FFmpeg accelerator.</strong><br>
-    Seamlessly offload H.264/HEVC encoding & decoding to networked Apple Silicon.
+    <strong>Remote VideoToolbox for FFmpeg.</strong><br>
+    Use a Mac or Apple Silicon system over LAN as an IP-based H.264/HEVC encode/decode/transcoding accelerator.
   </p>
   <div class="cta-row">
     <a class="btn primary" href="getting-started.html">Get Started</a>
+    <a class="btn" href="https://github.com/davelindo/videotoolbox_remote/releases/latest">Latest Release</a>
     <a class="btn" href="protocol.html">Protocol Spec</a>
   </div>
 </div>
 
-## Why VideoToolbox Remote?
+## Use a Mac as a Transcoding Server
 
-You have a powerful Mac Mini or Studio, but your production workflow runs on Linux or Windows. **VideoToolbox Remote** bridges the gap, allowing you to utilize Apple's efficient hardware acceleration without complex desktop sharing or file transfers.
+VideoToolbox Remote is a networked FFmpeg accelerator for workflows that already live on Linux, Windows, or another Mac. It lets you keep FFmpeg local for inputs, filters, audio, and muxing while a remote Mac provides VideoToolbox hardware acceleration over the network.
+
+If you have a Mac Mini, Mac Studio, or spare Apple Silicon system on the LAN, this is the direct way to use that machine as a remote VideoToolbox endpoint instead of moving the rest of your pipeline onto macOS.
+
+Prefer binaries over a source build? Start with the server and client tarballs from the [latest GitHub release](https://github.com/davelindo/videotoolbox_remote/releases/latest).
 
 ## How It Works
 

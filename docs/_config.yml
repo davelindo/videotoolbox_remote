@@ -1,5 +1,5 @@
 title: VideoToolbox Remote
-description: Remote VideoToolbox encode/decode for FFmpeg
+description: "Remote VideoToolbox for FFmpeg: use a Mac or Apple Silicon system over LAN as an IP-based H.264/HEVC encode/decode/transcoding accelerator"
 markdown: kramdown
 kramdown:
   input: GFM

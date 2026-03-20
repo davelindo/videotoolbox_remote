@@ -2,11 +2,38 @@
 
 ![Build Status](https://img.shields.io/badge/build-passing-brightgreen) ![License](https://img.shields.io/badge/license-LGPLv2.1%2B-blue) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
-**Remote VideoToolbox encode/decode for FFmpeg.**
+**Remote VideoToolbox for FFmpeg: use a Mac or Apple Silicon system over LAN as an IP-based H.264/HEVC encode/decode/transcoding accelerator.**
 
-## What the project does
+VideoToolbox Remote is a networked FFmpeg accelerator that lets you use a Mac as a transcoding server. An FFmpeg client on Linux, Windows, or macOS can offload H.264/HEVC encode, decode, or full transcode jobs to VideoToolbox running on a remote Apple Silicon or T2 Mac over LAN.
 
-VideoToolbox Remote offloads hardware-accelerated H.264 and HEVC encoding/decoding from an FFmpeg client to a remote macOS daemon. This allows you to leverage the dedicated media engines (Apple Silicon or T2) on a Mac for video processing tasks initiated from Linux, Windows, or other macOS machines.
+Think of it as remote VideoToolbox over IP: FFmpeg stays local for I/O, filters, and muxing, while the Mac contributes hardware acceleration for video encoding, decoding, or packet-in/packet-out transcoding.
+
+## Quick start from Releases
+
+If you want to try it before building from source, start with the prebuilt binaries in the [latest release](https://github.com/davelindo/videotoolbox_remote/releases/latest).
+
+1. Download `vtremoted-macos-arm64.tar.gz` or `vtremoted-macos-x86_64.tar.gz` for the Mac that will run the server.
+2. Download the matching FFmpeg client tarball for Linux, macOS, or Windows from the same release page.
+3. Start the server on the Mac:
+
+```bash
+tar -xzf vtremoted-macos-arm64.tar.gz
+./vtremoted/vtremoted --listen 0.0.0.0:5555 --log-level 1
+```
+
+4. Run a remote encode from the client:
+
+```bash
+mkdir -p ffmpeg-client
+tar -xzf ffmpeg-linux-x86_64.tar.gz -C ffmpeg-client
+./ffmpeg-client/ffmpeg -i input.mkv \
+  -c:v h264_videotoolbox_remote \
+  -vt_remote_host <MAC_IP>:5555 \
+  -b:v 6000k \
+  output.mkv
+```
+
+## How it works
 
 The system consists of:
 - **Server (`vtremoted`)**: A lightweight Swift daemon running on macOS that wraps the VideoToolbox API.
@@ -21,7 +48,7 @@ The system consists of:
 - **Client**: Linux, Windows, or macOS.
 - **Network**: Wired LAN (1GbE minimum, 2.5GbE+ recommended for 4K).
 
-### Installation
+### Build from source
 
 #### 1. Build the Server (macOS)
 

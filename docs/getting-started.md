@@ -4,6 +4,11 @@ title: Getting Started
 
 # Getting Started
 
+VideoToolbox Remote turns a Mac into a networked FFmpeg accelerator. Use this guide if you want to use a Mac as a transcoding server and point FFmpeg at remote VideoToolbox over LAN for H.264/HEVC encode, decode, or full transcode jobs.
+
+> [!TIP]
+> Want the fastest first run? Download the prebuilt `vtremoted-*` and `ffmpeg-*` tarballs from the [latest release](https://github.com/davelindo/videotoolbox_remote/releases/latest), then use the same launch and FFmpeg commands shown below.
+
 Follow these steps to set up the macOS server and build the FFmpeg client.
 
 ## Prerequisites

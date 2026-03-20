@@ -53,12 +53,13 @@ VTREMOTED_LISTEN ?= 127.0.0.1:5555
 VTREMOTED_LOG_LEVEL ?= 1
 VTREMOTED_TOKEN ?=
 VTREMOTED_SYSTEM ?=
+GITHUB_REPO ?= davelindo/videotoolbox_remote
 
 # SwiftPM uses macOS sandboxing by default (sandbox-exec). In sandboxed environments (e.g. some CI runners
 # and Codex), sandbox-exec can fail with "Operation not permitted". Allow overriding to re-enable.
 SWIFT_BUILD_SANDBOX_FLAGS ?= --disable-sandbox
 
-.PHONY: build build-ffmpeg build-vtremoted install install-ffmpeg install-vtremoted clean clean-ffmpeg clean-vtremoted test-obs-plugin test-obs-plugin-integration
+.PHONY: build build-ffmpeg build-vtremoted install install-ffmpeg install-vtremoted clean clean-ffmpeg clean-vtremoted test-obs-plugin test-obs-plugin-integration sync-github-metadata release-notes release-notes-all
 .SILENT: build-ffmpeg
 
 build: build-ffmpeg build-vtremoted
@@ -244,3 +245,16 @@ test-obs-plugin:
 
 test-obs-plugin-integration:
 	@bash tests/integration/run_obs_plugin_integration.sh
+
+sync-github-metadata:
+	@bash scripts/sync_github_metadata.sh "$(GITHUB_REPO)"
+
+release-notes:
+	@if [ -z "$(TAG)" ]; then \
+		echo "Usage: make release-notes TAG=vX.Y.Z [GITHUB_REPO=owner/repo]" >&2; \
+		exit 1; \
+	fi
+	@bash scripts/apply_release_notes.sh "$(TAG)" "$(GITHUB_REPO)"
+
+release-notes-all:
+	@bash scripts/apply_release_notes.sh --all "$(GITHUB_REPO)"

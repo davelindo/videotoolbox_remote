@@ -418,6 +418,16 @@ jobs:
           find release_assets -type f -maxdepth 3 -print -exec cp {} release_flat/ \;
           cd release_flat
           sha256sum *.tar.gz > SHA256SUMS.txt
+      - name: Select release tag
+        env:
+          PUBLISH_NIGHTLY: ${{ inputs.publish_nightly }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] || { [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ "${PUBLISH_NIGHTLY}" = "true" ]; }; then
+            release_tag=nightly
+          else
+            release_tag="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "RELEASE_TAG=${release_tag}" >> "$GITHUB_ENV"
       - name: Publish nightly release
         if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly)
         uses: ncipollo/release-action@v1
@@ -437,3 +447,8 @@ jobs:
           allowUpdates: true
           artifacts: "release_flat/*"
           artifactErrorsFailBuild: true
+      - name: Update release body
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/apply_release_notes.sh "${RELEASE_TAG}" "${GITHUB_REPOSITORY}"
