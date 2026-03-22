@@ -584,6 +584,25 @@ static int read_full(int fd, uint8_t *buf, int size) {
   return 0;
 }
 
+static int vtremote_is_peer_close_error(int err)
+{
+  if (err == AVERROR_EOF)
+    return 1;
+#ifdef ECONNRESET
+  if (err == AVERROR(ECONNRESET))
+    return 1;
+#endif
+#ifdef EPIPE
+  if (err == AVERROR(EPIPE))
+    return 1;
+#endif
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+  if (err == AVERROR(WSAECONNRESET) || err == AVERROR(WSAECONNABORTED))
+    return 1;
+#endif
+  return 0;
+}
+
 /* Non-blocking check if data is available to read */
 static int check_readable(int fd, int timeout_ms) {
 #if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
@@ -1079,6 +1098,10 @@ static int vtremote_drain_available_packets(AVCodecContext *avctx) {
     int ret = vtremote_read_msg_nonblock(s, &hdr, &payload);
     if (ret == AVERROR(EAGAIN))
       break; /* No more data available */
+    if (s->flushing && vtremote_is_peer_close_error(ret)) {
+      s->done = 1;
+      return packets_read;
+    }
     if (ret < 0)
       return ret;
 
@@ -1917,6 +1940,10 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame) {
     return AVERROR(EPIPE);
 
   if (!frame) {
+    if (s->done)
+      return AVERROR_EOF;
+    if (s->flushing)
+      return 0;
     s->flushing = 1;
     ret = vtremote_sendq_enqueue_empty(s, VTREMOTE_MSG_FLUSH, 0);
     if (ret < 0)
@@ -2002,6 +2029,10 @@ int ff_vtremote_common_receive_packet(AVCodecContext *avctx, AVPacket *pkt) {
       s->recv_calls++;
     }
     vtremote_auto_adjust_inflight(avctx, s);
+    if (s->flushing && vtremote_is_peer_close_error(ret)) {
+      s->done = 1;
+      return AVERROR_EOF;
+    }
     if (ret < 0)
       return ret;
 
