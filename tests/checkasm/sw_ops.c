@@ -30,9 +30,9 @@
 #include "checkasm.h"
 
 enum {
-    LINES  = 2,
-    NB_PLANES = 4,
-    PIXELS = 64,
+    NB_PLANES   = 4,
+    PIXELS      = 64,
+    LINES       = 2,
 };
 
 enum {
@@ -117,10 +117,10 @@ static void check_ops(const char *report, const unsigned ranges[NB_PLANES],
 
     declare_func(void, const SwsOpExec *, const void *, int bx, int y, int bx_end, int y_end);
 
-    DECLARE_ALIGNED_64(char, src0)[NB_PLANES][LINES][PIXELS * sizeof(uint32_t[4])];
-    DECLARE_ALIGNED_64(char, src1)[NB_PLANES][LINES][PIXELS * sizeof(uint32_t[4])];
-    DECLARE_ALIGNED_64(char, dst0)[NB_PLANES][LINES][PIXELS * sizeof(uint32_t[4])];
-    DECLARE_ALIGNED_64(char, dst1)[NB_PLANES][LINES][PIXELS * sizeof(uint32_t[4])];
+    static DECLARE_ALIGNED_64(char, src0)[NB_PLANES][LINES][PIXELS * sizeof(uint32_t[4])];
+    static DECLARE_ALIGNED_64(char, src1)[NB_PLANES][LINES][PIXELS * sizeof(uint32_t[4])];
+    static DECLARE_ALIGNED_64(char, dst0)[NB_PLANES][LINES][PIXELS * sizeof(uint32_t[4])];
+    static DECLARE_ALIGNED_64(char, dst1)[NB_PLANES][LINES][PIXELS * sizeof(uint32_t[4])];
 
     if (!ctx)
         return;
@@ -174,7 +174,7 @@ static void check_ops(const char *report, const unsigned ranges[NB_PLANES],
 
     SwsOpExec exec = {0};
     exec.width = PIXELS;
-    exec.height = exec.slice_h = 1;
+    exec.height = exec.slice_h = LINES;
     for (int i = 0; i < NB_PLANES; i++) {
         exec.in_stride[i]  = sizeof(src0[i][0]);
         exec.out_stride[i] = sizeof(dst0[i][0]);
@@ -190,18 +190,14 @@ static void check_ops(const char *report, const unsigned ranges[NB_PLANES],
     uintptr_t id = (uintptr_t) backend_new;
     id ^= (id << 6) + (id >> 2) + 0x9e3779b97f4a7c15 + comp_new.cpu_flags;
 
-    checkasm_save_context();
-    if (checkasm_check_func((void *) id, "%s", report)) {
-        func_new = comp_new.func;
-        func_ref = comp_ref.func;
-
+    if (check_key((void*) id, "%s", report)) {
         exec.block_size_in  = comp_ref.block_size * rw_pixel_bits(read_op)  >> 3;
         exec.block_size_out = comp_ref.block_size * rw_pixel_bits(write_op) >> 3;
         for (int i = 0; i < NB_PLANES; i++) {
             exec.in[i]  = (void *) src0[i];
             exec.out[i] = (void *) dst0[i];
         }
-        call_ref(&exec, comp_ref.priv, 0, 0, PIXELS / comp_ref.block_size, LINES);
+        checkasm_call(comp_ref.func, &exec, comp_ref.priv, 0, 0, PIXELS / comp_ref.block_size, LINES);
 
         exec.block_size_in  = comp_new.block_size * rw_pixel_bits(read_op)  >> 3;
         exec.block_size_out = comp_new.block_size * rw_pixel_bits(write_op) >> 3;
@@ -209,7 +205,7 @@ static void check_ops(const char *report, const unsigned ranges[NB_PLANES],
             exec.in[i]  = (void *) src1[i];
             exec.out[i] = (void *) dst1[i];
         }
-        call_new(&exec, comp_new.priv, 0, 0, PIXELS / comp_new.block_size, LINES);
+        checkasm_call_checked(comp_new.func, &exec, comp_new.priv, 0, 0, PIXELS / comp_new.block_size, LINES);
 
         for (int i = 0; i < NB_PLANES; i++) {
             const char *name = FMT("%s[%d]", report, i);
@@ -242,13 +238,12 @@ static void check_ops(const char *report, const unsigned ranges[NB_PLANES],
                 break;
         }
 
-        bench_new(&exec, comp_new.priv, 0, 0, PIXELS / comp_new.block_size, LINES);
+        bench(comp_new.func, &exec, comp_new.priv, 0, 0, PIXELS / comp_new.block_size, LINES);
     }
 
-    if (comp_new.func != comp_ref.func && comp_new.free)
-        comp_new.free(comp_new.priv);
-    if (comp_ref.free)
-        comp_ref.free(comp_ref.priv);
+    if (comp_new.func != comp_ref.func)
+        ff_sws_compiled_op_unref(&comp_new);
+    ff_sws_compiled_op_unref(&comp_ref);
     sws_free_context(&ctx);
 }
 

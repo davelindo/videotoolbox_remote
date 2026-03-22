@@ -637,6 +637,9 @@ static int piz_uncompress(const EXRContext *s, const uint8_t *src, int ssize,
                                max_non_zero - min_non_zero + 1);
     memset(td->bitmap + max_non_zero + 1, 0, BITMAP_SIZE - max_non_zero - 1);
 
+    if (bytestream2_get_bytes_left(&gb) < 4)
+        return AVERROR_INVALIDDATA;
+
     maxval = reverse_lut(td->bitmap, td->lut);
 
     bytestream2_skip(&gb, 4);
@@ -2247,6 +2250,8 @@ static int decode_frame(AVCodecContext *avctx, AVFrame *picture,
     out_line_size    = avctx->width * s->desc->comp[0].step;
 
     if (s->is_tile) {
+        if (s->tile_attr.ySize <= 0 || s->tile_attr.xSize <= 0)
+            return AVERROR_INVALIDDATA;
         nb_blocks = ((s->xdelta + s->tile_attr.xSize - 1) / s->tile_attr.xSize) *
         ((s->ydelta + s->tile_attr.ySize - 1) / s->tile_attr.ySize);
     } else { /* scanline */

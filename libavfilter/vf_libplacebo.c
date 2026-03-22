@@ -206,7 +206,8 @@ typedef struct LibplaceboContext {
     float pad_crop_ratio;
     float corner_rounding;
     char *lut_filename;
-    enum pl_lut_type lut_type;
+    /* enum pl_lut_type */
+    int lut_type;
     int force_original_aspect_ratio;
     int force_divisible_by;
     int reset_sar;
@@ -666,14 +667,22 @@ static void lock_queue(void *priv, uint32_t qf, uint32_t qidx)
 {
     AVHWDeviceContext *avhwctx = priv;
     const AVVulkanDeviceContext *hwctx = avhwctx->hwctx;
+#if FF_API_VULKAN_SYNC_QUEUES
+FF_DISABLE_DEPRECATION_WARNINGS
     hwctx->lock_queue(avhwctx, qf, qidx);
+FF_ENABLE_DEPRECATION_WARNINGS
+#endif
 }
 
 static void unlock_queue(void *priv, uint32_t qf, uint32_t qidx)
 {
     AVHWDeviceContext *avhwctx = priv;
     const AVVulkanDeviceContext *hwctx = avhwctx->hwctx;
+#if FF_API_VULKAN_SYNC_QUEUES
+FF_DISABLE_DEPRECATION_WARNINGS
     hwctx->unlock_queue(avhwctx, qf, qidx);
+FF_ENABLE_DEPRECATION_WARNINGS
+#endif
 }
 #endif
 

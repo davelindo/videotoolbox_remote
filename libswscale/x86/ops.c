@@ -58,10 +58,26 @@
     REF_PATTERN(NAME, 1, 1, 1, 0),                                              \
     REF_PATTERN(NAME, 1, 1, 1, 1)
 
+static int setup_rw(const SwsImplParams *params, SwsImplResult *out)
+{
+    const SwsOp *op = params->op;
+
+    /* 3-component reads/writes process one extra garbage word */
+    if (op->rw.packed && op->rw.elems == 3) {
+        switch (op->op) {
+        case SWS_OP_READ:  out->over_read  = sizeof(uint32_t); break;
+        case SWS_OP_WRITE: out->over_write = sizeof(uint32_t); break;
+        }
+    }
+
+    return 0;
+}
+
 #define DECL_RW(EXT, TYPE, NAME, OP, ELEMS, PACKED, FRAC)                       \
     DECL_ASM(TYPE, NAME##ELEMS##EXT,                                            \
         .op = SWS_OP_##OP,                                                      \
         .rw = { .elems = ELEMS, .packed = PACKED, .frac = FRAC },               \
+        .setup = setup_rw,                                                      \
     );
 
 #define DECL_PACKED_RW(EXT, DEPTH)                                              \
@@ -83,11 +99,11 @@
         .pack.pattern = {X, Y, Z, W},                                           \
     );                                                                          \
 
-static int setup_swap_bytes(const SwsOp *op, SwsOpPriv *out)
+static int setup_swap_bytes(const SwsImplParams *params, SwsImplResult *out)
 {
-    const int mask = ff_sws_pixel_type_size(op->type) - 1;
+    const int mask = ff_sws_pixel_type_size(params->op->type) - 1;
     for (int i = 0; i < 16; i++)
-        out->u8[i] = (i & ~mask) | (mask - (i & mask));
+        out->priv.u8[i] = (i & ~mask) | (mask - (i & mask));
     return 0;
 }
 
@@ -113,10 +129,11 @@ static int setup_swap_bytes(const SwsOp *op, SwsOpPriv *out)
         .unused[IDX] = true,                                                    \
     );
 
-static int setup_clear(const SwsOp *op, SwsOpPriv *out)
+static int setup_clear(const SwsImplParams *params, SwsImplResult *out)
 {
+    const SwsOp *op = params->op;
     for (int i = 0; i < 4; i++)
-        out->u32[i] = (uint32_t) op->c.q4[i].num;
+        out->priv.u32[i] = (uint32_t) op->c.q4[i].num;
     return 0;
 }
 
@@ -146,9 +163,9 @@ static int setup_clear(const SwsOp *op, SwsOpPriv *out)
         .convert.expand = true,                                                 \
     );
 
-static int setup_shift(const SwsOp *op, SwsOpPriv *out)
+static int setup_shift(const SwsImplParams *params, SwsImplResult *out)
 {
-    out->u16[0] = op->c.u;
+    out->priv.u16[0] = params->op->c.u;
     return 0;
 }
 
@@ -182,22 +199,31 @@ static int setup_shift(const SwsOp *op, SwsOpPriv *out)
     DECL_COMMON_PATTERNS(F32, scale##EXT,                                       \
         .op = SWS_OP_SCALE,                                                     \
         .setup = ff_sws_setup_q,                                                \
+        .flexible = true,                                                       \
     );
 
-static int setup_dither(const SwsOp *op, SwsOpPriv *out)
+#define DECL_EXPAND_BITS(EXT, BITS)                                             \
+    DECL_ASM(U##BITS, expand_bits##BITS##EXT,                                   \
+        .op = SWS_OP_SCALE,                                                     \
+        .scale = { .num = ((1 << (BITS)) - 1), .den = 1 },                      \
+    );
+
+static int setup_dither(const SwsImplParams *params, SwsImplResult *out)
 {
+    const SwsOp *op = params->op;
     /* 1x1 matrix / single constant */
     if (!op->dither.size_log2) {
         const AVRational k = op->dither.matrix[0];
-        out->f32[0] = (float) k.num / k.den;
+        out->priv.f32[0] = (float) k.num / k.den;
         return 0;
     }
 
     const int size = 1 << op->dither.size_log2;
+    const int8_t *off = op->dither.y_offset;
     int max_offset = 0;
     for (int i = 0; i < 4; i++) {
-        const int offset = op->dither.y_offset[i] & (size - 1);
-        max_offset = FFMAX(max_offset, offset);
+        if (off[i] >= 0)
+            max_offset = FFMAX(max_offset, off[i] & (size - 1));
     }
 
     /* Allocate extra rows to allow over-reading for row offsets. Note that
@@ -206,9 +232,10 @@ static int setup_dither(const SwsOp *op, SwsOpPriv *out)
      * typically 320 bytes for a 16x16 dither matrix. */
     const int stride = size * sizeof(float);
     const int num_rows = size + max_offset;
-    float *matrix = out->ptr = av_mallocz(num_rows * stride);
+    float *matrix = out->priv.ptr = av_mallocz(num_rows * stride);
     if (!matrix)
         return AVERROR(ENOMEM);
+    out->free = ff_op_priv_free;
 
     for (int i = 0; i < size * size; i++)
         matrix[i] = (float) op->dither.matrix[i].num / op->dither.matrix[i].den;
@@ -216,28 +243,31 @@ static int setup_dither(const SwsOp *op, SwsOpPriv *out)
     memcpy(&matrix[size * size], matrix, max_offset * stride);
 
     /* Store relative pointer offset to each row inside extra space */
-    static_assert(sizeof(out->ptr) <= sizeof(uint16_t[4]), ">8 byte pointers not supported");
-    assert(max_offset * stride <= UINT16_MAX);
-    uint16_t *offset = &out->u16[4];
+    static_assert(sizeof(out->priv.ptr) <= sizeof(int16_t[4]),
+                  ">8 byte pointers not supported");
+    assert(max_offset * stride <= INT16_MAX);
+    int16_t *off_out = &out->priv.i16[4];
     for (int i = 0; i < 4; i++)
-        offset[i] = (op->dither.y_offset[i] & (size - 1)) * stride;
+        off_out[i] = off[i] >= 0 ? (off[i] & (size - 1)) * stride : -1;
 
     return 0;
 }
 
-#define DECL_DITHER(EXT, SIZE)                                                  \
-    DECL_COMMON_PATTERNS(F32, dither##SIZE##EXT,                                \
+#define DECL_DITHER(DECL_MACRO, EXT, SIZE)                                      \
+    DECL_MACRO(F32, dither##SIZE##EXT,                                          \
         .op    = SWS_OP_DITHER,                                                 \
         .setup = setup_dither,                                                  \
-        .free  = (SIZE) ? av_free : NULL,                                       \
         .dither_size = SIZE,                                                    \
     );
 
-static int setup_linear(const SwsOp *op, SwsOpPriv *out)
+static int setup_linear(const SwsImplParams *params, SwsImplResult *out)
 {
-    float *matrix = out->ptr = av_mallocz(sizeof(float[4][5]));
+    const SwsOp *op = params->op;
+
+    float *matrix = out->priv.ptr = av_mallocz(sizeof(float[4][5]));
     if (!matrix)
         return AVERROR(ENOMEM);
+    out->free = ff_op_priv_free;
 
     for (int y = 0; y < 4; y++) {
         for (int x = 0; x < 5; x++)
@@ -251,7 +281,6 @@ static int setup_linear(const SwsOp *op, SwsOpPriv *out)
     DECL_ASM(F32, NAME##EXT,                                                    \
         .op    = SWS_OP_LINEAR,                                                 \
         .setup = setup_linear,                                                  \
-        .free  = av_free,                                                       \
         .linear_mask = (MASK),                                                  \
     );
 
@@ -267,6 +296,7 @@ static int setup_linear(const SwsOp *op, SwsOpPriv *out)
     DECL_RW(EXT, U8, read_nibbles,  READ,  1, false, 1)                         \
     DECL_RW(EXT, U8, read_bits,     READ,  1, false, 3)                         \
     DECL_RW(EXT, U8, write_bits,    WRITE, 1, false, 3)                         \
+    DECL_EXPAND_BITS(EXT, 8)                                                    \
     DECL_PACKED_RW(EXT, 8)                                                      \
     DECL_PACK_UNPACK(EXT, U8, 1, 2, 1, 0)                                       \
     DECL_PACK_UNPACK(EXT, U8, 3, 3, 2, 0)                                       \
@@ -335,6 +365,7 @@ static const SwsOpTable ops8##EXT = {                                           
         &op_read_nibbles1##EXT,                                                 \
         &op_read_bits1##EXT,                                                    \
         &op_write_bits1##EXT,                                                   \
+        &op_expand_bits8##EXT,                                                  \
         &op_pack_1210##EXT,                                                     \
         &op_pack_3320##EXT,                                                     \
         &op_pack_2330##EXT,                                                     \
@@ -385,6 +416,7 @@ static const SwsOpTable ops8##EXT = {                                           
 
 #define DECL_FUNCS_16(SIZE, EXT, FLAG)                                          \
     DECL_PACKED_RW(EXT, 16)                                                     \
+    DECL_EXPAND_BITS(EXT, 16)                                                   \
     DECL_PACK_UNPACK(EXT, U16, 4, 4, 4, 0)                                      \
     DECL_PACK_UNPACK(EXT, U16, 5, 5, 5, 0)                                      \
     DECL_PACK_UNPACK(EXT, U16, 5, 6, 5, 0)                                      \
@@ -413,6 +445,7 @@ static const SwsOpTable ops16##EXT = {                                          
         &op_unpack_4440##EXT,                                                   \
         &op_unpack_5550##EXT,                                                   \
         &op_unpack_5650##EXT,                                                   \
+        &op_expand_bits16##EXT,                                                 \
         REF_COMMON_PATTERNS(swap_bytes_U16##EXT),                               \
         REF_COMMON_PATTERNS(convert_U8_U16##EXT),                               \
         REF_COMMON_PATTERNS(convert_U16_U8##EXT),                               \
@@ -442,15 +475,15 @@ static const SwsOpTable ops16##EXT = {                                          
     DECL_EXPAND(EXT,   U8, U32)                                                 \
     DECL_MIN_MAX(EXT)                                                           \
     DECL_SCALE(EXT)                                                             \
-    DECL_DITHER(EXT, 0)                                                         \
-    DECL_DITHER(EXT, 1)                                                         \
-    DECL_DITHER(EXT, 2)                                                         \
-    DECL_DITHER(EXT, 3)                                                         \
-    DECL_DITHER(EXT, 4)                                                         \
-    DECL_DITHER(EXT, 5)                                                         \
-    DECL_DITHER(EXT, 6)                                                         \
-    DECL_DITHER(EXT, 7)                                                         \
-    DECL_DITHER(EXT, 8)                                                         \
+    DECL_DITHER(DECL_COMMON_PATTERNS, EXT, 0)                                   \
+    DECL_DITHER(DECL_ASM, EXT, 1)                                               \
+    DECL_DITHER(DECL_ASM, EXT, 2)                                               \
+    DECL_DITHER(DECL_ASM, EXT, 3)                                               \
+    DECL_DITHER(DECL_ASM, EXT, 4)                                               \
+    DECL_DITHER(DECL_ASM, EXT, 5)                                               \
+    DECL_DITHER(DECL_ASM, EXT, 6)                                               \
+    DECL_DITHER(DECL_ASM, EXT, 7)                                               \
+    DECL_DITHER(DECL_ASM, EXT, 8)                                               \
     DECL_LINEAR(EXT, luma,      SWS_MASK_LUMA)                                  \
     DECL_LINEAR(EXT, alpha,     SWS_MASK_ALPHA)                                 \
     DECL_LINEAR(EXT, lumalpha,  SWS_MASK_LUMA | SWS_MASK_ALPHA)                 \
@@ -494,14 +527,14 @@ static const SwsOpTable ops32##EXT = {                                          
         REF_COMMON_PATTERNS(max##EXT),                                          \
         REF_COMMON_PATTERNS(scale##EXT),                                        \
         REF_COMMON_PATTERNS(dither0##EXT),                                      \
-        REF_COMMON_PATTERNS(dither1##EXT),                                      \
-        REF_COMMON_PATTERNS(dither2##EXT),                                      \
-        REF_COMMON_PATTERNS(dither3##EXT),                                      \
-        REF_COMMON_PATTERNS(dither4##EXT),                                      \
-        REF_COMMON_PATTERNS(dither5##EXT),                                      \
-        REF_COMMON_PATTERNS(dither6##EXT),                                      \
-        REF_COMMON_PATTERNS(dither7##EXT),                                      \
-        REF_COMMON_PATTERNS(dither8##EXT),                                      \
+        &op_dither1##EXT,                                                       \
+        &op_dither2##EXT,                                                       \
+        &op_dither3##EXT,                                                       \
+        &op_dither4##EXT,                                                       \
+        &op_dither5##EXT,                                                       \
+        &op_dither6##EXT,                                                       \
+        &op_dither7##EXT,                                                       \
+        &op_dither8##EXT,                                                       \
         &op_luma##EXT,                                                          \
         &op_alpha##EXT,                                                         \
         &op_lumalpha##EXT,                                                      \
@@ -530,6 +563,16 @@ DECL_FUNCS_16(32, _m2_avx2, AVX2)
 
 DECL_FUNCS_32(16, _avx2, AVX2)
 
+static const SwsOpTable *const tables[] = {
+    &ops8_m1_sse4,
+    &ops8_m1_avx2,
+    &ops8_m2_sse4,
+    &ops8_m2_avx2,
+    &ops16_m1_avx2,
+    &ops16_m2_avx2,
+    &ops32_avx2,
+};
+
 static av_const int get_mmsize(const int cpu_flags)
 {
     if (cpu_flags & AV_CPU_FLAG_AVX512)
@@ -551,7 +594,7 @@ static bool op_is_type_invariant(const SwsOp *op)
     switch (op->op) {
     case SWS_OP_READ:
     case SWS_OP_WRITE:
-        return !op->rw.packed && !op->rw.frac;
+        return !(op->rw.elems > 1 && op->rw.packed) && !op->rw.frac;
     case SWS_OP_SWIZZLE:
     case SWS_OP_CLEAR:
         return true;
@@ -584,14 +627,15 @@ static int solve_shuffle(const SwsOpList *ops, int mmsize, SwsCompiledOp *out)
                           mmsize;             /* movu */
 
     *out = (SwsCompiledOp) {
-        .priv       = av_memdup(shuffle, sizeof(shuffle)),
-        .free       = av_free,
-        .block_size = pixels * num_lanes,
-        .over_read  = read_size - in_total,
-        .over_write = mmsize - out_total,
-        .cpu_flags  = mmsize > 32 ? AV_CPU_FLAG_AVX512 :
-                      mmsize > 16 ? AV_CPU_FLAG_AVX2 :
-                                    AV_CPU_FLAG_SSE4,
+        .priv        = av_memdup(shuffle, sizeof(shuffle)),
+        .free        = av_free,
+        .slice_align = 1,
+        .block_size  = pixels * num_lanes,
+        .over_read   = read_size - in_total,
+        .over_write  = mmsize - out_total,
+        .cpu_flags   = mmsize > 32 ? AV_CPU_FLAG_AVX512 :
+                       mmsize > 16 ? AV_CPU_FLAG_AVX2 :
+                                     AV_CPU_FLAG_SSE4,
     };
 
     if (!out->priv)
@@ -628,20 +672,21 @@ do {                                                                            
 static void normalize_clear(SwsOp *op)
 {
     static_assert(sizeof(uint32_t) == sizeof(int), "int size mismatch");
-    SwsOpPriv priv;
+    SwsImplResult res;
     union {
         uint32_t u32;
         int i;
     } c;
 
-    ff_sws_setup_q4(op, &priv);
+    ff_sws_setup_q4(&(const SwsImplParams) { .op = op }, &res);
+
     for (int i = 0; i < 4; i++) {
         if (!op->c.q4[i].den)
             continue;
         switch (ff_sws_pixel_type_size(op->type)) {
-        case 1: c.u32 = 0x1010101U * priv.u8[i]; break;
-        case 2: c.u32 = (uint32_t)priv.u16[i] << 16 | priv.u16[i]; break;
-        case 4: c.u32 = priv.u32[i]; break;
+        case 1: c.u32 = 0x1010101U * res.priv.u8[i]; break;
+        case 2: c.u32 = (uint32_t) res.priv.u16[i] << 16 | res.priv.u16[i]; break;
+        case 4: c.u32 = res.priv.u32[i]; break;
         }
 
         op->c.q4[i].num = c.i;
@@ -651,15 +696,11 @@ static void normalize_clear(SwsOp *op)
 
 static int compile(SwsContext *ctx, SwsOpList *ops, SwsCompiledOp *out)
 {
+    int ret;
     const int cpu_flags = av_get_cpu_flags();
     const int mmsize = get_mmsize(cpu_flags);
     if (mmsize < 0)
         return mmsize;
-
-    av_assert1(ops->num_ops > 0);
-    const SwsOp *read = ops->ops[0].op == SWS_OP_READ ? &ops->ops[0] : NULL;
-    const SwsOp *write = &ops->ops[ops->num_ops - 1];
-    int ret;
 
     /* Special fast path for in-place packed shuffle */
     ret = solve_shuffle(ops, mmsize, out);
@@ -672,31 +713,18 @@ static int compile(SwsContext *ctx, SwsOpList *ops, SwsCompiledOp *out)
 
     *out = (SwsCompiledOp) {
         .priv = chain,
+        .slice_align = 1,
         .free = ff_sws_op_chain_free_cb,
 
         /* Use at most two full YMM regs during the widest precision section */
         .block_size = 2 * FFMIN(mmsize, 32) / ff_sws_op_list_max_size(ops),
     };
 
-    /* 3-component reads/writes process one extra garbage word */
-    if (read && read->rw.packed && read->rw.elems == 3)
-        out->over_read = sizeof(uint32_t);
-    if (write->rw.packed && write->rw.elems == 3)
-        out->over_write = sizeof(uint32_t);
-
-    static const SwsOpTable *const tables[] = {
-        &ops8_m1_sse4,
-        &ops8_m1_avx2,
-        &ops8_m2_sse4,
-        &ops8_m2_avx2,
-        &ops16_m1_avx2,
-        &ops16_m2_avx2,
-        &ops32_avx2,
-    };
-
+    /* Make on-stack copy of `ops` to iterate over */
+    SwsOpList rest = *ops;
     do {
         int op_block_size = out->block_size;
-        SwsOp *op = &ops->ops[0];
+        SwsOp *op = &rest.ops[0];
 
         if (op_is_type_invariant(op)) {
             if (op->op == SWS_OP_CLEAR)
@@ -705,11 +733,16 @@ static int compile(SwsContext *ctx, SwsOpList *ops, SwsCompiledOp *out)
             op->type = SWS_PIXEL_U8;
         }
 
-        ret = ff_sws_op_compile_tables(tables, FF_ARRAY_ELEMS(tables), ops,
-                                       op_block_size, chain);
+        ret = ff_sws_op_compile_tables(ctx, tables, FF_ARRAY_ELEMS(tables),
+                                       &rest, op_block_size, chain);
     } while (ret == AVERROR(EAGAIN));
+
     if (ret < 0) {
         ff_sws_op_chain_free(chain);
+        if (rest.num_ops < ops->num_ops) {
+            av_log(ctx, AV_LOG_TRACE, "Uncompiled remainder:\n");
+            ff_sws_op_list_print(ctx, AV_LOG_TRACE, AV_LOG_TRACE, &rest);
+        }
         return ret;
     }
 
@@ -722,6 +755,8 @@ static int compile(SwsContext *ctx, SwsOpList *ops, SwsCompiledOp *out)
         out->func = NAME;                                       \
     } while (0)
 
+    const SwsOp *read      = ff_sws_op_list_input(ops);
+    const SwsOp *write     = ff_sws_op_list_output(ops);
     const int read_planes  = read ? (read->rw.packed ? 1 : read->rw.elems) : 0;
     const int write_planes = write->rw.packed ? 1 : write->rw.elems;
     switch (FFMAX(read_planes, write_planes)) {
@@ -736,11 +771,14 @@ static int compile(SwsContext *ctx, SwsOpList *ops, SwsCompiledOp *out)
         return ret;
     }
 
-    out->cpu_flags = chain->cpu_flags;
+    out->cpu_flags  = chain->cpu_flags;
+    out->over_read  = chain->over_read;
+    out->over_write = chain->over_write;
     return 0;
 }
 
 const SwsOpBackend backend_x86 = {
     .name       = "x86",
     .compile    = compile,
+    .hw_format  = AV_PIX_FMT_NONE,
 };
