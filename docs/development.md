@@ -84,9 +84,9 @@ Key commands:
 
 ```bash
 make sync-github-metadata
-make release-notes TAG=v0.2.9
+make release-notes TAG=v0.2.10
 make release-notes-all
-bash scripts/generate_release_notes.sh v0.2.9
+bash scripts/generate_release_notes.sh v0.2.10
 ```
 
 What they do:

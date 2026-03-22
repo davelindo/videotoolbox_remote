@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format follows Keep a Changelog principles, using repository release tags (`v*`) in reverse chronological order.
 The non-version `nightly` tag is intentionally excluded.
 
+## [v0.2.10] - 2026-03-22
+
+### Added
+- Added GitHub metadata and release-note maintenance helpers:
+  - `scripts/sync_github_metadata.sh`
+  - `scripts/generate_release_notes.sh`
+  - `scripts/apply_release_notes.sh`
+
+### Changed
+- Rebased the vendored `ffmpeg/` subtree to upstream `master` snapshot `9c63742425` (from `5ba2525c7af`).
+- Improved README, getting-started, and development docs for GitHub discovery and release onboarding.
+
+### Fixed
+- Fixed remote encoder drain/flush handling to tolerate a peer close after `DONE` and avoid redundant `FLUSH` sends against one-shot peers.
+- Bounded OBS integration runner hangs during local and CI test runs.
+
+### CI
+- Fixed nightly publish gating in GitHub Actions.
+- Updated OBS integration CI to run under `xvfb`.
+
 ## [v0.2.9] - 2026-03-19
 
 ### Added
