@@ -83,7 +83,7 @@ bool discard_exact(socket_t sock, uint32_t len) {
   uint32_t remaining = len;
   while (remaining > 0) {
     const size_t chunk = std::min<size_t>(remaining, scratch.size());
-    if (!read_exact(sock, scratch.data(), chunk))
+    if (read_exact(sock, scratch.data(), chunk))
       return false;
     remaining -= (uint32_t)chunk;
   }
@@ -282,7 +282,7 @@ static bool send_msg(socket_t sock, uint16_t type, const uint8_t *body,
 
 static bool recv_header(socket_t sock, struct vtr_header *hdr) {
   uint8_t buf[12];
-  if (!read_exact(sock, buf, 12))
+  if (read_exact(sock, buf, 12))
     return false;
   hdr->magic = be32(*(uint32_t *)buf);
   hdr->version = be16(*(uint16_t *)(buf + 4));
@@ -375,7 +375,7 @@ bool vtremoted_client_connect(VTRemotedClient *client, const char *host,
   log_err("Received HELLO_ACK header, len=%d", hdr.length);
 
   std::vector<uint8_t> ack_body(hdr.length);
-  if (hdr.length > 0 && !read_exact(client->sock, ack_body.data(), hdr.length)) {
+  if (hdr.length > 0 && read_exact(client->sock, ack_body.data(), hdr.length)) {
     log_err("Recv HELLO_ACK body failed");
     vtremoted_client_disconnect(client);
     return false;
@@ -507,7 +507,7 @@ bool vtremoted_client_configure(VTRemotedClient *client, uint32_t width,
   log_err("Received CONFIGURE_ACK, len=%d", hdr.length);
 
   std::vector<uint8_t> ack_body(hdr.length);
-  if (hdr.length > 0 && !read_exact(client->sock, ack_body.data(), hdr.length)) {
+  if (hdr.length > 0 && read_exact(client->sock, ack_body.data(), hdr.length)) {
     log_err("Recv CONFIGURE_ACK body failed");
     return false;
   }
@@ -626,7 +626,7 @@ bool vtremoted_client_receive_packet(VTRemotedClient *client,
   /* Packet: pts(8) + dts(8) + duration(8) + flags(4) + data */
   std::vector<uint8_t> &buf = client->recv_buf;
   buf.resize(hdr.length);
-  if (!read_exact(client->sock, buf.data(), hdr.length))
+  if (read_exact(client->sock, buf.data(), hdr.length))
     return false;
 
   if (buf.size() < 32)
