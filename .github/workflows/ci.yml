@@ -147,6 +147,7 @@ jobs:
     needs: changes
     if: (github.event_name == 'schedule' && needs.changes.outputs.publishable == 'true') || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/') || (github.event_name != 'schedule' && (needs.changes.outputs.vtremoted == 'true' || needs.changes.outputs.ci == 'true'))
     runs-on: macos-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Cache SwiftPM
@@ -164,6 +165,9 @@ jobs:
       - name: Build vtremoted
         run: |
           make build-vtremoted
+      - name: Run tests
+        run: |
+          cd vtremoted && swift test
       - name: Package vtremoted
         run: |
           mkdir -p dist/vtremoted
@@ -185,6 +189,7 @@ jobs:
     needs: changes
     if: (github.event_name == 'schedule' && needs.changes.outputs.publishable == 'true') || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/') || (github.event_name != 'schedule' && (needs.changes.outputs.vtremoted == 'true' || needs.changes.outputs.ci == 'true'))
     runs-on: macos-15-intel
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Cache SwiftPM
@@ -202,6 +207,9 @@ jobs:
       - name: Build vtremoted
         run: |
           make build-vtremoted
+      - name: Run tests
+        run: |
+          cd vtremoted && swift test
       - name: Package vtremoted
         run: |
           mkdir -p dist/vtremoted
@@ -223,6 +231,7 @@ jobs:
     needs: changes
     if: (github.event_name == 'schedule' && needs.changes.outputs.publishable == 'true') || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/') || (github.event_name != 'schedule' && (needs.changes.outputs.ffmpeg == 'true' || needs.changes.outputs.ci == 'true'))
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -348,6 +357,12 @@ jobs:
           ./ffmpeg/ffmpeg -hide_banner -filters | grep -Eq '(^|[[:space:]])psnr([[:space:]]|$)'
           ./ffmpeg/ffmpeg -hide_banner -filters | grep -Eq '(^|[[:space:]])ssim([[:space:]]|$)'
           ./ffmpeg/ffmpeg -hide_banner -filters | grep -Eq '(^|[[:space:]])libvmaf([[:space:]]|$)'
+
+      - name: Run mock integration tests (Linux)
+        if: matrix.label == 'linux-x86_64'
+        run: |
+          bash tests/integration/run_mock_roundtrip.sh
+          bash tests/integration/run_mock_decode.sh
 
       - name: Package ffmpeg (Linux/macOS)
         if: runner.os != 'Windows'

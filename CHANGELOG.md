@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format follows Keep a Changelog principles, using repository release tags (`v*`) in reverse chronological order.
 The non-version `nightly` tag is intentionally excluded.
 
+## [v0.3.0] - 2026-03-24
+
+### Fixed
+- Fixed missing `inet_pton` return value check in OBS plugin client, preventing confusing errors on invalid addresses.
+- Fixed potential NULL dereference in OBS encoder when video output is not yet attached.
+- Improved `read_exact` in OBS plugin client to distinguish disconnection from errors and retry on transient failures (EAGAIN/EINTR).
+- Added warning log when side-data allocation fails during remote decode, preventing silent metadata loss.
+- Fixed hardcoded 2-plane assumption in `fill_frame_from_view`; now copies all planes reported by the remote server.
+- Replaced force unwraps on `baseAddress!` in Swift server decode/encode paths with safe guards, preventing crashes on malformed zero-length payloads.
+- Replaced unsynchronized Swift Array with `UnsafeMutableBufferPointer` for concurrent plane error collection, eliminating potential data race.
+
+### CI
+- Added `swift test` step to both macOS arm64 and x86_64 CI jobs, enabling the 38 existing unit tests that were previously not run in CI.
+- Added `timeout-minutes` to Swift (15 min) and FFmpeg (45 min) build jobs to prevent runaway CI usage.
+- Added mock-based integration tests (`run_mock_roundtrip.sh`, `run_mock_decode.sh`) to the Linux FFmpeg CI build.
+
 ## [v0.2.10] - 2026-03-22
 
 ### Added

@@ -145,6 +145,10 @@ static bool vtremoted_extra_data(void *data, uint8_t **extra_data,
 
 static bool connect_and_configure(struct vtremoted_encoder *enc) {
   video_t *video = obs_encoder_video(enc->encoder);
+  if (!video) {
+    warn("No video output attached to encoder");
+    return false;
+  }
   const struct video_output_info *voi = video_output_get_info(video);
 
   uint32_t width = obs_encoder_get_width(enc->encoder);

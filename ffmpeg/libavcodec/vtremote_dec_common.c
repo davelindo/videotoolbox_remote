@@ -714,15 +714,18 @@ static void add_side_data_to_frame(AVFrame *frame, const VTRemoteFrameView *view
     for (int i = 0; i < view->side_data_count; i++) {
         enum AVFrameSideDataType type = (enum AVFrameSideDataType)view->side_data[i].type;
         AVFrameSideData *sd = av_frame_new_side_data(frame, type, view->side_data[i].size);
-        if (!sd)
+        if (!sd) {
+            av_log(NULL, AV_LOG_WARNING, "vtremote: failed to allocate side data type=%d size=%d\n",
+                   view->side_data[i].type, view->side_data[i].size);
             continue;
+        }
         memcpy(sd->data, view->side_data[i].data, view->side_data[i].size);
     }
 }
 
 static int fill_frame_from_view(AVCodecContext *avctx, AVFrame *frame, const VTRemoteFrameView *view)
 {
-    if (!view || view->plane_count < 2)
+    if (!view || view->plane_count < 1 || view->plane_count > 4)
         return AVERROR_INVALIDDATA;
     frame->format = avctx->pix_fmt;
     frame->width = avctx->width;
@@ -734,12 +737,14 @@ static int fill_frame_from_view(AVCodecContext *avctx, AVFrame *frame, const VTR
     frame->pts = view->pts;
     frame->duration = view->duration;
     frame->pkt_dts = frame->pts;
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < view->plane_count && i < AV_NUM_DATA_POINTERS; i++) {
         const uint8_t *src = view->planes[i].data;
         int src_stride = view->planes[i].stride;
         int rows = view->planes[i].height;
         uint8_t *dst = frame->data[i];
         int dst_stride = frame->linesize[i];
+        if (!dst)
+            break;
         if (src_stride == dst_stride) {
             memcpy(dst, src, (size_t)src_stride * (size_t)rows);
         } else {

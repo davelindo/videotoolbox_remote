@@ -41,7 +41,8 @@ typedef int socket_t;
 #define close_socket close
 #endif
 
-static bool read_exact(socket_t sock, void *buf, size_t len);
+enum { READ_OK = 0, READ_ERROR = -1, READ_DISCONNECTED = -2 };
+static int read_exact(socket_t sock, void *buf, size_t len);
 static void log_err(const char *fmt, ...);
 
 namespace {
@@ -214,16 +215,27 @@ void vtremoted_client_destroy(VTRemotedClient *client) {
   delete client;
 }
 
-static bool read_exact(socket_t sock, void *buf, size_t len) {
+static int read_exact(socket_t sock, void *buf, size_t len) {
   uint8_t *p = (uint8_t *)buf;
   size_t got = 0;
   while (got < len) {
     ssize_t r = recv(sock, (char *)(p + got), (int)(len - got), 0);
-    if (r <= 0)
-      return false;
+    if (r == 0)
+      return READ_DISCONNECTED;
+    if (r < 0) {
+#ifdef _WIN32
+      int err = WSAGetLastError();
+      if (err == WSAEWOULDBLOCK || err == WSAETIMEDOUT)
+        continue;
+#else
+      if (errno == EAGAIN || errno == EINTR)
+        continue;
+#endif
+      return READ_ERROR;
+    }
     got += r;
   }
-  return true;
+  return READ_OK;
 }
 
 static void log_err(const char *fmt, ...) {
@@ -305,7 +317,12 @@ bool vtremoted_client_connect(VTRemotedClient *client, const char *host,
   struct sockaddr_in addr = {};
   addr.sin_family = AF_INET;
   addr.sin_port = htons((uint16_t)client->port);
-  inet_pton(AF_INET, client->host.c_str(), &addr.sin_addr);
+  if (inet_pton(AF_INET, client->host.c_str(), &addr.sin_addr) != 1) {
+    log_err("Invalid address: %s", client->host.c_str());
+    close_socket(client->sock);
+    client->sock = SOCKET_INVALID;
+    return false;
+  }
 
   if (connect(client->sock, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
     close_socket(client->sock);

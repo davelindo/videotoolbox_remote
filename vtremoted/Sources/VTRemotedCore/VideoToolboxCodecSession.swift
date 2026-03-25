@@ -344,8 +344,10 @@
                     guard rawRange.count >= expectedSize else {
                         throw VTRemotedError.protocolViolation("plane too small")
                     }
+                    guard expectedSize > 0 else { return }
                     payload.withUnsafeBytes { payloadPtr in
-                        let srcBase = payloadPtr.baseAddress!.advanced(by: rawRange.lowerBound)
+                        guard let baseAddr = payloadPtr.baseAddress else { return }
+                        let srcBase = baseAddr.advanced(by: rawRange.lowerBound)
                             .assumingMemoryBound(to: UInt8.self)
                         let dstBase = destBase.assumingMemoryBound(to: UInt8.self)
                         Self.copyPlaneBytes(
@@ -369,16 +371,21 @@
                 }
 
                 // Zero-copy access to source data
+                guard expectedSize > 0, rawRange.count > 0 else {
+                    throw VTRemotedError.protocolViolation("empty compressed plane")
+                }
                 let success: Bool = payload.withUnsafeBytes { payloadPtr in
+                    guard let baseAddr = payloadPtr.baseAddress else { return false }
                     let rawPtr = UnsafeRawBufferPointer(
-                        start: payloadPtr.baseAddress!.advanced(by: rawRange.lowerBound),
+                        start: baseAddr.advanced(by: rawRange.lowerBound),
                         count: rawRange.count
                     )
                     return temp.withUnsafeMutableBytes { dstPtr in
-                        Self.decompressWirePayload(
+                        guard let dstBase = dstPtr.baseAddress else { return false }
+                        return Self.decompressWirePayload(
                             mode: config.options.wireCompression,
                             source: rawPtr,
-                            destination: dstPtr.baseAddress!,
+                            destination: dstBase,
                             expectedSize: expectedSize
                         )
                     }
@@ -401,7 +408,9 @@
                 }
             }
 
-            var errors: [Error?] = [nil, nil]
+            let errorSlots = UnsafeMutableBufferPointer<Error?>.allocate(capacity: 2)
+            errorSlots.initialize(repeating: nil)
+            defer { errorSlots.deallocate() }
             DispatchQueue.concurrentPerform(iterations: 2) { plane in
                 do {
                     if plane == 0 {
@@ -422,11 +431,11 @@
                         )
                     }
                 } catch {
-                    errors[plane] = error
+                    errorSlots[plane] = error
                 }
             }
-            if let err = errors[0] { throw err }
-            if let err = errors[1] { throw err }
+            if let err = errorSlots[0] { throw err }
+            if let err = errorSlots[1] { throw err }
 
             // Parse side data (V1 extension)
             var sideData: [Data] = []
@@ -588,16 +597,20 @@
                 defer { inputBufferPool.return(temp) }
                 if temp.count != expectedSize { temp.count = expectedSize }
 
+                guard expectedSize > 0, compressed.count > 0 else {
+                    throw VTRemotedError.protocolViolation("empty compressed plane")
+                }
                 let success: Bool = compressed.withUnsafeBytes { compressedPtr in
                     let rawPtr = UnsafeRawBufferPointer(
                         start: compressedPtr.baseAddress,
                         count: compressed.count
                     )
                     return temp.withUnsafeMutableBytes { dstPtr in
-                        Self.decompressWirePayload(
+                        guard let dstBase = dstPtr.baseAddress else { return false }
+                        return Self.decompressWirePayload(
                             mode: config.options.wireCompression,
                             source: rawPtr,
-                            destination: dstPtr.baseAddress!,
+                            destination: dstBase,
                             expectedSize: expectedSize
                         )
                     }
@@ -735,8 +748,9 @@
             guard status == noErr, let bufferBlock = block else { return }
 
             lengthPrefixed.withUnsafeBytes { ptr in
+                guard let base = ptr.baseAddress else { return }
                 _ = CMBlockBufferReplaceDataBytes(
-                    with: ptr.baseAddress!,
+                    with: base,
                     blockBuffer: bufferBlock,
                     offsetIntoDestination: 0,
                     dataLength: dataCount
@@ -2221,10 +2235,11 @@
                 var raw = self.outputBufferPool.get(capacity: len)
                 defer { self.outputBufferPool.return(raw) }
                 
-                if let base = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, plane) {
+                if let base = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, plane), len > 0 {
                     raw.count = len
                     raw.withUnsafeMutableBytes { dstPtr in
-                        _ = memcpy(dstPtr.baseAddress!, base, len)
+                        guard let dst = dstPtr.baseAddress else { return }
+                        _ = memcpy(dst, base, len)
                     }
                 } else {
                     raw.count = len
