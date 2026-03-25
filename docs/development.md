@@ -1,5 +1,6 @@
 ---
 title: Development
+description: "Build VideoToolbox Remote from source: Swift server compilation, FFmpeg configuration with vtremote codecs, and running the integration test suite."
 ---
 
 # Development

@@ -1,5 +1,6 @@
 ---
 title: Getting Started
+description: "Install the vtremoted server on macOS and build the FFmpeg client on Linux, Windows, or macOS. Prebuilt binaries available from GitHub releases."
 ---
 
 # Getting Started

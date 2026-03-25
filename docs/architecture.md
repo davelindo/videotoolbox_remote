@@ -1,5 +1,6 @@
 ---
 title: Architecture
+description: "System design of VideoToolbox Remote: lightweight TCP protocol connecting FFmpeg clients to a macOS VideoToolbox server for remote H.264/HEVC encode, decode, and transcode."
 ---
 
 # Architecture

@@ -1,5 +1,6 @@
 ---
 title: Protocol
+description: "Wire protocol specification for VideoToolbox Remote v1: framed TCP messages, handshake sequence, frame/packet encoding, and wire compression (LZ4/Zstd)."
 ---
 
 # VideoToolbox Remote Protocol

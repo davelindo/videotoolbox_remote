@@ -1,5 +1,6 @@
 ---
 title: OBS Plugin
+description: "Experimental OBS Studio plugin for VideoToolbox Remote: build, configure, and stream using remote H.264 hardware encoding from a Mac over LAN."
 ---
 
 # OBS Plugin (Experimental)

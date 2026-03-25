@@ -1,5 +1,6 @@
 ---
 title: Security
+description: "Secure deployment of VideoToolbox Remote: SSH tunnels, VPN setup, token authentication, and network isolation for LAN-based video transcoding."
 ---
 
 # Security

@@ -1,5 +1,6 @@
 ---
 title: Troubleshooting
+description: "Diagnose and fix common VideoToolbox Remote issues: connection failures, encoder throughput limits, pixel format mismatches, and network performance tuning."
 ---
 
 # Troubleshooting

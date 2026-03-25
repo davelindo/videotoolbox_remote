@@ -204,6 +204,39 @@ pre code {
   /* subtle hover state */
 }
 
+/* Feature Grid */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+  margin: 32px 0;
+}
+
+.feature {
+  background: var(--code-bg);
+  border-radius: 8px;
+  padding: 24px;
+}
+
+.feature h3 {
+  margin-top: 0;
+  margin-bottom: 8px;
+  font-size: 18px;
+}
+
+.feature p {
+  font-size: 14px;
+  margin-bottom: 0;
+  color: #8b949e;
+  max-width: none;
+}
+
+@media (max-width: 600px) {
+  .feature-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Footer */
 .site-footer {
   margin-top: 80px;

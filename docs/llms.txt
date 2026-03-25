@@ -4,30 +4,35 @@ permalink: /llms.txt
 ---
 # VideoToolbox Remote (`videotoolbox_remote`) Briefing
 
-**Goal**: Offload FFmpeg H.264/HEVC encoding/decoding to a remote macOS machine (Apple Silicon/T2).
+**Version**: v0.3.0
+**License**: LGPL v2.1+
+**Goal**: Offload FFmpeg H.264/HEVC encoding/decoding to a remote macOS machine (Apple Silicon/T2) over LAN.
+
+## What It Does
+VideoToolbox Remote turns any Mac on a LAN into a hardware H.264/HEVC transcoding server. FFmpeg clients on Linux, Windows, or macOS connect over TCP using drop-in codec replacements (`h264_videotoolbox_remote`, `hevc_videotoolbox_remote`). No pipeline changes required — it appears as a standard `-c:v` option.
 
 ## Core Architecture
-- **Server (`vtremoted`)**: Swift daemon running on macOS. Wraps `VideoToolbox` API.
-    - Listens on TCP (default 5555).
-    - Receives raw frames (NV12/P010), encodes via hardware, returns Annex B NALs.
-- **Client (`ffmpeg`)**: C fork of FFmpeg.
-    - Implements `h264_videotoolbox_remote` and `hevc_videotoolbox_remote` codecs.
-    - Handles connection management, frame transmission, and packet reception.
+- **Server (`vtremoted`)**: Swift daemon on macOS wrapping the VideoToolbox API. Listens on TCP (default 5555).
+- **Client (`ffmpeg`)**: Modified FFmpeg with custom remote codecs in `libavcodec/vtremote_*.c`.
+- **OBS Plugin**: Experimental OBS Studio encoder plugin using the same wire protocol.
+
+## Three Operating Modes
+1. **Remote Encode**: Raw frames (NV12/P010) in, compressed packets (H.264/HEVC) out.
+2. **Remote Decode**: Compressed packets in, raw frames out.
+3. **Remote Transcode**: Compressed packets in, compressed packets out (full pipeline on server).
 
 ## Repository Structure
-- `/vtremoted`: SwiftPM project (Server).
-    - `Sources/vtremoted/`: Daemon entrypoint.
-    - `Sources/VTRemotedCore/`: Core logic wrapping VideoToolbox.
-- `/ffmpeg`: FFmpeg upstream fork (Client).
-    - `libavcodec/vtremote*`: Protocol handling and codec implementation.
-- `/docs`: Jekyll documentation (Protocol spec, Architecture).
+- `/vtremoted`: SwiftPM project (Server). `Sources/VTRemotedCore/` contains core logic.
+- `/ffmpeg`: FFmpeg fork (Client). `libavcodec/vtremote_*` files implement the protocol and codecs.
+- `/obs-plugin`: OBS Studio encoder plugin (C/C++).
+- `/docs`: Jekyll documentation site (architecture, protocol spec, guides).
+- `/tests/integration`: Shell-based integration tests + Python mock server.
 
-## Quick Start for Agents
+## Quick Start
 
 ### 1. Build Server (macOS)
 ```bash
-cd vtremoted
-swift build -c release
+cd vtremoted && swift build -c release
 # Binary: .build/release/vtremoted
 ```
 
@@ -39,11 +44,6 @@ cd ffmpeg
 make -j$(nproc)
 ```
 
-On macOS (for local + remote codecs), use:
-```bash
-make build-ffmpeg
-```
-
 ### 3. Usage (Encoding)
 ```bash
 ./ffmpeg -i input.mp4 \
@@ -53,15 +53,29 @@ make build-ffmpeg
   output.mp4
 ```
 
-## Protocol Overview (v1)
+## Protocol Overview (v1, Stable)
 - **Transport**: TCP, persistent connection.
-- **Handshake**: `HELLO` -> `HELLO_ACK`.
-- **Config**: `CONFIGURE` (res/fps) -> `CONFIGURE_ACK` (extradata/sps/pps).
-- **Loop**: `FRAME` (PixelBuffer) <-> `PACKET` (Encoded Bytes).
-- **Framing**: 12-byte header (`magic`, `version`, `type`, `length`).
+- **Handshake**: `HELLO` (token, codec) -> `HELLO_ACK` (status, capabilities).
+- **Config**: `CONFIGURE` (resolution, fps, options) -> `CONFIGURE_ACK` (extradata/SPS/PPS).
+- **Streaming**: `FRAME` (pixel data) <-> `PACKET` (encoded bytes).
+- **Teardown**: `FLUSH` -> `DONE`.
+- **Framing**: 12-byte header (magic `VTR1`, version, type, length).
+- **Wire compression**: LZ4 (default), Zstd, or none.
+
+## Performance
+- 1080p HEVC at 45-50 fps on M-series silicon.
+- LZ4/Zstd wire compression reduces bandwidth 40-70%.
+- Adaptive in-flight buffering keeps encoder pipeline saturated.
+- Parity with local VideoToolbox output when settings match.
 
 ## Key Constraints
-- Server **MUST** run on macOS with hardware encoding support.
-- Network latency matters; use wired LAN.
-- Default compression is Zstd.
-- Remote decode defaults to async with reorder depth 2 (see `docs/async_decode.md`).
+- Server **must** run on macOS with hardware encoding support.
+- Network: wired LAN strongly recommended (1GbE minimum, 2.5GbE+ for 4K).
+- No encryption by default — use SSH tunnel or VPN for untrusted networks.
+- Token-based authentication is optional (for LAN environments).
+
+## Supported Codecs & Formats
+- **Encoding**: H.264 (Baseline/Main/High), HEVC (Main, Main10)
+- **Decoding**: H.264, HEVC
+- **Pixel Formats**: NV12, YUV420P, P010LE, YUV420P10LE, YUV420P10BE
+- **Platforms**: macOS (server), Linux/Windows/macOS (client)

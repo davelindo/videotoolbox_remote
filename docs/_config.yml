@@ -1,11 +1,13 @@
 title: VideoToolbox Remote
-description: "Remote VideoToolbox for FFmpeg: use a Mac or Apple Silicon system over LAN as an IP-based H.264/HEVC encode/decode/transcoding accelerator"
+description: "Use any Mac on your LAN as a hardware H.264/HEVC transcoding server for FFmpeg. Drop-in VideoToolbox acceleration for Linux and Windows — no pipeline changes required."
 markdown: kramdown
 kramdown:
   input: GFM
   hard_wrap: false
 baseurl: "/videotoolbox_remote"
 url: "https://davelindo.github.io"
+plugins:
+  - jekyll-sitemap
 defaults:
   - scope:
       path: ""

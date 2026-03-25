@@ -7,6 +7,41 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{{ page.title | default: site.title }}</title>
   <meta name="description" content="{{ page.description | default: site.description }}" />
+  <link rel="canonical" href="{{ page.url | absolute_url }}" />
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="{{ page.title | default: site.title }}" />
+  <meta property="og:description" content="{{ page.description | default: site.description }}" />
+  <meta property="og:url" content="{{ page.url | absolute_url }}" />
+  <meta property="og:site_name" content="{{ site.title }}" />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="{{ '/assets/og-image.png' | absolute_url }}" />
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="{{ page.title | default: site.title }}" />
+  <meta name="twitter:description" content="{{ page.description | default: site.description }}" />
+  <meta name="twitter:image" content="{{ '/assets/og-image.png' | absolute_url }}" />
+
+  <!-- JSON-LD Structured Data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "VideoToolbox Remote",
+    "description": "{{ site.description | xml_escape }}",
+    "url": "{{ '/' | absolute_url }}",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "macOS, Linux, Windows",
+    "license": "https://www.gnu.org/licenses/lgpl-2.1.html",
+    "codeRepository": "https://github.com/davelindo/videotoolbox_remote",
+    "author": {
+      "@type": "Person",
+      "name": "Dave Lindon"
+    }
+  }
+  </script>
+
   <link rel="stylesheet" href="{{ '/assets/style.css' | relative_url }}" />
 </head>
 
