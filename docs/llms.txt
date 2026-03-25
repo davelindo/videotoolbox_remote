@@ -62,8 +62,11 @@ make -j$(nproc)
 - **Framing**: 12-byte header (magic `VTR1`, version, type, length).
 - **Wire compression**: LZ4 (default), Zstd, or none.
 
-## Performance
-- 1080p HEVC at 45-50 fps on M-series silicon.
+## Performance (Apple Silicon, loopback benchmark, v0.3.0)
+- 1080p H.264: ~230 fps (7.6x realtime at 30fps source).
+- 1080p HEVC: ~210 fps (7.0x realtime).
+- 4K H.264: ~62 fps (2.1x realtime).
+- 4K HEVC: ~59 fps (1.9x realtime).
 - LZ4/Zstd wire compression reduces bandwidth 40-70%.
 - Adaptive in-flight buffering keeps encoder pipeline saturated.
 - Parity with local VideoToolbox output when settings match.

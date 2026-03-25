@@ -56,6 +56,5 @@ Common issues and their solutions.
 ## Encoding/Decoding
 
 ### Slow HEVC 10-bit Encoding
-**Context**: 10-bit HEVC is compute-intensive.
-**Expectation**: M1/M2 Macs typically hit ~45-50fps for 1080p 10-bit. Higher resolutions will be slower.
+**Context**: 10-bit HEVC is compute-intensive. Expect ~200 fps at 1080p and ~60 fps at 4K on Apple Silicon (loopback). Over a real network, throughput depends on bandwidth and latency.
 **Diagnosis**: If `max_inflight` stays low (e.g., < 5), the bottleneck is the Mac's hardware encoder, not the network.

@@ -57,7 +57,7 @@ That's it. Every FFmpeg feature — filters, multi-stream muxing, audio codecs, 
 
 - **Wire compression**: LZ4 or Zstd compression on raw frame payloads reduces bandwidth by 40-70% with negligible CPU overhead.
 - **Adaptive buffering**: Non-blocking send queues and configurable in-flight depth keep the encoder pipeline saturated.
-- **1080p HEVC at 45-50 fps** on M-series silicon. Higher resolutions scale with Apple's media engine capabilities.
+- **1080p at 200+ fps** (H.264 ~230 fps, HEVC ~210 fps) on Apple Silicon. 4K at ~60 fps. Actual throughput depends on content, bitrate, and network.
 - **Parity with local VideoToolbox**: When configured identically, remote output matches local encoding behavior.
 
 ## Documentation
