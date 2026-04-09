@@ -22,6 +22,7 @@ The non-version `nightly` tag is intentionally excluded.
 ### Fixed
 - Fixed `vtremote_transcode` output signaling to preserve HEVC `hvc1` tagging and HDR color metadata on mux-facing output parameters.
 - Fixed `vtremote_transcode` color-option forwarding to accept the same FFmpeg CLI enum aliases as normal codec option parsing.
+- Fixed `vtremote_transcode` explicit color-option validation to reject invalid numeric enum values instead of silently dropping unsupported metadata.
 - Fixed `vtremote_transcode` colorspace handling so valid enum value `0` (`rgb`/GBR) is no longer treated as “unset”.
 - Fixed mock fixture loading to fail early on oversized protocol payloads instead of erroring later during packet assembly.
 

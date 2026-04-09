@@ -132,6 +132,14 @@ wait_mock_server() {
   fi
 }
 
+stop_mock_server() {
+  if [[ -n "${SERVER_PID:-}" ]]; then
+    kill "$SERVER_PID" 2>/dev/null || true
+    wait "$SERVER_PID" 2>/dev/null || true
+    unset SERVER_PID
+  fi
+}
+
 create_h264_input() {
   local output="$1"
   "$FFMPEG_BIN" -hide_banner -y \
@@ -318,8 +326,50 @@ run_rgb_alias_case() {
   wait_mock_server
 }
 
+run_invalid_numeric_case() {
+  local case_dir="${TMPDIR}/invalid_numeric"
+  local server_log="${case_dir}/server.log"
+  local ffmpeg_log="${case_dir}/ffmpeg.log"
+  local input_mp4="${case_dir}/input.mp4"
+  local transcode_args=()
+  mkdir -p "$case_dir"
+
+  create_h264_input "$input_mp4"
+  start_mock_server "$server_log"
+  if [[ -n "$SERVER_TOKEN" ]]; then
+    transcode_args+=( -vt_remote_token "$SERVER_TOKEN" )
+  fi
+
+  if "$FFMPEG_BIN" -hide_banner -y \
+    -i "$input_mp4" \
+    -map 0:v:0 \
+    -c:v copy \
+    -vt_remote_transcode:v:0 \
+    -vt_remote_host "$SERVER_HOST" \
+    -vt_remote_port "$SERVER_PORT" \
+    -vt_remote_out_codec hevc \
+    "${transcode_args[@]}" \
+    -pix_fmt:v p010le \
+    -colorspace:v 999 \
+    -f null - > /dev/null 2>"$ffmpeg_log"; then
+    echo "ERROR: invalid numeric colorspace unexpectedly succeeded" >&2
+    stop_mock_server
+    exit 1
+  fi
+
+  if ! grep -F "Invalid colorspace '999' for vt_remote_transcode" "$ffmpeg_log" >/dev/null; then
+    echo "ERROR: missing invalid numeric colorspace failure" >&2
+    cat "$ffmpeg_log" >&2
+    stop_mock_server
+    exit 1
+  fi
+
+  stop_mock_server
+}
+
 run_override_case
 run_preserve_source_case
 run_rgb_alias_case
+run_invalid_numeric_case
 
 echo "OK: vtremote_transcode preserved hvc1 + HDR signaling; logs under ${TMPDIR}"

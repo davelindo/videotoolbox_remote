@@ -36,6 +36,7 @@
 #include "libavutil/log.h"
 #include "libavutil/mem.h"
 #include "libavutil/opt.h"
+#include "libavutil/pixdesc.h"
 #include "libavutil/rational.h"
 #include "libavutil/time.h"
 #include "vtremote_proto.h"
@@ -456,9 +457,58 @@ static uint32_t vtremote_resolve_codec_tag(int codec_id, uint32_t requested_tag)
     }
 }
 
-static void vtremote_seed_color_props(AVBSFContext *ctx)
+static int vtremote_validate_color_range(int value)
+{
+    return av_color_range_name((enum AVColorRange)value) != NULL;
+}
+
+static int vtremote_validate_colorspace(int value)
+{
+    return av_color_space_name((enum AVColorSpace)value) != NULL;
+}
+
+static int vtremote_validate_color_primaries(int value)
+{
+    return av_color_primaries_name((enum AVColorPrimaries)value) != NULL;
+}
+
+static int vtremote_validate_color_trc(int value)
+{
+    return av_color_transfer_name((enum AVColorTransferCharacteristic)value) != NULL;
+}
+
+static int vtremote_validate_explicit_color_props(AVBSFContext *ctx)
 {
     VTRemoteTranscodeContext *s = ctx->priv_data;
+    const struct {
+        const char *label;
+        int value;
+        int (*validator)(int);
+    } color_opts[] = {
+        { "color_range", s->color_range, vtremote_validate_color_range },
+        { "colorspace", s->colorspace, vtremote_validate_colorspace },
+        { "color_primaries", s->color_primaries, vtremote_validate_color_primaries },
+        { "color_trc", s->color_trc, vtremote_validate_color_trc },
+    };
+
+    for (size_t i = 0; i < FF_ARRAY_ELEMS(color_opts); i++) {
+        if (color_opts[i].value < 0)
+            continue;
+        if (!color_opts[i].validator(color_opts[i].value)) {
+            av_log(ctx, AV_LOG_ERROR,
+                   "Invalid %s %d for vtremote_transcode\n",
+                   color_opts[i].label, color_opts[i].value);
+            return AVERROR(EINVAL);
+        }
+    }
+
+    return 0;
+}
+
+static int vtremote_seed_color_props(AVBSFContext *ctx)
+{
+    VTRemoteTranscodeContext *s = ctx->priv_data;
+    int ret;
 
     if (s->color_range < 0 &&
         ctx->par_in->color_range != AVCOL_RANGE_UNSPECIFIED)
@@ -473,6 +523,10 @@ static void vtremote_seed_color_props(AVBSFContext *ctx)
         ctx->par_in->color_trc != AVCOL_TRC_UNSPECIFIED)
         s->color_trc = ctx->par_in->color_trc;
 
+    ret = vtremote_validate_explicit_color_props(ctx);
+    if (ret < 0)
+        return ret;
+
     if (s->color_range >= 0)
         ctx->par_out->color_range = s->color_range;
     if (s->colorspace >= 0)
@@ -481,6 +535,8 @@ static void vtremote_seed_color_props(AVBSFContext *ctx)
         ctx->par_out->color_primaries = s->color_primaries;
     if (s->color_trc >= 0)
         ctx->par_out->color_trc = s->color_trc;
+
+    return 0;
 }
 
 static int vtremote_hevc_extradata_to_annexb(const uint8_t *in, int in_size,
@@ -1357,7 +1413,9 @@ static int vtremote_transcode_init(AVBSFContext *ctx) {
     ctx->par_out->codec_tag = vtremote_resolve_codec_tag(s->codec_id_out,
                                                          ctx->par_out->codec_tag);
     ctx->time_base_out = ctx->time_base_in;
-    vtremote_seed_color_props(ctx);
+    ret = vtremote_seed_color_props(ctx);
+    if (ret < 0)
+        return ret;
 
     if (ctx->par_in->width <= 0 || ctx->par_in->height <= 0) {
         av_log(ctx, AV_LOG_ERROR, "input width/height required for vtremote_transcode\n");

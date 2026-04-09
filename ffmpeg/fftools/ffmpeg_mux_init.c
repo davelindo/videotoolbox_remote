@@ -283,6 +283,26 @@ static int vtremote_transcode_parse_avcodec_enum(const char *opt_name,
     return ret;
 }
 
+static int vtremote_transcode_validate_color_range(int value)
+{
+    return av_color_range_name((enum AVColorRange)value) != NULL;
+}
+
+static int vtremote_transcode_validate_colorspace(int value)
+{
+    return av_color_space_name((enum AVColorSpace)value) != NULL;
+}
+
+static int vtremote_transcode_validate_color_primaries(int value)
+{
+    return av_color_primaries_name((enum AVColorPrimaries)value) != NULL;
+}
+
+static int vtremote_transcode_validate_color_trc(int value)
+{
+    return av_color_transfer_name((enum AVColorTransferCharacteristic)value) != NULL;
+}
+
 static int vtremote_transcode_append_enum_opt(AVBPrint *bp,
                                               int *count,
                                               const char *remote_key,
@@ -294,6 +314,7 @@ static int vtremote_transcode_append_enum_opt(AVBPrint *bp,
                                               Muxer *mux,
                                               uint8_t *used_keys,
                                               const char *avcodec_opt_name,
+                                              int (*validator)(int),
                                               const char *label)
 {
     int idx = vtremote_transcode_key_index(remote_key, (int)strlen(remote_key));
@@ -308,11 +329,16 @@ static int vtremote_transcode_append_enum_opt(AVBPrint *bp,
 
     const char *val = e->value;
     char buf[32];
+    int parsed = -1;
 
-    if (val && *val && strspn(val, "0123456789") != strlen(val)) {
-        int parsed = -1;
+    if (val && *val) {
         int ret = vtremote_transcode_parse_avcodec_enum(avcodec_opt_name, val, &parsed);
         if (ret < 0) {
+            av_log(NULL, AV_LOG_ERROR,
+                   "Invalid %s '%s' for vt_remote_transcode\n", label, val);
+            return AVERROR(EINVAL);
+        }
+        if (validator && !validator(parsed)) {
             av_log(NULL, AV_LOG_ERROR,
                    "Invalid %s '%s' for vt_remote_transcode\n", label, val);
             return AVERROR(EINVAL);
@@ -460,6 +486,7 @@ static int vtremote_transcode_build_bsf(const OptionsContext *o,
                                                  "color_range:v", "color_range",
                                                  opts, oc, st, mux, used_keys,
                                                  "color_range",
+                                                 vtremote_transcode_validate_color_range,
                                                  "color_range");
         if (ret < 0)
             goto done;
@@ -468,6 +495,7 @@ static int vtremote_transcode_build_bsf(const OptionsContext *o,
                                                  "colorspace:v", "colorspace",
                                                  opts, oc, st, mux, used_keys,
                                                  "colorspace",
+                                                 vtremote_transcode_validate_colorspace,
                                                  "colorspace");
         if (ret < 0)
             goto done;
@@ -476,6 +504,7 @@ static int vtremote_transcode_build_bsf(const OptionsContext *o,
                                                  "color_primaries:v", "color_primaries",
                                                  opts, oc, st, mux, used_keys,
                                                  "color_primaries",
+                                                 vtremote_transcode_validate_color_primaries,
                                                  "color_primaries");
         if (ret < 0)
             goto done;
@@ -484,6 +513,7 @@ static int vtremote_transcode_build_bsf(const OptionsContext *o,
                                                  "color_trc:v", "color_trc",
                                                  opts, oc, st, mux, used_keys,
                                                  "color_trc",
+                                                 vtremote_transcode_validate_color_trc,
                                                  "color_trc");
         if (ret < 0)
             goto done;
