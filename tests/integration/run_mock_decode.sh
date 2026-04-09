@@ -90,7 +90,7 @@ for bin in "${candidate_bins[@]}"; do
       extra=( -preset ultrafast -tune zerolatency )
     elif [[ "$enc" == "h264_videotoolbox" ]]; then
       pix_fmt="nv12"
-      extra=( -allow_sw 1 )
+      extra=( -allow_sw 1 -color_range:v limited )
     fi
     if encode_input "$bin" "$enc" "$pix_fmt" "${extra[@]+"${extra[@]}"}"; then
       ok=1

@@ -2,9 +2,10 @@
 
 This tree holds VideoToolbox Remote integration tests and benchmarks.
 
-- `mock_vtremoted/`: portable Python mock server to exercise protocol framing and message flow. It responds to HELLO/CONFIGURE/FRAME/FLUSH, emits dummy Annex B packets, and exits after FLUSH (see its README for usage).
+- `mock_vtremoted/`: portable Python mock server to exercise protocol framing and message flow. It responds to HELLO/CONFIGURE/FRAME/FLUSH, can return caller-supplied HEVC fixtures, and exits after FLUSH (see its README for usage).
 - `run_mock_roundtrip.sh`: spins up the Python mock and runs `h264_videotoolbox_remote` against it using a built ffmpeg binary (defaults to `ffmpeg/ffmpeg` in the repo root).
 - `run_mock_decode.sh`: spins up the Python mock and runs the `h264_videotoolbox_remote` *decoder* against it (forces `-vt_remote_wire_compression none` since the mock does not compress).
+- `run_mock_transcode_hvc1_hdr_signaling.sh`: spins up the Python mock with HEVC Main10 HDR fixtures and asserts both the explicit-override and source-preservation `vtremote_transcode` paths keep `hvc1`, HDR color signaling, and MP4 `nclx` container metadata on HLS/fMP4 output.
 - `run_obs_plugin_client_mock.sh`: compiles the OBS plugin client (`obs-plugin/src/vtremoted-client.cpp`) with a local OBS logging stub and runs protocol smoke cases against the Python mock server for `none`, `lz4`, `zstd`, and oversized inbound responses.
 - `run_obs_plugin_integration.sh`: builds the actual OBS plugin module against `libobs`, loads it through the OBS module API, creates a real `obs_encoder_t` + `video_t`, and drives the encoder lifecycle against the Python mock server. Skips cleanly when `libobs` dev headers/libs are unavailable.
 - `run_complex_chain_test.sh`: exercises a complex filter chain via the mock server to validate framing + options under load.

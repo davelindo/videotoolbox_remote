@@ -57,11 +57,11 @@ fi
 echo "Generating local H.264 + HEVC inputs..."
 H264_OK=1
 if ! "$FFMPEG_LOCAL_BIN" -v warning -f lavfi -i testsrc2=size=320x180:rate=5 -t 2 -pix_fmt nv12 \
-  -c:v h264_videotoolbox -an -sn -y "$IN_H264"; then
+  -c:v h264_videotoolbox -color_range:v limited -an -sn -y "$IN_H264"; then
   if [[ "$LOCAL_ALLOW_SW" != "0" ]]; then
     echo "WARN: local h264_videotoolbox failed; retrying with -allow_sw 1" >&2
     if ! "$FFMPEG_LOCAL_BIN" -v warning -f lavfi -i testsrc2=size=320x180:rate=5 -t 2 -pix_fmt nv12 \
-      -c:v h264_videotoolbox -allow_sw 1 -an -sn -y "$IN_H264"; then
+      -c:v h264_videotoolbox -allow_sw 1 -color_range:v limited -an -sn -y "$IN_H264"; then
       H264_OK=0
     fi
   else

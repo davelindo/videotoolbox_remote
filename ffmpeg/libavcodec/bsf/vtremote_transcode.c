@@ -426,6 +426,63 @@ static int codec_id_from_name(const char *name) {
     return 0;
 }
 
+static uint32_t vtremote_default_codec_tag(int codec_id)
+{
+    switch (codec_id) {
+    case AV_CODEC_ID_H264:
+        return MKTAG('a', 'v', 'c', '1');
+    case AV_CODEC_ID_HEVC:
+        return MKTAG('h', 'v', 'c', '1');
+    default:
+        return 0;
+    }
+}
+
+static uint32_t vtremote_resolve_codec_tag(int codec_id, uint32_t requested_tag)
+{
+    switch (codec_id) {
+    case AV_CODEC_ID_H264:
+        if (requested_tag == MKTAG('a', 'v', 'c', '1') ||
+            requested_tag == MKTAG('a', 'v', 'c', '3'))
+            return requested_tag;
+        return MKTAG('a', 'v', 'c', '1');
+    case AV_CODEC_ID_HEVC:
+        if (requested_tag == MKTAG('h', 'v', 'c', '1') ||
+            requested_tag == MKTAG('h', 'e', 'v', '1'))
+            return requested_tag;
+        return MKTAG('h', 'v', 'c', '1');
+    default:
+        return requested_tag ? requested_tag : vtremote_default_codec_tag(codec_id);
+    }
+}
+
+static void vtremote_seed_color_props(AVBSFContext *ctx)
+{
+    VTRemoteTranscodeContext *s = ctx->priv_data;
+
+    if (s->color_range < 0 &&
+        ctx->par_in->color_range != AVCOL_RANGE_UNSPECIFIED)
+        s->color_range = ctx->par_in->color_range;
+    if (s->colorspace < 0 &&
+        ctx->par_in->color_space != AVCOL_SPC_UNSPECIFIED)
+        s->colorspace = ctx->par_in->color_space;
+    if (s->color_primaries < 0 &&
+        ctx->par_in->color_primaries != AVCOL_PRI_UNSPECIFIED)
+        s->color_primaries = ctx->par_in->color_primaries;
+    if (s->color_trc < 0 &&
+        ctx->par_in->color_trc != AVCOL_TRC_UNSPECIFIED)
+        s->color_trc = ctx->par_in->color_trc;
+
+    if (s->color_range >= 0)
+        ctx->par_out->color_range = s->color_range;
+    if (s->colorspace >= 0)
+        ctx->par_out->color_space = s->colorspace;
+    if (s->color_primaries >= 0)
+        ctx->par_out->color_primaries = s->color_primaries;
+    if (s->color_trc >= 0)
+        ctx->par_out->color_trc = s->color_trc;
+}
+
 static int vtremote_hevc_extradata_to_annexb(const uint8_t *in, int in_size,
                                              uint8_t **out, int *out_size) {
     const uint8_t *p = in;
@@ -927,10 +984,10 @@ static int vtremote_append_transcode_opts(AVBSFContext *ctx, VTRemoteKV **opts,
         { "max_slice_bytes", s->max_slice_bytes, 0 },
     };
     const VTRemoteIntOptSpec color_int_opts[] = {
-        { "color_range", s->color_range, 1 },
-        { "colorspace", s->colorspace, 1 },
-        { "color_primaries", s->color_primaries, 1 },
-        { "color_trc", s->color_trc, 1 },
+        { "color_range", s->color_range, 0 },
+        { "colorspace", s->colorspace, 0 },
+        { "color_primaries", s->color_primaries, 0 },
+        { "color_trc", s->color_trc, 0 },
     };
     const VTRemoteIntOptSpec tail_int_opts[] = {
         { "a53_cc", s->a53_cc, 0 },
@@ -1297,8 +1354,10 @@ static int vtremote_transcode_init(AVBSFContext *ctx) {
     if (ret < 0)
         return ret;
     ctx->par_out->codec_id = s->codec_id_out;
-    ctx->par_out->codec_tag = 0;
+    ctx->par_out->codec_tag = vtremote_resolve_codec_tag(s->codec_id_out,
+                                                         ctx->par_out->codec_tag);
     ctx->time_base_out = ctx->time_base_in;
+    vtremote_seed_color_props(ctx);
 
     if (ctx->par_in->width <= 0 || ctx->par_in->height <= 0) {
         av_log(ctx, AV_LOG_ERROR, "input width/height required for vtremote_transcode\n");
@@ -1500,10 +1559,10 @@ static const AVOption vtremote_transcode_options[] = {
     { "vt_remote_max_slice_bytes", "max slice bytes", OFFSET(max_slice_bytes), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, FLAGS },
     { "vt_remote_constant_bit_rate", "constant bit rate", OFFSET(constant_bit_rate), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, FLAGS },
     { "vt_remote_alpha_quality", "alpha quality", OFFSET(alpha_quality), AV_OPT_TYPE_DOUBLE, { .dbl = 0.0 }, 0.0, 1.0, FLAGS },
-    { "vt_remote_color_range", "color range", OFFSET(color_range), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 4, FLAGS },
-    { "vt_remote_colorspace", "colorspace", OFFSET(colorspace), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 12, FLAGS },
-    { "vt_remote_color_primaries", "color primaries", OFFSET(color_primaries), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 12, FLAGS },
-    { "vt_remote_color_trc", "color transfer", OFFSET(color_trc), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 18, FLAGS },
+    { "vt_remote_color_range", "color range", OFFSET(color_range), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, FLAGS },
+    { "vt_remote_colorspace", "colorspace", OFFSET(colorspace), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, FLAGS },
+    { "vt_remote_color_primaries", "color primaries", OFFSET(color_primaries), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, FLAGS },
+    { "vt_remote_color_trc", "color transfer", OFFSET(color_trc), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, FLAGS },
     { "vt_remote_sar_num", "sample aspect ratio num", OFFSET(sar_num), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },
     { "vt_remote_sar_den", "sample aspect ratio den", OFFSET(sar_den), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },
     { "vt_remote_a53_cc", "a53 cc", OFFSET(a53_cc), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, FLAGS },

@@ -50,11 +50,11 @@ trap cleanup EXIT
 
 echo "Generating input file..."
 if ! "$FFMPEG_LOCAL_BIN" -y -f lavfi -i testsrc2=size=1280x720:rate=30:duration=2 \
-  -c:v h264_videotoolbox -b:v 2M -pix_fmt nv12 "$INPUT_FILE" >/dev/null 2>&1; then
+  -c:v h264_videotoolbox -color_range:v limited -b:v 2M -pix_fmt nv12 "$INPUT_FILE" >/dev/null 2>&1; then
   if [[ "$LOCAL_ALLOW_SW" != "0" ]]; then
     echo "WARN: local h264_videotoolbox failed; retrying with -allow_sw 1" >&2
     if ! "$FFMPEG_LOCAL_BIN" -y -f lavfi -i testsrc2=size=1280x720:rate=30:duration=2 \
-      -c:v h264_videotoolbox -allow_sw 1 -b:v 2M -pix_fmt nv12 "$INPUT_FILE" >/dev/null 2>&1; then
+      -c:v h264_videotoolbox -allow_sw 1 -color_range:v limited -b:v 2M -pix_fmt nv12 "$INPUT_FILE" >/dev/null 2>&1; then
       have_libopenh264=0
       if command -v rg >/dev/null 2>&1; then
         "$FFMPEG_LOCAL_BIN" -encoders 2>/dev/null | rg -q "libopenh264" && have_libopenh264=1 || true

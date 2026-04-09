@@ -259,6 +259,75 @@ static int vtremote_transcode_append_rate_opt(AVBPrint *bp,
     return 0;
 }
 
+static int vtremote_transcode_parse_avcodec_enum(const char *opt_name,
+                                                 const char *val,
+                                                 int *parsed)
+{
+    AVCodecContext *avctx = NULL;
+    const AVOption *opt = NULL;
+    int ret;
+
+    avctx = avcodec_alloc_context3(NULL);
+    if (!avctx)
+        return AVERROR(ENOMEM);
+
+    opt = av_opt_find(avctx, opt_name, NULL,
+                      AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_ENCODING_PARAM, 0);
+    if (!opt) {
+        avcodec_free_context(&avctx);
+        return AVERROR(EINVAL);
+    }
+
+    ret = av_opt_eval_int(avctx, opt, val, parsed);
+    avcodec_free_context(&avctx);
+    return ret;
+}
+
+static int vtremote_transcode_append_enum_opt(AVBPrint *bp,
+                                              int *count,
+                                              const char *remote_key,
+                                              const char *primary_key,
+                                              const char *fallback_key,
+                                              const AVDictionary *opts,
+                                              AVFormatContext *oc,
+                                              AVStream *st,
+                                              Muxer *mux,
+                                              uint8_t *used_keys,
+                                              const char *avcodec_opt_name,
+                                              const char *label)
+{
+    int idx = vtremote_transcode_key_index(remote_key, (int)strlen(remote_key));
+    if (idx < 0 || used_keys[idx])
+        return 0;
+
+    const AVDictionaryEntry *e = vtremote_transcode_find_opt(opts, oc, st, primary_key);
+    if (!e && fallback_key)
+        e = vtremote_transcode_find_opt(opts, oc, st, fallback_key);
+    if (!e)
+        return 0;
+
+    const char *val = e->value;
+    char buf[32];
+
+    if (val && *val && strspn(val, "0123456789") != strlen(val)) {
+        int parsed = -1;
+        int ret = vtremote_transcode_parse_avcodec_enum(avcodec_opt_name, val, &parsed);
+        if (ret < 0) {
+            av_log(NULL, AV_LOG_ERROR,
+                   "Invalid %s '%s' for vt_remote_transcode\n", label, val);
+            return AVERROR(EINVAL);
+        }
+        snprintf(buf, sizeof(buf), "%d", parsed);
+        val = buf;
+    }
+
+    vtremote_transcode_append_kv(bp, count, remote_key, val);
+    used_keys[idx] = 1;
+    if (mux)
+        av_dict_set(&mux->enc_opts_used, e->key, "", 0);
+    return 0;
+}
+
 static int vtremote_transcode_build_bsf(const OptionsContext *o,
                                         AVFormatContext *oc,
                                         AVStream *st,
@@ -385,6 +454,39 @@ static int vtremote_transcode_build_bsf(const OptionsContext *o,
                     av_dict_set(&mux->enc_opts_used, e->key, "", 0);
             }
         }
+
+        ret = vtremote_transcode_append_enum_opt(&bp, &count,
+                                                 "vt_remote_color_range",
+                                                 "color_range:v", "color_range",
+                                                 opts, oc, st, mux, used_keys,
+                                                 "color_range",
+                                                 "color_range");
+        if (ret < 0)
+            goto done;
+        ret = vtremote_transcode_append_enum_opt(&bp, &count,
+                                                 "vt_remote_colorspace",
+                                                 "colorspace:v", "colorspace",
+                                                 opts, oc, st, mux, used_keys,
+                                                 "colorspace",
+                                                 "colorspace");
+        if (ret < 0)
+            goto done;
+        ret = vtremote_transcode_append_enum_opt(&bp, &count,
+                                                 "vt_remote_color_primaries",
+                                                 "color_primaries:v", "color_primaries",
+                                                 opts, oc, st, mux, used_keys,
+                                                 "color_primaries",
+                                                 "color_primaries");
+        if (ret < 0)
+            goto done;
+        ret = vtremote_transcode_append_enum_opt(&bp, &count,
+                                                 "vt_remote_color_trc",
+                                                 "color_trc:v", "color_trc",
+                                                 opts, oc, st, mux, used_keys,
+                                                 "color_trc",
+                                                 "color_trc");
+        if (ret < 0)
+            goto done;
     }
 
     if (!have_host) {
