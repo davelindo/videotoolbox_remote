@@ -36,6 +36,7 @@
 #include "libavutil/log.h"
 #include "libavutil/mem.h"
 #include "libavutil/opt.h"
+#include "libavutil/pixdesc.h"
 #include "libavutil/rational.h"
 #include "libavutil/time.h"
 #include "vtremote_proto.h"
@@ -97,6 +98,7 @@ typedef struct VTRemoteTranscodeContext {
     int max_slice_bytes;
     int constant_bit_rate;
     double alpha_quality;
+    int64_t codec_tag;
     int color_range;
     int colorspace;
     int color_primaries;
@@ -423,6 +425,88 @@ static int codec_id_from_name(const char *name) {
         return AV_CODEC_ID_H264;
     if (!strcmp(name, "hevc"))
         return AV_CODEC_ID_HEVC;
+    return 0;
+}
+
+static int vtremote_validate_color_range(int value)
+{
+    return av_color_range_name((enum AVColorRange)value) != NULL;
+}
+
+static int vtremote_validate_colorspace(int value)
+{
+    return av_color_space_name((enum AVColorSpace)value) != NULL;
+}
+
+static int vtremote_validate_color_primaries(int value)
+{
+    return av_color_primaries_name((enum AVColorPrimaries)value) != NULL;
+}
+
+static int vtremote_validate_color_trc(int value)
+{
+    return av_color_transfer_name((enum AVColorTransferCharacteristic)value) != NULL;
+}
+
+static int vtremote_validate_explicit_color_props(AVBSFContext *ctx)
+{
+    VTRemoteTranscodeContext *s = ctx->priv_data;
+    const struct {
+        const char *label;
+        int value;
+        int (*validator)(int);
+    } color_opts[] = {
+        { "color_range", s->color_range, vtremote_validate_color_range },
+        { "colorspace", s->colorspace, vtremote_validate_colorspace },
+        { "color_primaries", s->color_primaries, vtremote_validate_color_primaries },
+        { "color_trc", s->color_trc, vtremote_validate_color_trc },
+    };
+
+    for (size_t i = 0; i < FF_ARRAY_ELEMS(color_opts); i++) {
+        if (color_opts[i].value < 0)
+            continue;
+        if (!color_opts[i].validator(color_opts[i].value)) {
+            av_log(ctx, AV_LOG_ERROR,
+                   "Invalid %s %d for vtremote_transcode\n",
+                   color_opts[i].label, color_opts[i].value);
+            return AVERROR(EINVAL);
+        }
+    }
+
+    return 0;
+}
+
+static int vtremote_seed_color_props(AVBSFContext *ctx)
+{
+    VTRemoteTranscodeContext *s = ctx->priv_data;
+    int ret;
+
+    if (s->color_range < 0 &&
+        ctx->par_in->color_range != AVCOL_RANGE_UNSPECIFIED)
+        s->color_range = ctx->par_in->color_range;
+    if (s->colorspace < 0 &&
+        ctx->par_in->color_space != AVCOL_SPC_UNSPECIFIED)
+        s->colorspace = ctx->par_in->color_space;
+    if (s->color_primaries < 0 &&
+        ctx->par_in->color_primaries != AVCOL_PRI_UNSPECIFIED)
+        s->color_primaries = ctx->par_in->color_primaries;
+    if (s->color_trc < 0 &&
+        ctx->par_in->color_trc != AVCOL_TRC_UNSPECIFIED)
+        s->color_trc = ctx->par_in->color_trc;
+
+    ret = vtremote_validate_explicit_color_props(ctx);
+    if (ret < 0)
+        return ret;
+
+    if (s->color_range >= 0)
+        ctx->par_out->color_range = s->color_range;
+    if (s->colorspace >= 0)
+        ctx->par_out->color_space = s->colorspace;
+    if (s->color_primaries >= 0)
+        ctx->par_out->color_primaries = s->color_primaries;
+    if (s->color_trc >= 0)
+        ctx->par_out->color_trc = s->color_trc;
+
     return 0;
 }
 
@@ -927,10 +1011,10 @@ static int vtremote_append_transcode_opts(AVBSFContext *ctx, VTRemoteKV **opts,
         { "max_slice_bytes", s->max_slice_bytes, 0 },
     };
     const VTRemoteIntOptSpec color_int_opts[] = {
-        { "color_range", s->color_range, 1 },
-        { "colorspace", s->colorspace, 1 },
-        { "color_primaries", s->color_primaries, 1 },
-        { "color_trc", s->color_trc, 1 },
+        { "color_range", s->color_range, 0 },
+        { "colorspace", s->colorspace, 0 },
+        { "color_primaries", s->color_primaries, 0 },
+        { "color_trc", s->color_trc, 0 },
     };
     const VTRemoteIntOptSpec tail_int_opts[] = {
         { "a53_cc", s->a53_cc, 0 },
@@ -1297,8 +1381,11 @@ static int vtremote_transcode_init(AVBSFContext *ctx) {
     if (ret < 0)
         return ret;
     ctx->par_out->codec_id = s->codec_id_out;
-    ctx->par_out->codec_tag = 0;
+    ctx->par_out->codec_tag = s->codec_tag >= 0 ? (uint32_t)s->codec_tag : 0;
     ctx->time_base_out = ctx->time_base_in;
+    ret = vtremote_seed_color_props(ctx);
+    if (ret < 0)
+        return ret;
 
     if (ctx->par_in->width <= 0 || ctx->par_in->height <= 0) {
         av_log(ctx, AV_LOG_ERROR, "input width/height required for vtremote_transcode\n");
@@ -1500,10 +1587,11 @@ static const AVOption vtremote_transcode_options[] = {
     { "vt_remote_max_slice_bytes", "max slice bytes", OFFSET(max_slice_bytes), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, FLAGS },
     { "vt_remote_constant_bit_rate", "constant bit rate", OFFSET(constant_bit_rate), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, FLAGS },
     { "vt_remote_alpha_quality", "alpha quality", OFFSET(alpha_quality), AV_OPT_TYPE_DOUBLE, { .dbl = 0.0 }, 0.0, 1.0, FLAGS },
-    { "vt_remote_color_range", "color range", OFFSET(color_range), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 4, FLAGS },
-    { "vt_remote_colorspace", "colorspace", OFFSET(colorspace), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 12, FLAGS },
-    { "vt_remote_color_primaries", "color primaries", OFFSET(color_primaries), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 12, FLAGS },
-    { "vt_remote_color_trc", "color transfer", OFFSET(color_trc), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 18, FLAGS },
+    { "vt_remote_codec_tag", "output codec tag", OFFSET(codec_tag), AV_OPT_TYPE_INT64, { .i64 = -1 }, -1, UINT32_MAX, FLAGS },
+    { "vt_remote_color_range", "color range", OFFSET(color_range), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, FLAGS },
+    { "vt_remote_colorspace", "colorspace", OFFSET(colorspace), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, FLAGS },
+    { "vt_remote_color_primaries", "color primaries", OFFSET(color_primaries), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, FLAGS },
+    { "vt_remote_color_trc", "color transfer", OFFSET(color_trc), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, FLAGS },
     { "vt_remote_sar_num", "sample aspect ratio num", OFFSET(sar_num), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },
     { "vt_remote_sar_den", "sample aspect ratio den", OFFSET(sar_den), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },
     { "vt_remote_a53_cc", "a53 cc", OFFSET(a53_cc), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, FLAGS },

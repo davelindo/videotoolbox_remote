@@ -170,6 +170,34 @@ def write_str(s: str) -> bytes:
     return struct.pack(">H", len(encoded)) + encoded
 
 
+def parse_hex_payload(raw: str, label: str) -> bytes:
+    normalized = "".join(raw.split())
+    if not normalized:
+        return b""
+    try:
+        return bytes.fromhex(normalized)
+    except ValueError as exc:
+        raise ValueError(f"invalid {label} hex: {exc}") from exc
+
+
+def load_hex_payload(inline_hex: str, hex_file: str, label: str) -> bytes:
+    if inline_hex and hex_file:
+        raise ValueError(f"use only one of --{label}-hex or --{label}-hex-file")
+    if hex_file:
+        with open(hex_file, "r", encoding="utf-8") as handle:
+            return parse_hex_payload(handle.read(), label)
+    return parse_hex_payload(inline_hex, label)
+
+
+def validate_payload_size(payload: bytes, label: str, max_bytes: int) -> bytes:
+    if len(payload) > max_bytes:
+        raise ValueError(
+            f"{label} is too large for the protocol field: "
+            f"{len(payload)} bytes > {max_bytes} bytes"
+        )
+    return payload
+
+
 def parse_config_options(buf: memoryview, offset: int) -> Tuple[Dict[str, str], int]:
     options: Dict[str, str] = {}
     if offset + 2 > len(buf):
@@ -214,8 +242,7 @@ def make_configure_ack(pix_fmt: int, extradata: bytes = b"") -> bytes:
     return body
 
 
-def make_dummy_packet_body(pts: int, dts: int, duration: int, flags: int) -> bytes:
-    data = b"\x00\x00\x00\x01\x65\x88"
+def make_packet_body(data: bytes, pts: int, dts: int, duration: int, flags: int) -> bytes:
     pkt_flags = 1 if (flags & 0x1) else 0
     return (
         struct.pack(">q", pts)
@@ -342,12 +369,28 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                         if actual != expected:
                             raise ValueError(f"gop mismatch: expected={expected} actual={actual}")
 
+                    for arg_name, option_name in (
+                        ("expect_color_range", "color_range"),
+                        ("expect_colorspace", "colorspace"),
+                        ("expect_color_primaries", "color_primaries"),
+                        ("expect_color_trc", "color_trc"),
+                    ):
+                        expected_value = getattr(args, arg_name)
+                        if expected_value is None:
+                            continue
+                        actual = config_options.get(option_name)
+                        expected = str(expected_value)
+                        if actual != expected:
+                            raise ValueError(
+                                f"{option_name} mismatch: expected={expected} actual={actual}"
+                            )
+
                     if args.configure_ack_bytes > 0:
                         write_filled_msg(conn, MSG_CONFIGURE_ACK, args.configure_ack_bytes)
                         return
 
-                    extradata = bytes.fromhex(args.configure_extradata_hex)
-                    write_msg(conn, MSG_CONFIGURE_ACK, make_configure_ack(pix_fmt, extradata))
+                    write_msg(conn, MSG_CONFIGURE_ACK,
+                              make_configure_ack(pix_fmt, args.configure_extradata))
                     continue
 
                 if msg_type == MSG_FRAME:
@@ -388,7 +431,8 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                         return
 
                     dts = pts + int(getattr(args, "packet_dts_offset", 0))
-                    write_msg(conn, MSG_PACKET, make_dummy_packet_body(pts, dts, duration, flags))
+                    write_msg(conn, MSG_PACKET,
+                              make_packet_body(args.packet_data, pts, dts, duration, flags))
                     continue
 
                 if msg_type == MSG_PACKET:
@@ -403,7 +447,8 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
 
                     if getattr(args, "packet_reply", "frame") == "packet":
                         out_dts = pts + int(getattr(args, "packet_dts_offset", 0))
-                        write_msg(conn, MSG_PACKET, make_dummy_packet_body(pts, out_dts, dur, flags))
+                        write_msg(conn, MSG_PACKET,
+                                  make_packet_body(args.packet_data, pts, out_dts, dur, flags))
                         continue
 
                     write_msg(conn, MSG_FRAME, make_dummy_frame_body(pts, dur))
@@ -479,6 +524,30 @@ def main() -> int:
         help="Expected CONFIGURE gop value",
     )
     parser.add_argument(
+        "--expect-color-range",
+        type=int,
+        default=None,
+        help="Expected CONFIGURE color_range value",
+    )
+    parser.add_argument(
+        "--expect-colorspace",
+        type=int,
+        default=None,
+        help="Expected CONFIGURE colorspace value",
+    )
+    parser.add_argument(
+        "--expect-color-primaries",
+        type=int,
+        default=None,
+        help="Expected CONFIGURE color_primaries value",
+    )
+    parser.add_argument(
+        "--expect-color-trc",
+        type=int,
+        default=None,
+        help="Expected CONFIGURE color_trc value",
+    )
+    parser.add_argument(
         "--hello-ack-bytes",
         type=int,
         default=0,
@@ -501,8 +570,44 @@ def main() -> int:
         default="",
         help="Hex-encoded extradata payload to send in CONFIGURE_ACK",
     )
+    parser.add_argument(
+        "--configure-extradata-hex-file",
+        default="",
+        help="Path to a file containing hex-encoded extradata for CONFIGURE_ACK",
+    )
+    parser.add_argument(
+        "--packet-data-hex",
+        default="",
+        help="Hex-encoded packet payload to send in PACKET replies",
+    )
+    parser.add_argument(
+        "--packet-data-hex-file",
+        default="",
+        help="Path to a file containing hex-encoded packet payload for PACKET replies",
+    )
     parser.add_argument("--once", action="store_true", help="handle a single connection then exit")
     args = parser.parse_args()
+    try:
+        args.configure_extradata = validate_payload_size(
+            load_hex_payload(
+                args.configure_extradata_hex,
+                args.configure_extradata_hex_file,
+                "configure-extradata",
+            ),
+            "configure-extradata",
+            0xFFFF,
+        )
+        args.packet_data = validate_payload_size(
+            load_hex_payload(
+                args.packet_data_hex,
+                args.packet_data_hex_file,
+                "packet-data",
+            ),
+            "packet-data",
+            0xFFFFFFFF,
+        ) or b"\x00\x00\x00\x01\x65\x88"
+    except ValueError as exc:
+        parser.error(str(exc))
     serve(args.listen, args.token, args)
     return 0
 

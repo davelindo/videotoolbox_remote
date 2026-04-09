@@ -126,7 +126,7 @@ case "$H264_ENCODER" in
     ;;
   h264_videotoolbox)
     # Some environments require software fallback (e.g. GitHub runners / VMs).
-    ENC_ARGS=( -allow_sw 1 )
+    ENC_ARGS=( -allow_sw 1 -color_range:v limited )
     PIX_FMT="nv12"
     ;;
   *)

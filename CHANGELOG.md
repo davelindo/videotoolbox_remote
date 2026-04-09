@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format follows Keep a Changelog principles, using repository release tags (`v*`) in reverse chronological order.
 The non-version `nightly` tag is intentionally excluded.
 
+## [v0.3.1] - 2026-04-09
+
+### Added
+- Added mock `vtremote_transcode` HDR signaling regression coverage with fixture-backed HEVC Main 10 `hvcC`/packet payloads.
+- Added fixture provenance and regeneration notes for the mock HEVC HDR payloads.
+
+### Changed
+- Improved mock transcode integration coverage to verify:
+  - explicit `hvc1`/HDR override forwarding
+  - source-metadata preservation without explicit overrides
+  - MP4 `nclx` container metadata in the generated init segment
+  - CLI color-option alias handling, including `colorspace=rgb`
+- Updated integration scripts that generate local `h264_videotoolbox` `nv12` inputs to set limited-range color metadata explicitly.
+
+### Fixed
+- Fixed `vtremote_transcode` output signaling to preserve HEVC `hvc1` tagging and HDR color metadata on mux-facing output parameters.
+- Fixed `vtremote_transcode` codec-tag handling to apply MP4-style defaults only for MP4/fMP4 outputs instead of forcing `avc1`/`hvc1` onto non-MP4 muxers.
+- Fixed `vtremote_transcode` color-option forwarding to accept the same FFmpeg CLI enum aliases as normal codec option parsing.
+- Fixed `vtremote_transcode` explicit color-option validation to reject invalid numeric enum values instead of silently dropping unsupported metadata.
+- Fixed `vtremote_transcode` colorspace handling so valid enum value `0` (`rgb`/GBR) is no longer treated as “unset”.
+- Fixed mock fixture loading to fail early on oversized protocol payloads instead of erroring later during packet assembly.
+
 ## [v0.3.0] - 2026-03-24
 
 ### Fixed

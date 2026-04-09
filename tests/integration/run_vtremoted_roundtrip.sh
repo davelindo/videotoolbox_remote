@@ -73,13 +73,13 @@ H264_BASELINE_OK=1
 HEVC_BASELINE_OK=1
 if ! "$FFMPEG_LOCAL_BIN" -v warning \
   -f lavfi -i testsrc2=size=320x180:rate=30 -t 5 -pix_fmt nv12 \
-  -c:v h264_videotoolbox -b:v 300k -g 30 -bf "$BFRAMES" \
+  -c:v h264_videotoolbox -color_range:v limited -b:v 300k -g 30 -bf "$BFRAMES" \
   -y "$OUT_MP4_H264_LOCAL"; then
   if [[ "$LOCAL_ALLOW_SW" != "0" ]]; then
     echo "WARN: local h264_videotoolbox failed; retrying with -allow_sw 1" >&2
     if ! "$FFMPEG_LOCAL_BIN" -v warning \
       -f lavfi -i testsrc2=size=320x180:rate=30 -t 5 -pix_fmt nv12 \
-      -c:v h264_videotoolbox -allow_sw 1 -b:v 300k -g 30 -bf "$BFRAMES" \
+      -c:v h264_videotoolbox -allow_sw 1 -color_range:v limited -b:v 300k -g 30 -bf "$BFRAMES" \
       -y "$OUT_MP4_H264_LOCAL"; then
       H264_BASELINE_OK=0
     fi

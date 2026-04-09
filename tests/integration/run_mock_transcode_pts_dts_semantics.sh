@@ -50,7 +50,7 @@ elif have_encoder "libx264"; then
 elif have_encoder "h264_videotoolbox"; then
   ENCODER="h264_videotoolbox"
   PIX_FMT="nv12"
-  ENC_ARGS=( -allow_sw 1 )
+  ENC_ARGS=( -allow_sw 1 -color_range:v limited )
 else
   echo "ERROR: no local H.264 encoder available (need libopenh264/libx264/h264_videotoolbox)" >&2
   exit 1

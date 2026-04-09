@@ -45,6 +45,7 @@ run_step() {
 run_step "mock_roundtrip"      bash "${ROOT}/tests/integration/run_mock_roundtrip.sh"
 run_step "mock_pts_dts"        bash "${ROOT}/tests/integration/run_mock_pts_dts_semantics.sh"
 run_step "mock_transcode_pts_dts" bash "${ROOT}/tests/integration/run_mock_transcode_pts_dts_semantics.sh"
+run_step "mock_transcode_hvc1_hdr" bash "${ROOT}/tests/integration/run_mock_transcode_hvc1_hdr_signaling.sh"
 run_step "mock_decode"         bash "${ROOT}/tests/integration/run_mock_decode.sh"
 if [[ "${VTREMOTE_RUN_OBS_PLUGIN:-0}" != "0" ]]; then
   run_step "obs_plugin_client_mock" bash "${ROOT}/tests/integration/run_obs_plugin_client_mock.sh"
