@@ -5,6 +5,7 @@ set -euo pipefail
 # 1. Explicit override path keeps hvc1 + HDR signaling and writes container colr.
 # 2. Source metadata is preserved without explicit output overrides.
 # 3. Alias spellings and colorspace=rgb (enum 0) survive the CLI -> BSF bridge.
+# 4. Invalid numeric color enums fail on both the mux bridge and direct BSF path.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FFMPEG_BIN="${FFMPEG_BIN:-${ROOT}/ffmpeg/ffmpeg}"
@@ -367,6 +368,43 @@ run_invalid_numeric_case() {
   stop_mock_server
 }
 
+run_invalid_direct_bsf_case() {
+  local case_dir="${TMPDIR}/invalid_direct_bsf"
+  local server_log="${case_dir}/server.log"
+  local ffmpeg_log="${case_dir}/ffmpeg.log"
+  local input_mp4="${case_dir}/input.mp4"
+  local bsf_spec=
+  mkdir -p "$case_dir"
+
+  create_h264_input "$input_mp4"
+  start_mock_server "$server_log"
+
+  bsf_spec="vtremote_transcode=vt_remote_host=${SERVER_HOST}:vt_remote_port=${SERVER_PORT}:vt_remote_colorspace=999"
+  if [[ -n "$SERVER_TOKEN" ]]; then
+    bsf_spec="${bsf_spec}:vt_remote_token=${SERVER_TOKEN}"
+  fi
+
+  if "$FFMPEG_BIN" -hide_banner -y \
+    -i "$input_mp4" \
+    -map 0:v:0 \
+    -c:v copy \
+    -bsf:v "$bsf_spec" \
+    -f null - > /dev/null 2>"$ffmpeg_log"; then
+    echo "ERROR: invalid direct BSF colorspace unexpectedly succeeded" >&2
+    stop_mock_server
+    exit 1
+  fi
+
+  if ! grep -F "Invalid colorspace 999 for vtremote_transcode" "$ffmpeg_log" >/dev/null; then
+    echo "ERROR: missing invalid direct BSF colorspace failure" >&2
+    cat "$ffmpeg_log" >&2
+    stop_mock_server
+    exit 1
+  fi
+
+  stop_mock_server
+}
+
 run_non_mp4_mux_case() {
   local case_dir="${TMPDIR}/non_mp4_mux"
   local server_log="${case_dir}/server.log"
@@ -405,6 +443,7 @@ run_override_case
 run_preserve_source_case
 run_rgb_alias_case
 run_invalid_numeric_case
+run_invalid_direct_bsf_case
 run_non_mp4_mux_case
 
 echo "OK: vtremote_transcode preserved hvc1 + HDR signaling; logs under ${TMPDIR}"
