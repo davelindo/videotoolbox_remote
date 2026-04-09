@@ -77,6 +77,7 @@ static const char *const vtremote_transcode_opt_keys[] = {
     "vt_remote_max_slice_bytes",
     "vt_remote_constant_bit_rate",
     "vt_remote_alpha_quality",
+    "vt_remote_codec_tag",
     "vt_remote_color_range",
     "vt_remote_colorspace",
     "vt_remote_color_primaries",
@@ -281,6 +282,96 @@ static int vtremote_transcode_parse_avcodec_enum(const char *opt_name,
     ret = av_opt_eval_int(avctx, opt, val, parsed);
     avcodec_free_context(&avctx);
     return ret;
+}
+
+static int vtremote_transcode_codec_id_from_name(const char *name)
+{
+    if (!name || !*name)
+        return AV_CODEC_ID_NONE;
+    if (!strcmp(name, "h264"))
+        return AV_CODEC_ID_H264;
+    if (!strcmp(name, "hevc"))
+        return AV_CODEC_ID_HEVC;
+    return AV_CODEC_ID_NONE;
+}
+
+static uint32_t vtremote_transcode_default_codec_tag(int codec_id)
+{
+    switch (codec_id) {
+    case AV_CODEC_ID_H264:
+        return MKTAG('a', 'v', 'c', '1');
+    case AV_CODEC_ID_HEVC:
+        return MKTAG('h', 'v', 'c', '1');
+    default:
+        return 0;
+    }
+}
+
+static int vtremote_parse_codec_tag(const char *codec_tag, uint32_t *tag)
+{
+    char *next;
+
+    if (!codec_tag || !*codec_tag || !tag)
+        return AVERROR(EINVAL);
+
+    *tag = strtol(codec_tag, &next, 0);
+    if (*next) {
+        uint8_t buf[4] = { 0 };
+        memcpy(buf, codec_tag, FFMIN(sizeof(buf), strlen(codec_tag)));
+        *tag = AV_RL32(buf);
+    }
+
+    return 0;
+}
+
+static int vtremote_transcode_mux_wants_mp4_tag(const OptionsContext *o,
+                                                const AVFormatContext *oc)
+{
+    if (!oc || !oc->oformat || !oc->oformat->name)
+        return 0;
+
+    if (!strcmp(oc->oformat->name, "hls"))
+        return 1;
+
+    if (av_match_name(oc->oformat->name, "mov,mp4,ismv,f4v,3gp,3g2,psp,ipod"))
+        return 1;
+
+    return 0;
+}
+
+static int vtremote_transcode_resolve_output_codec_tag(const OptionsContext *o,
+                                                       const AVFormatContext *oc,
+                                                       const char *codec_tag,
+                                                       int codec_id,
+                                                       uint32_t *resolved_tag,
+                                                       int *have_tag)
+{
+    uint32_t tag;
+
+    if (!resolved_tag || !have_tag)
+        return AVERROR(EINVAL);
+
+    *have_tag = 0;
+
+    if (codec_tag && *codec_tag) {
+        int ret = vtremote_parse_codec_tag(codec_tag, &tag);
+        if (ret < 0)
+            return ret;
+        *resolved_tag = tag;
+        *have_tag = 1;
+        return 0;
+    }
+
+    if (!vtremote_transcode_mux_wants_mp4_tag(o, oc))
+        return 0;
+
+    tag = vtremote_transcode_default_codec_tag(codec_id);
+    if (!tag)
+        return 0;
+
+    *resolved_tag = tag;
+    *have_tag = 1;
+    return 0;
 }
 
 static int vtremote_transcode_validate_color_range(int value)
@@ -1775,7 +1866,6 @@ static int ost_add(Muxer *mux, const OptionsContext *o, enum AVMediaType type,
     char *bsfs_buf = NULL;
     int vt_remote_transcode = 0;
     const AVCodec *vt_remote_out_enc = NULL;
-    char  *next;
     double qscale = -1;
 
     st = avformat_new_stream(oc, NULL);
@@ -2064,6 +2154,7 @@ static int ost_add(Muxer *mux, const OptionsContext *o, enum AVMediaType type,
     ms->copy_prior_start = -1;
     opt_match_per_stream_int(ost, &o->copy_prior_start, oc, st, &ms->copy_prior_start);
     opt_match_per_stream_str(ost, &o->bitstream_filters, oc, st, &bsfs);
+    opt_match_per_stream_str(ost, &o->codec_tags, oc, st, &codec_tag);
     if (vt_remote_transcode) {
         if (type != AVMEDIA_TYPE_VIDEO) {
             av_log(ost, AV_LOG_ERROR, "vt_remote_transcode is only valid for video streams\n");
@@ -2086,6 +2177,9 @@ static int ost_add(Muxer *mux, const OptionsContext *o, enum AVMediaType type,
             const char *vt_scale_mode = NULL;
             const char *size_str = NULL;
             const char *pix_fmt_str = NULL;
+            uint32_t vt_codec_tag = 0;
+            int vt_out_codec_id = AV_CODEC_ID_NONE;
+            int have_vt_codec_tag = 0;
             ret = vtremote_transcode_build_bsf(o, oc, st, mux, &vt_bsf);
             if (ret < 0)
                 goto fail;
@@ -2104,10 +2198,28 @@ static int ost_add(Muxer *mux, const OptionsContext *o, enum AVMediaType type,
                 else if (vt_remote_out_enc->id == AV_CODEC_ID_HEVC)
                     vt_out_codec = "hevc";
             }
+            vt_out_codec_id = vtremote_transcode_codec_id_from_name(vt_out_codec);
+            if (vt_out_codec_id == AV_CODEC_ID_NONE && ost->ist)
+                vt_out_codec_id = ost->ist->st->codecpar->codec_id;
+
+            ret = vtremote_transcode_resolve_output_codec_tag(o, oc, codec_tag,
+                                                              vt_out_codec_id,
+                                                              &vt_codec_tag,
+                                                              &have_vt_codec_tag);
+            if (ret < 0)
+                goto fail;
 
             ret = vtremote_transcode_bsf_add(&vt_bsf, "vt_remote_out_codec", vt_out_codec);
             if (ret < 0)
                 goto fail;
+            if (have_vt_codec_tag) {
+                char buf[16];
+
+                snprintf(buf, sizeof(buf), "%u", vt_codec_tag);
+                ret = vtremote_transcode_bsf_add(&vt_bsf, "vt_remote_codec_tag", buf);
+                if (ret < 0)
+                    goto fail;
+            }
             ret = vtremote_transcode_apply_pix_fmt(ost, &vt_bsf, vt_pix_fmt, pix_fmt_str);
             if (ret < 0)
                 goto fail;
@@ -2142,14 +2254,12 @@ static int ost_add(Muxer *mux, const OptionsContext *o, enum AVMediaType type,
         }
     }
 
-    opt_match_per_stream_str(ost, &o->codec_tags, oc, st, &codec_tag);
     if (codec_tag) {
-        uint32_t tag = strtol(codec_tag, &next, 0);
-        if (*next) {
-            uint8_t buf[4] = { 0 };
-            memcpy(buf, codec_tag, FFMIN(sizeof(buf), strlen(codec_tag)));
-            tag = AV_RL32(buf);
-        }
+        uint32_t tag;
+
+        ret = vtremote_parse_codec_tag(codec_tag, &tag);
+        if (ret < 0)
+            goto fail;
         ost->st->codecpar->codec_tag = tag;
         ms->par_in->codec_tag = tag;
         if (ost->enc)

@@ -98,6 +98,7 @@ typedef struct VTRemoteTranscodeContext {
     int max_slice_bytes;
     int constant_bit_rate;
     double alpha_quality;
+    int64_t codec_tag;
     int color_range;
     int colorspace;
     int color_primaries;
@@ -425,36 +426,6 @@ static int codec_id_from_name(const char *name) {
     if (!strcmp(name, "hevc"))
         return AV_CODEC_ID_HEVC;
     return 0;
-}
-
-static uint32_t vtremote_default_codec_tag(int codec_id)
-{
-    switch (codec_id) {
-    case AV_CODEC_ID_H264:
-        return MKTAG('a', 'v', 'c', '1');
-    case AV_CODEC_ID_HEVC:
-        return MKTAG('h', 'v', 'c', '1');
-    default:
-        return 0;
-    }
-}
-
-static uint32_t vtremote_resolve_codec_tag(int codec_id, uint32_t requested_tag)
-{
-    switch (codec_id) {
-    case AV_CODEC_ID_H264:
-        if (requested_tag == MKTAG('a', 'v', 'c', '1') ||
-            requested_tag == MKTAG('a', 'v', 'c', '3'))
-            return requested_tag;
-        return MKTAG('a', 'v', 'c', '1');
-    case AV_CODEC_ID_HEVC:
-        if (requested_tag == MKTAG('h', 'v', 'c', '1') ||
-            requested_tag == MKTAG('h', 'e', 'v', '1'))
-            return requested_tag;
-        return MKTAG('h', 'v', 'c', '1');
-    default:
-        return requested_tag ? requested_tag : vtremote_default_codec_tag(codec_id);
-    }
 }
 
 static int vtremote_validate_color_range(int value)
@@ -1410,8 +1381,7 @@ static int vtremote_transcode_init(AVBSFContext *ctx) {
     if (ret < 0)
         return ret;
     ctx->par_out->codec_id = s->codec_id_out;
-    ctx->par_out->codec_tag = vtremote_resolve_codec_tag(s->codec_id_out,
-                                                         ctx->par_out->codec_tag);
+    ctx->par_out->codec_tag = s->codec_tag >= 0 ? (uint32_t)s->codec_tag : 0;
     ctx->time_base_out = ctx->time_base_in;
     ret = vtremote_seed_color_props(ctx);
     if (ret < 0)
@@ -1617,6 +1587,7 @@ static const AVOption vtremote_transcode_options[] = {
     { "vt_remote_max_slice_bytes", "max slice bytes", OFFSET(max_slice_bytes), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, FLAGS },
     { "vt_remote_constant_bit_rate", "constant bit rate", OFFSET(constant_bit_rate), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, FLAGS },
     { "vt_remote_alpha_quality", "alpha quality", OFFSET(alpha_quality), AV_OPT_TYPE_DOUBLE, { .dbl = 0.0 }, 0.0, 1.0, FLAGS },
+    { "vt_remote_codec_tag", "output codec tag", OFFSET(codec_tag), AV_OPT_TYPE_INT64, { .i64 = -1 }, -1, UINT32_MAX, FLAGS },
     { "vt_remote_color_range", "color range", OFFSET(color_range), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, FLAGS },
     { "vt_remote_colorspace", "colorspace", OFFSET(colorspace), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, FLAGS },
     { "vt_remote_color_primaries", "color primaries", OFFSET(color_primaries), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, FLAGS },

@@ -367,9 +367,44 @@ run_invalid_numeric_case() {
   stop_mock_server
 }
 
+run_non_mp4_mux_case() {
+  local case_dir="${TMPDIR}/non_mp4_mux"
+  local server_log="${case_dir}/server.log"
+  local ffmpeg_log="${case_dir}/ffmpeg.log"
+  local input_mp4="${case_dir}/input.mp4"
+  local out_flv="${case_dir}/output.flv"
+  local transcode_args=()
+  mkdir -p "$case_dir"
+
+  create_h264_input "$input_mp4"
+  start_mock_server "$server_log" --packet-reply packet
+  if [[ -n "$SERVER_TOKEN" ]]; then
+    transcode_args+=( -vt_remote_token "$SERVER_TOKEN" )
+  fi
+
+  "$FFMPEG_BIN" -hide_banner -y \
+    -i "$input_mp4" \
+    -map 0:v:0 \
+    -c:v copy \
+    -vt_remote_transcode:v:0 \
+    -vt_remote_host "$SERVER_HOST" \
+    -vt_remote_port "$SERVER_PORT" \
+    "${transcode_args[@]}" \
+    -f flv "$out_flv" > /dev/null 2>"$ffmpeg_log"
+
+  wait_mock_server
+
+  if [[ ! -s "$out_flv" ]]; then
+    echo "ERROR: non-MP4 mux output was not written" >&2
+    cat "$ffmpeg_log" >&2
+    exit 1
+  fi
+}
+
 run_override_case
 run_preserve_source_case
 run_rgb_alias_case
 run_invalid_numeric_case
+run_non_mp4_mux_case
 
 echo "OK: vtremote_transcode preserved hvc1 + HDR signaling; logs under ${TMPDIR}"
