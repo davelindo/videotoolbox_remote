@@ -19,7 +19,6 @@ jobs:
     name: Promote validated FFmpeg sync
     if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && startsWith(github.event.workflow_run.head_branch, 'automation/ffmpeg-sync/')
     runs-on: ubuntu-latest
-    environment: ffmpeg-sync-promote
     steps:
       - uses: actions/checkout@v4
         with:
