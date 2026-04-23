@@ -59,13 +59,13 @@ assert_file_equals "${tmpdir}/expected_no_unreleased.md" "${changelog_file}"
 
 bash "${update_script}" v0.3.3 08f56d4898eafcaddc19b3aac9263e066e82f0c0 abcdef012345 2026-04-24 "${changelog_file}"
 
-count="$(rg -c '^## \[v0\.3\.3\]' "${changelog_file}")"
+count="$(grep -c '^## \[v0\.3\.3\]' "${changelog_file}")"
 if [[ "${count}" != "1" ]]; then
   echo "expected changelog to contain exactly one v0.3.3 section, found ${count}" >&2
   exit 1
 fi
 
-rg -n 'snapshot `abcdef012345` \(from `08f56d4898ea`\)' "${changelog_file}" >/dev/null
+grep -n 'snapshot `abcdef012345` (from `08f56d4898ea`)' "${changelog_file}" >/dev/null
 
 cat > "${changelog_file}" <<'EOF'
 # Changelog
@@ -110,13 +110,13 @@ assert_file_equals "${tmpdir}/expected_unreleased.md" "${changelog_file}"
 
 bash "${update_script}" v0.3.3 08f56d4898eafcaddc19b3aac9263e066e82f0c0 a1b2c3d4e5f6 2026-04-24 "${changelog_file}"
 
-count="$(rg -c '^## \[v0\.3\.3\]' "${changelog_file}")"
+count="$(grep -c '^## \[v0\.3\.3\]' "${changelog_file}")"
 if [[ "${count}" != "1" ]]; then
   echo "expected changelog to contain exactly one v0.3.3 section after unreleased rewrite, found ${count}" >&2
   exit 1
 fi
 
-rg -n 'snapshot `a1b2c3d4e5f6` \(from `08f56d4898ea`\)' "${changelog_file}" >/dev/null
+grep -n 'snapshot `a1b2c3d4e5f6` (from `08f56d4898ea`)' "${changelog_file}" >/dev/null
 
 if bash "${update_script}" v0.3.3-rc1 08f56d4898eafcaddc19b3aac9263e066e82f0c0 a1b2c3d4e5f6 2026-04-24 "${changelog_file}" >/tmp/changelog_bad.out 2>/tmp/changelog_bad.err; then
   echo "expected changelog updater to reject non-semver tag" >&2
