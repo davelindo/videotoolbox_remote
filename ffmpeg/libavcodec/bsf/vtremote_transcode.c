@@ -1466,8 +1466,7 @@ static int vtremote_transcode_filter(AVBSFContext *ctx, AVPacket *pkt) {
     if (s->done)
         return AVERROR_EOF;
 
-    AVPacket in_pkt;
-    av_init_packet(&in_pkt);
+    AVPacket in_pkt = { 0 };
     ret = ff_bsf_get_packet_ref(ctx, &in_pkt);
     if (ret == AVERROR_EOF) {
         av_packet_unref(&in_pkt);

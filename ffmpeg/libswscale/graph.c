@@ -38,6 +38,17 @@
 #include "graph.h"
 #include "ops.h"
 
+int ff_sws_pass_aligned_width(const SwsPass *pass, int width)
+{
+    if (!pass)
+        return width;
+
+    size_t aligned_w = width;
+    aligned_w = FFALIGN(aligned_w, pass->output->width_align);
+    aligned_w += pass->output->width_pad;
+    return aligned_w <= INT_MAX ? aligned_w : width;
+}
+
 /* Allocates one buffer per plane */
 static int frame_alloc_planes(AVFrame *dst)
 {
@@ -151,8 +162,9 @@ int ff_sws_graph_add_pass(SwsGraph *graph, enum AVPixelFormat fmt,
     }
 
     /* Align output buffer to include extra slice padding */
-    pass->output->width  = pass->width;
     pass->output->height = pass->slice_h * pass->num_slices;
+    pass->output->width  = pass->width;
+    pass->output->width_align = 1;
 
     ret = av_dynarray_add_nofree(&graph->passes, &graph->num_passes, pass);
     if (ret < 0)
@@ -553,11 +565,75 @@ static int add_legacy_sws_pass(SwsGraph *graph, const SwsFormat *src,
     return init_legacy_subpass(graph, sws, input, output);
 }
 
-/*********************
- * Format conversion *
- *********************/
+/*********************************
+ * Format conversion and scaling *
+ *********************************/
 
 #if CONFIG_UNSTABLE
+static SwsScaler get_scaler_fallback(SwsContext *ctx)
+{
+    if (ctx->scaler != SWS_SCALE_AUTO)
+        return ctx->scaler;
+
+    /* Backwards compatibility with legacy flags API */
+    if (ctx->flags & SWS_BILINEAR) {
+        return SWS_SCALE_BILINEAR;
+    } else if (ctx->flags & (SWS_BICUBIC | SWS_BICUBLIN)) {
+        return SWS_SCALE_BICUBIC;
+    } else if (ctx->flags & SWS_POINT) {
+        return SWS_SCALE_POINT;
+    } else if (ctx->flags & SWS_AREA) {
+        return SWS_SCALE_AREA;
+    } else if (ctx->flags & SWS_GAUSS) {
+        return SWS_SCALE_GAUSSIAN;
+    } else if (ctx->flags & SWS_SINC) {
+        return SWS_SCALE_SINC;
+    } else if (ctx->flags & SWS_LANCZOS) {
+        return SWS_SCALE_LANCZOS;
+    } else if (ctx->flags & SWS_SPLINE) {
+        return SWS_SCALE_SPLINE;
+    } else {
+        return SWS_SCALE_AUTO;
+    }
+}
+
+static int add_filter(SwsContext *ctx, SwsPixelType type, SwsOpList *ops,
+                      SwsOpType filter, int src_size, int dst_size)
+{
+    if (src_size == dst_size)
+        return 0; /* no-op */
+
+    SwsFilterParams params = {
+        .scaler   = get_scaler_fallback(ctx),
+        .src_size = src_size,
+        .dst_size = dst_size,
+    };
+
+    for (int i = 0; i < SWS_NUM_SCALER_PARAMS; i++)
+        params.scaler_params[i] = ctx->scaler_params[i];
+
+    SwsFilterWeights *kernel;
+    int ret = ff_sws_filter_generate(ctx, &params, &kernel);
+    if (ret == AVERROR(ENOTSUP)) {
+        /* Filter size exceeds limit; cascade with geometric mean size */
+        int mean = sqrt((int64_t) src_size * dst_size);
+        if (mean == src_size || mean == dst_size)
+            return AVERROR_BUG; /* sanity, prevent infinite loop */
+        ret = add_filter(ctx, type, ops, filter, src_size, mean);
+        if (ret < 0)
+            return ret;
+        return add_filter(ctx, type, ops, filter, mean, dst_size);
+    } else if (ret < 0) {
+        return ret;
+    }
+
+    return ff_sws_op_list_append(ops, &(SwsOp) {
+        .type = type,
+        .op   = filter,
+        .filter.kernel = kernel,
+    });
+}
+
 static int add_convert_pass(SwsGraph *graph, const SwsFormat *src,
                             const SwsFormat *dst, SwsPass *input,
                             SwsPass **output)
@@ -570,10 +646,6 @@ static int add_convert_pass(SwsGraph *graph, const SwsFormat *src,
 
     /* Mark the entire new ops infrastructure as experimental for now */
     if (!(ctx->flags & SWS_UNSTABLE))
-        goto fail;
-
-    /* The new format conversion layer cannot scale for now */
-    if (src->width != dst->width || src->height != dst->height)
         goto fail;
 
     /* The new code does not yet support alpha blending */
@@ -593,6 +665,19 @@ static int add_convert_pass(SwsGraph *graph, const SwsFormat *src,
     ret = ff_sws_decode_colors(ctx, type, ops, src, &graph->incomplete);
     if (ret < 0)
         goto fail;
+
+    /**
+     * Always perform horizontal scaling first, since it's much more likely to
+     * benefit from small integer optimizations; we should maybe flip the order
+     * here if we're downscaling the vertical resolution by a lot, though.
+     */
+    ret = add_filter(ctx, type, ops, SWS_OP_FILTER_H, src->width, dst->width);
+    if (ret < 0)
+        goto fail;
+    ret = add_filter(ctx, type, ops, SWS_OP_FILTER_V, src->height, dst->height);
+    if (ret < 0)
+        goto fail;
+
     ret = ff_sws_encode_colors(ctx, type, ops, src, dst, &graph->incomplete);
     if (ret < 0)
         goto fail;
@@ -806,6 +891,13 @@ int ff_sws_graph_create(SwsContext *ctx, const SwsFormat *dst, const SwsFormat *
 error:
     ff_sws_graph_free(&graph);
     return ret;
+}
+
+void ff_sws_graph_rollback(SwsGraph *graph, int since_idx)
+{
+    for (int i = since_idx; i < graph->num_passes; i++)
+        pass_free(graph->passes[i]);
+    graph->num_passes = since_idx;
 }
 
 void ff_sws_graph_free(SwsGraph **pgraph)

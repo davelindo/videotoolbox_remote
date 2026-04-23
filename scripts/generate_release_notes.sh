@@ -10,12 +10,34 @@ cd "${repo_root}"
 
 repo_slug="${REPO_SLUG:-${GITHUB_REPOSITORY:-davelindo/videotoolbox_remote}}"
 doc_ref="${DOC_REF:-main}"
+nightly_asset_commit="${NIGHTLY_ASSET_COMMIT:-}"
+nightly_head_commit="${NIGHTLY_HEAD_COMMIT:-}"
+nightly_head_tag="${NIGHTLY_HEAD_TAG:-nightly-main}"
+nightly_assets_stale="${NIGHTLY_ASSETS_STALE:-false}"
 
 readme_url="https://github.com/${repo_slug}/blob/${doc_ref}/README.md"
 getting_started_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/getting-started.md"
 security_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/security.md"
 architecture_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/architecture.md"
 changelog_url="https://github.com/${repo_slug}/blob/${doc_ref}/CHANGELOG.md"
+
+short_commit() {
+  local commit="$1"
+  if [[ -z "${commit}" ]]; then
+    return 0
+  fi
+  printf '%s' "${commit:0:12}"
+}
+
+commit_link() {
+  local commit="$1"
+  if [[ -z "${commit}" ]]; then
+    return 0
+  fi
+  local short
+  short="$(short_commit "${commit}")"
+  printf '[`%s`](https://github.com/%s/commit/%s)' "${short}" "${repo_slug}" "${commit}"
+}
 
 extract_changelog_section() {
   local wanted_tag="$1"
@@ -25,6 +47,35 @@ extract_changelog_section() {
     in_section && $0 ~ "^## \\[" { exit }
     in_section { print }
   ' CHANGELOG.md
+}
+
+emit_nightly_changes_section() {
+  if [[ "${nightly_assets_stale}" == "true" && -n "${nightly_asset_commit}" && -n "${nightly_head_commit}" ]]; then
+    cat <<EOF
+
+## What changed in this build?
+
+No artifact-affecting changes were detected since the last nightly build.
+
+- Attached binaries were last rebuilt from $(commit_link "${nightly_asset_commit}").
+- Latest \`main\` commit observed by automation is $(commit_link "${nightly_head_commit}") via the \`${nightly_head_tag}\` tag.
+- The \`nightly\` release tag remains pinned to the last built commit so its source archives stay aligned with the published binaries.
+EOF
+  elif [[ -n "${nightly_asset_commit}" ]]; then
+    cat <<EOF
+
+## What changed in this build?
+
+This nightly was rebuilt from $(commit_link "${nightly_asset_commit}"). For release-by-release summaries, see the [changelog](${changelog_url}).
+EOF
+  else
+    cat <<EOF
+
+## What changed in this build?
+
+This nightly tracks the latest changes on \`main\`. For release-by-release summaries, see the [changelog](${changelog_url}).
+EOF
+  fi
 }
 
 emit_body() {
@@ -66,12 +117,7 @@ tar -xzf ffmpeg-linux-x86_64.tar.gz -C ffmpeg-client
 EOF
 
   if [[ "${tag}" == "nightly" ]]; then
-    cat <<EOF
-
-## What changed in this build?
-
-This nightly tracks the latest changes on \`main\`. For release-by-release summaries, see the [changelog](${changelog_url}).
-EOF
+    emit_nightly_changes_section
   else
     local changelog_section
     changelog_section="$(extract_changelog_section "${tag}")"

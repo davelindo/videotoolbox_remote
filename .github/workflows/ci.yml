@@ -13,7 +13,7 @@ on:
     - cron: "0 6 * * *"
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   FFMPEG_CONFIGURE_FLAGS: >-
@@ -47,63 +47,40 @@ jobs:
     name: Detect changes
     runs-on: ubuntu-latest
     outputs:
-      ffmpeg: ${{ github.event_name == 'schedule' && steps.filter_schedule.outputs.ffmpeg || github.event_name == 'schedule' && steps.filter_schedule_fallback.outputs.ffmpeg || steps.filter.outputs.ffmpeg }}
-      vtremoted: ${{ github.event_name == 'schedule' && steps.filter_schedule.outputs.vtremoted || github.event_name == 'schedule' && steps.filter_schedule_fallback.outputs.vtremoted || steps.filter.outputs.vtremoted }}
-      obs_plugin: ${{ github.event_name == 'schedule' && steps.filter_schedule.outputs.obs_plugin || github.event_name == 'schedule' && steps.filter_schedule_fallback.outputs.obs_plugin || steps.filter.outputs.obs_plugin }}
-      docs: ${{ github.event_name == 'schedule' && steps.filter_schedule.outputs.docs || github.event_name == 'schedule' && steps.filter_schedule_fallback.outputs.docs || steps.filter.outputs.docs }}
-      ci: ${{ github.event_name == 'schedule' && steps.filter_schedule.outputs.ci || github.event_name == 'schedule' && steps.filter_schedule_fallback.outputs.ci || steps.filter.outputs.ci }}
+      ffmpeg: ${{ github.event_name == 'schedule' && steps.schedule_changes.outputs.ffmpeg || steps.filter.outputs.ffmpeg }}
+      vtremoted: ${{ github.event_name == 'schedule' && steps.schedule_changes.outputs.vtremoted || steps.filter.outputs.vtremoted }}
+      obs_plugin: ${{ github.event_name == 'schedule' && steps.schedule_changes.outputs.obs_plugin || steps.filter.outputs.obs_plugin }}
+      docs: ${{ github.event_name == 'schedule' && steps.schedule_changes.outputs.docs || steps.filter.outputs.docs }}
+      ci: ${{ github.event_name == 'schedule' && steps.schedule_changes.outputs.ci || steps.filter.outputs.ci }}
+      nightly_exists: ${{ steps.schedule_changes.outputs.nightly_exists }}
+      nightly_commit: ${{ steps.schedule_changes.outputs.nightly_commit }}
+      nightly_release_has_assets: ${{ steps.nightly_release.outputs.has_assets }}
       publishable: ${{ steps.publishable.outputs.value }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           fetch-tags: true
-      - name: Check for nightly tag
-        id: nightly_tag
+      - name: Run schedule change classifier tests
+        run: |
+          bash tests/test_nightly_change_classifier.sh
+      - name: Classify scheduled changes
+        id: schedule_changes
         if: github.event_name == 'schedule'
         run: |
-          if git rev-parse -q --verify "refs/tags/nightly"; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-      - uses: dorny/paths-filter@v3
-        id: filter_schedule
-        if: github.event_name == 'schedule' && steps.nightly_tag.outputs.exists == 'true'
-        with:
-          base: nightly
-          ref: ${{ github.sha }}
-          filters: |
-            ffmpeg:
-              - 'ffmpeg/**'
-              - 'tests/integration/**'
-            vtremoted:
-              - 'vtremoted/**'
-            obs_plugin:
-              - 'obs-plugin/**'
-              - 'tests/integration/run_obs_plugin_client_mock.sh'
-              - 'tests/integration/run_obs_plugin_integration.sh'
-              - 'tests/integration/obs_plugin_client_smoke.cpp'
-              - 'tests/integration/obs_plugin_integration.cpp'
-              - 'tests/integration/obs_plugin_test_stubs/**'
-              - 'tests/integration/mock_vtremoted/mock_vtremoted.py'
-              - 'tests/integration/run_all.sh'
-              - 'tests/integration/README.md'
-              - 'Makefile'
-            docs:
-              - 'docs/**'
-              - 'README.md'
-            ci:
-              - '.github/workflows/ci.yml'
-      - name: Assume changes when nightly tag is missing
-        id: filter_schedule_fallback
-        if: github.event_name == 'schedule' && steps.nightly_tag.outputs.exists != 'true'
+          bash scripts/classify_nightly_changes.sh nightly "${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      - name: Check nightly release assets
+        id: nightly_release
+        if: github.event_name == 'schedule' && steps.schedule_changes.outputs.nightly_exists == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "ffmpeg=true" >> "$GITHUB_OUTPUT"
-          echo "vtremoted=true" >> "$GITHUB_OUTPUT"
-          echo "obs_plugin=true" >> "$GITHUB_OUTPUT"
-          echo "docs=true" >> "$GITHUB_OUTPUT"
-          echo "ci=true" >> "$GITHUB_OUTPUT"
+          asset_count="$(gh release view nightly -R "${GITHUB_REPOSITORY}" --json assets --jq '.assets | length' 2>/dev/null || echo 0)"
+          if [ "${asset_count}" -gt 0 ]; then
+            echo "has_assets=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_assets=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: dorny/paths-filter@v3
         id: filter
         if: github.event_name != 'schedule'
@@ -112,8 +89,10 @@ jobs:
             ffmpeg:
               - 'ffmpeg/**'
               - 'tests/integration/**'
+              - 'Makefile'
             vtremoted:
               - 'vtremoted/**'
+              - 'Makefile'
             obs_plugin:
               - 'obs-plugin/**'
               - 'tests/integration/run_obs_plugin_client_mock.sh'
@@ -134,9 +113,16 @@ jobs:
       - name: Compute publishable changes
         id: publishable
         run: |
-          ffmpeg_changed="${{ github.event_name == 'schedule' && steps.filter_schedule.outputs.ffmpeg || github.event_name == 'schedule' && steps.filter_schedule_fallback.outputs.ffmpeg || steps.filter.outputs.ffmpeg }}"
-          vtremoted_changed="${{ github.event_name == 'schedule' && steps.filter_schedule.outputs.vtremoted || github.event_name == 'schedule' && steps.filter_schedule_fallback.outputs.vtremoted || steps.filter.outputs.vtremoted }}"
-          if [ "${ffmpeg_changed}" = "true" ] || [ "${vtremoted_changed}" = "true" ]; then
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then
+            publishable_changed="${{ steps.schedule_changes.outputs.publishable }}"
+            nightly_exists="${{ steps.schedule_changes.outputs.nightly_exists }}"
+            nightly_assets_ok="${{ steps.nightly_release.outputs.has_assets }}"
+            if [ "${nightly_exists}" != "true" ] || [ "${nightly_assets_ok}" != "true" ] || [ "${publishable_changed}" = "true" ]; then
+              echo "value=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "value=false" >> "$GITHUB_OUTPUT"
+            fi
+          elif [ "${{ steps.filter.outputs.ffmpeg }}" = "true" ] || [ "${{ steps.filter.outputs.vtremoted }}" = "true" ]; then
             echo "value=true" >> "$GITHUB_OUTPUT"
           else
             echo "value=false" >> "$GITHUB_OUTPUT"
@@ -357,12 +343,20 @@ jobs:
           ./ffmpeg/ffmpeg -hide_banner -filters | grep -Eq '(^|[[:space:]])psnr([[:space:]]|$)'
           ./ffmpeg/ffmpeg -hide_banner -filters | grep -Eq '(^|[[:space:]])ssim([[:space:]]|$)'
           ./ffmpeg/ffmpeg -hide_banner -filters | grep -Eq '(^|[[:space:]])libvmaf([[:space:]]|$)'
+          ./ffmpeg/ffmpeg -hide_banner -encoders | grep -Eq '(^|[[:space:]])h264_videotoolbox_remote([[:space:]]|$)'
+          ./ffmpeg/ffmpeg -hide_banner -encoders | grep -Eq '(^|[[:space:]])hevc_videotoolbox_remote([[:space:]]|$)'
+          ./ffmpeg/ffmpeg -hide_banner -decoders | grep -Eq '(^|[[:space:]])h264_videotoolbox_remote([[:space:]]|$)'
+          ./ffmpeg/ffmpeg -hide_banner -decoders | grep -Eq '(^|[[:space:]])hevc_videotoolbox_remote([[:space:]]|$)'
+          ./ffmpeg/ffmpeg -hide_banner -bsfs | grep -Eq '(^|[[:space:]])vtremote_transcode([[:space:]]|$)'
 
       - name: Run mock integration tests (Linux)
         if: matrix.label == 'linux-x86_64'
         run: |
           bash tests/integration/run_mock_roundtrip.sh
           bash tests/integration/run_mock_decode.sh
+          bash tests/integration/run_mock_pts_dts_semantics.sh
+          bash tests/integration/run_mock_transcode_pts_dts_semantics.sh
+          bash tests/integration/run_mock_transcode_hvc1_hdr_signaling.sh
 
       - name: Package ffmpeg (Linux/macOS)
         if: runner.os != 'Windows'
@@ -429,13 +423,46 @@ jobs:
         run: |
           make test-obs-plugin
 
+  retag-nightly:
+    name: Refresh nightly metadata
+    needs: changes
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' && needs.changes.outputs.publishable != 'true'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Refresh nightly-main tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f nightly-main "${GITHUB_SHA}"
+          git push --force origin "refs/tags/nightly-main"
+      - name: Update nightly release body
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NIGHTLY_ASSET_COMMIT: ${{ needs.changes.outputs.nightly_commit }}
+          NIGHTLY_HEAD_COMMIT: ${{ github.sha }}
+          NIGHTLY_HEAD_TAG: nightly-main
+          NIGHTLY_ASSETS_STALE: "true"
+        run: |
+          bash scripts/apply_release_notes.sh nightly "${GITHUB_REPOSITORY}"
+
   publish-assets:
     name: Publish nightly / release assets
     runs-on: ubuntu-latest
     needs: [changes, swift-macos-arm64, swift-macos-x86_64, ffmpeg-build]
     if: github.event_name != 'pull_request' && ((github.event_name == 'schedule' && needs.changes.outputs.publishable == 'true') || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || startsWith(github.ref, 'refs/tags/'))
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -475,8 +502,18 @@ jobs:
           allowUpdates: true
           artifacts: "release_flat/*"
           artifactErrorsFailBuild: true
+      - name: Refresh nightly-main tag
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f nightly-main "${GITHUB_SHA}"
+          git push --force origin "refs/tags/nightly-main"
       - name: Update release body
         env:
           GH_TOKEN: ${{ github.token }}
+          NIGHTLY_ASSET_COMMIT: ${{ github.sha }}
+          NIGHTLY_HEAD_COMMIT: ${{ github.sha }}
+          NIGHTLY_HEAD_TAG: nightly-main
         run: |
           bash scripts/apply_release_notes.sh "${RELEASE_TAG}" "${GITHUB_REPOSITORY}"

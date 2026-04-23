@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format follows Keep a Changelog principles, using repository release tags (`v*`) in reverse chronological order.
 The non-version `nightly` tag is intentionally excluded.
 
+## [v0.3.2] - 2026-04-23
+
+### Changed
+- Rebased the vendored `ffmpeg/` subtree to upstream `master` snapshot `08f56d4898e` (from `9c63742425a`).
+- Aligned the remote H.264 and HEVC encoder descriptors with upstream wrapper metadata expectations.
+
+### Fixed
+- Replaced deprecated `av_init_packet()` usage in `vtremote_transcode` with packet zero-initialization compatible with newer FFmpeg.
+
+### CI
+- Scheduled nightly runs now rebuild only when artifact-affecting inputs changed or the existing nightly assets are missing.
+- Added a `nightly-main` tag that tracks the latest `main` commit separately from the built `nightly` artifact tag, keeping nightly source archives aligned with the published binaries.
+- Expanded FFmpeg CI smoke coverage for the remote codecs and `vtremote_transcode`, and added Linux mock regressions for PTS/DTS and HDR/hvc1 transcode behavior.
+
 ## [v0.3.1] - 2026-04-09
 
 ### Added
