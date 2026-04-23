@@ -1,0 +1,212 @@
+name: FFmpeg Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        type: boolean
+        description: "Force the sync workflow to rerun even if the tracked upstream SHA appears unchanged"
+        default: false
+  schedule:
+    - cron: "0 9 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ffmpeg-sync
+  cancel-in-progress: false
+
+env:
+  FFMPEG_UPSTREAM_URL: https://github.com/FFmpeg/FFmpeg.git
+  FFMPEG_UPSTREAM_REF: master
+
+jobs:
+  sync:
+    name: Sync vendored FFmpeg subtree
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require default branch workflow context
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          expected_suffix="@refs/heads/${DEFAULT_BRANCH}"
+          if [[ "${WORKFLOW_REF}" != *"${expected_suffix}" ]]; then
+            echo "ERROR: ffmpeg sync must run from the ${DEFAULT_BRANCH} workflow definition, got ${WORKFLOW_REF}" >&2
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Run release helper tests
+        run: |
+          bash tests/test_is_semver_tag.sh
+          bash tests/test_ffmpeg_sync_subtree_shape.sh
+          bash tests/test_next_patch_release.sh
+          bash tests/test_parse_ffmpeg_sync_commit.sh
+          bash tests/test_update_changelog_for_ffmpeg_sync.sh
+
+      - name: Load subtree sync metadata
+        id: metadata
+        run: |
+          metadata_commit="$(sed -n 's/^UPSTREAM_COMMIT=\"\([0-9a-f]\{12,40\}\)\"$/\1/p' ffmpeg/.subtree-sync.env)"
+          metadata_split="$(sed -n 's/^SUBTREE_SPLIT=\"\([0-9a-f]\{12,40\}\)\"$/\1/p' ffmpeg/.subtree-sync.env)"
+          if [[ -z "${metadata_commit}" ]]; then
+            echo "ERROR: failed to parse UPSTREAM_COMMIT from ffmpeg/.subtree-sync.env" >&2
+            exit 1
+          fi
+          if [[ -z "${metadata_split}" ]]; then
+            echo "ERROR: failed to parse SUBTREE_SPLIT from ffmpeg/.subtree-sync.env" >&2
+            exit 1
+          fi
+
+          latest_subtree_commit="$(git log --all --grep='git-subtree-dir: ffmpeg' --format=%H -n1)"
+          if [[ -z "${latest_subtree_commit}" ]]; then
+            echo "ERROR: no recorded ffmpeg subtree split found in git history" >&2
+            exit 1
+          fi
+          latest_history_split="$(git show -s --format=%B "${latest_subtree_commit}" | sed -n 's/^git-subtree-split: //p' | tail -n1)"
+          if [[ ! "${latest_history_split}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: latest ffmpeg subtree commit lacks a valid git-subtree-split trailer" >&2
+            exit 1
+          fi
+          if [[ "${latest_history_split:0:${#metadata_split}}" != "${metadata_split}" ]]; then
+            echo "ERROR: ffmpeg subtree history split ${latest_history_split} does not match metadata SUBTREE_SPLIT ${metadata_split}" >&2
+            exit 1
+          fi
+
+          printf 'upstream_commit=%s\n' "${metadata_commit}" >> "$GITHUB_OUTPUT"
+          printf 'subtree_split=%s\n' "${metadata_split}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve latest upstream SHA
+        id: upstream
+        run: |
+          remote_sha="$(git ls-remote "${FFMPEG_UPSTREAM_URL}" "refs/heads/${FFMPEG_UPSTREAM_REF}" | awk '{print $1}')"
+          if [[ ! "${remote_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: failed to resolve upstream SHA for ${FFMPEG_UPSTREAM_URL} ${FFMPEG_UPSTREAM_REF}" >&2
+            exit 1
+          fi
+          printf 'full_sha=%s\n' "${remote_sha}" >> "$GITHUB_OUTPUT"
+          printf 'short_sha=%s\n' "${remote_sha:0:12}" >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether a sync is needed
+        id: decision
+        env:
+          FORCE_SYNC: ${{ github.event_name == 'workflow_dispatch' && inputs.force && 'true' || 'false' }}
+          CURRENT_SHA: ${{ steps.metadata.outputs.upstream_commit }}
+          REMOTE_SHORT_SHA: ${{ steps.upstream.outputs.short_sha }}
+        run: |
+          if [[ "${FORCE_SYNC}" == "true" || "${CURRENT_SHA:0:12}" != "${REMOTE_SHORT_SHA}" ]]; then
+            echo "needs_sync=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "needs_sync=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Stop when upstream is unchanged
+        if: steps.decision.outputs.needs_sync != 'true'
+        run: |
+          echo "No upstream FFmpeg change detected; exiting without commit."
+
+      - name: Configure git author
+        if: steps.decision.outputs.needs_sync == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Compute next release tag
+        if: steps.decision.outputs.needs_sync == 'true'
+        id: version
+        run: |
+          next_tag="$(bash scripts/next_patch_release.sh)"
+          printf 'next_tag=%s\n' "${next_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Create FFmpeg sync candidate commit
+        if: steps.decision.outputs.needs_sync == 'true'
+        id: candidate
+        env:
+          OLD_SHA: ${{ steps.metadata.outputs.upstream_commit }}
+          REMOTE_FULL_SHA: ${{ steps.upstream.outputs.full_sha }}
+          NEXT_TAG: ${{ steps.version.outputs.next_tag }}
+        run: |
+          base_sha="$(git rev-parse HEAD)"
+          before_pull_head="${base_sha}"
+          candidate_branch="automation/ffmpeg-sync/${NEXT_TAG}-${GITHUB_RUN_ID}"
+          git subtree pull --prefix=ffmpeg "${FFMPEG_UPSTREAM_URL}" "${REMOTE_FULL_SHA}" --squash
+          after_pull_head="$(git rev-parse HEAD)"
+
+          if [[ "${after_pull_head}" == "${before_pull_head}" ]]; then
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          subtree_body="$(git show -s --format=%B "${after_pull_head}")"
+          squash_parent="$(git rev-parse "${after_pull_head}^2")"
+          actual_split="$(git show -s --format=%B "${squash_parent}" | sed -n 's/^git-subtree-split: //p' | tail -n1)"
+          if [[ "${actual_split}" != "${REMOTE_FULL_SHA}" ]]; then
+            echo "ERROR: pulled subtree split ${actual_split:-<missing>} does not match resolved upstream ${REMOTE_FULL_SHA}" >&2
+            exit 1
+          fi
+          new_sha="${actual_split:0:12}"
+
+          {
+            printf 'UPSTREAM_COMMIT="%s"\n' "${actual_split}"
+            printf 'SUBTREE_SPLIT="%s"\n' "${actual_split}"
+          } > ffmpeg/.subtree-sync.env
+
+          FFMPEG_UPSTREAM_REF="${FFMPEG_UPSTREAM_REF}" bash scripts/update_changelog_for_ffmpeg_sync.sh "${NEXT_TAG}" "${OLD_SHA}" "${new_sha}"
+          git add ffmpeg/.subtree-sync.env CHANGELOG.md ffmpeg
+          message_file="$(mktemp)"
+          trap 'rm -f "${message_file}"' EXIT
+          {
+            printf 'ffmpeg-sync: update subtree to %s for %s\n\n' "${new_sha}" "${NEXT_TAG}"
+            printf '%s\n' "${subtree_body}"
+            printf '\nFFmpeg-Sync-Run-ID: %s\n' "${GITHUB_RUN_ID}"
+            printf 'FFmpeg-Sync-Tag: %s\n' "${NEXT_TAG}"
+            printf 'FFmpeg-Sync-Base-SHA: %s\n' "${base_sha}"
+          } > "${message_file}"
+          git commit --amend -F "${message_file}"
+          candidate_sha="$(git rev-parse HEAD)"
+
+          mkdir -p sync_manifest
+          {
+            printf 'sync_run_id=%s\n' "${GITHUB_RUN_ID}"
+            printf 'candidate_branch=%s\n' "${candidate_branch}"
+            printf 'candidate_sha=%s\n' "${candidate_sha}"
+            printf 'base_sha=%s\n' "${base_sha}"
+            printf 'target_tag=%s\n' "${NEXT_TAG}"
+            printf 'upstream_commit=%s\n' "${new_sha}"
+            printf 'upstream_full_sha=%s\n' "${actual_split}"
+            printf 'subtree_parent=%s\n' "${squash_parent}"
+          } > sync_manifest/ffmpeg-sync-manifest.env
+
+          printf 'created=true\n' >> "$GITHUB_OUTPUT"
+          printf 'candidate_branch=%s\n' "${candidate_branch}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload FFmpeg sync manifest
+        if: steps.candidate.outputs.created == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-sync-manifest-${{ github.run_id }}
+          path: sync_manifest/ffmpeg-sync-manifest.env
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Push FFmpeg sync candidate branch
+        if: steps.candidate.outputs.created == 'true'
+        env:
+          PUSH_TOKEN: ${{ secrets.AUTOMATION_BRANCH_PUSH_TOKEN }}
+          CANDIDATE_BRANCH: ${{ steps.candidate.outputs.candidate_branch }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          if [[ -z "${PUSH_TOKEN}" ]]; then
+            echo "ERROR: missing required secret AUTOMATION_BRANCH_PUSH_TOKEN" >&2
+            exit 1
+          fi
+
+          remote_url="https://x-access-token:${PUSH_TOKEN}@github.com/${REPOSITORY}.git"
+          git push "${remote_url}" "HEAD:refs/heads/${CANDIDATE_BRANCH}"

@@ -1,0 +1,280 @@
+name: Promote FFmpeg Sync
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: promote-ffmpeg-sync-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Promote validated FFmpeg sync
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && startsWith(github.event.workflow_run.head_branch, 'automation/ffmpeg-sync/')
+    runs-on: ubuntu-latest
+    environment: ffmpeg-sync-promote
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Inspect candidate commit provenance
+        id: inspect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          parser_output="$(bash scripts/parse_ffmpeg_sync_commit.sh "${HEAD_SHA}")"
+          upstream_commit=
+          target_tag=
+          sync_run_id=
+          base_sha=
+          while IFS='=' read -r key value; do
+            case "${key}" in
+              upstream_commit) upstream_commit="${value}" ;;
+              target_tag) target_tag="${value}" ;;
+              sync_run_id) sync_run_id="${value}" ;;
+              base_sha) base_sha="${value}" ;;
+            esac
+          done <<< "${parser_output}"
+          for required in upstream_commit target_tag sync_run_id base_sha; do
+            if [[ -z "${!required}" ]]; then
+              echo "ERROR: parser did not output required field ${required}" >&2
+              exit 1
+            fi
+          done
+
+          expected_branch="automation/ffmpeg-sync/${target_tag}-${sync_run_id}"
+          if [[ "${HEAD_BRANCH}" != "${expected_branch}" ]]; then
+            echo "ERROR: candidate branch mismatch: expected ${expected_branch}, got ${HEAD_BRANCH}" >&2
+            exit 1
+          fi
+
+          artifact_id="$(gh api "repos/${REPOSITORY}/actions/runs/${sync_run_id}/artifacts?per_page=100" --jq ".artifacts[] | select(.name == \"ffmpeg-sync-manifest-${sync_run_id}\" and .expired == false) | .id" | head -n1)"
+          if [[ -z "${artifact_id}" ]]; then
+            echo "ERROR: sync run ${sync_run_id} did not publish the expected manifest artifact" >&2
+            exit 1
+          fi
+          mkdir -p sync_manifest
+          gh api "repos/${REPOSITORY}/actions/artifacts/${artifact_id}/zip" > sync_manifest.zip
+          unzip -q sync_manifest.zip -d sync_manifest
+
+          manifest_file="sync_manifest/ffmpeg-sync-manifest.env"
+          if [[ ! -f "${manifest_file}" ]]; then
+            echo "ERROR: sync manifest file missing from artifact" >&2
+            exit 1
+          fi
+          manifest_sync_run_id=
+          manifest_candidate_branch=
+          manifest_candidate_sha=
+          manifest_base_sha=
+          manifest_target_tag=
+          manifest_upstream_commit=
+          manifest_upstream_full_sha=
+          manifest_subtree_parent=
+          while IFS='=' read -r key value; do
+            case "${key}" in
+              sync_run_id) manifest_sync_run_id="${value}" ;;
+              candidate_branch) manifest_candidate_branch="${value}" ;;
+              candidate_sha) manifest_candidate_sha="${value}" ;;
+              base_sha) manifest_base_sha="${value}" ;;
+              target_tag) manifest_target_tag="${value}" ;;
+              upstream_commit) manifest_upstream_commit="${value}" ;;
+              upstream_full_sha) manifest_upstream_full_sha="${value}" ;;
+              subtree_parent) manifest_subtree_parent="${value}" ;;
+              "") ;;
+              *)
+                echo "ERROR: unexpected manifest key: ${key}" >&2
+                exit 1
+                ;;
+            esac
+          done < "${manifest_file}"
+          for required in manifest_sync_run_id manifest_candidate_branch manifest_candidate_sha manifest_base_sha manifest_target_tag manifest_upstream_commit manifest_upstream_full_sha manifest_subtree_parent; do
+            if [[ -z "${!required}" ]]; then
+              echo "ERROR: manifest did not contain required field ${required}" >&2
+              exit 1
+            fi
+          done
+          if [[ "${manifest_sync_run_id}" != "${sync_run_id}" || "${manifest_candidate_branch}" != "${HEAD_BRANCH}" || "${manifest_candidate_sha}" != "${HEAD_SHA}" || "${manifest_base_sha}" != "${base_sha}" || "${manifest_target_tag}" != "${target_tag}" || "${manifest_upstream_commit}" != "${upstream_commit}" ]]; then
+            echo "ERROR: sync manifest does not match candidate commit/run" >&2
+            exit 1
+          fi
+
+          run_info="$(gh api "repos/${REPOSITORY}/actions/runs/${sync_run_id}" --jq '{name: .name, event: .event, head_branch: .head_branch, head_sha: .head_sha, conclusion: .conclusion}')"
+          run_name="$(printf '%s\n' "${run_info}" | jq -r '.name')"
+          run_event="$(printf '%s\n' "${run_info}" | jq -r '.event')"
+          run_head_branch="$(printf '%s\n' "${run_info}" | jq -r '.head_branch')"
+          run_head_sha="$(printf '%s\n' "${run_info}" | jq -r '.head_sha')"
+          run_conclusion="$(printf '%s\n' "${run_info}" | jq -r '.conclusion')"
+
+          if [[ "${run_name}" != "FFmpeg Sync" ]]; then
+            echo "ERROR: sync run ${sync_run_id} was not produced by the FFmpeg Sync workflow" >&2
+            exit 1
+          fi
+          if [[ "${run_event}" != "schedule" && "${run_event}" != "workflow_dispatch" ]]; then
+            echo "ERROR: sync run ${sync_run_id} was triggered by an unexpected event" >&2
+            exit 1
+          fi
+          if [[ "${run_head_branch}" != "${DEFAULT_BRANCH}" ]]; then
+            echo "ERROR: sync run ${sync_run_id} did not originate from ${DEFAULT_BRANCH}" >&2
+            exit 1
+          fi
+          if [[ "${run_conclusion}" != "success" ]]; then
+            echo "ERROR: sync run ${sync_run_id} did not succeed" >&2
+            exit 1
+          fi
+          if [[ "${run_head_sha}" != "${base_sha}" ]]; then
+            echo "ERROR: sync run ${sync_run_id} head SHA did not match trailer base SHA ${base_sha}" >&2
+            exit 1
+          fi
+
+          read -r first_parent second_parent extra_parent <<< "$(git show -s --format=%P "${HEAD_SHA}")"
+          if [[ -z "${first_parent}" || -z "${second_parent}" || -n "${extra_parent}" ]]; then
+            echo "ERROR: candidate commit must be a two-parent subtree merge" >&2
+            exit 1
+          fi
+          if [[ "${first_parent}" != "${base_sha}" ]]; then
+            echo "ERROR: candidate first parent mismatch: expected ${base_sha}, got ${first_parent}" >&2
+            exit 1
+          fi
+          if [[ "${second_parent}" != "${manifest_subtree_parent}" ]]; then
+            echo "ERROR: candidate subtree parent does not match sync manifest" >&2
+            exit 1
+          fi
+          subtree_body="$(git show -s --format=%B "${second_parent}")"
+          subtree_dir="$(printf '%s\n' "${subtree_body}" | sed -n 's/^git-subtree-dir: //p' | tail -n1)"
+          subtree_split="$(printf '%s\n' "${subtree_body}" | sed -n 's/^git-subtree-split: //p' | tail -n1)"
+          if [[ "${subtree_dir}" != "ffmpeg" ]]; then
+            echo "ERROR: subtree parent does not record git-subtree-dir: ffmpeg" >&2
+            exit 1
+          fi
+          if [[ "${subtree_split}" != "${manifest_upstream_full_sha}" ]]; then
+            echo "ERROR: subtree split ${subtree_split:-<missing>} does not match manifest upstream ${manifest_upstream_full_sha}" >&2
+            exit 1
+          fi
+
+          metadata_commit="$(sed -n 's/^UPSTREAM_COMMIT=\"\([0-9a-f]\{12,40\}\)\"$/\1/p' ffmpeg/.subtree-sync.env)"
+          metadata_split="$(sed -n 's/^SUBTREE_SPLIT=\"\([0-9a-f]\{12,40\}\)\"$/\1/p' ffmpeg/.subtree-sync.env)"
+          if [[ "${metadata_commit:0:12}" != "${upstream_commit}" ]]; then
+            echo "ERROR: metadata commit mismatch: expected ${upstream_commit}, got ${metadata_commit:-<missing>}" >&2
+            exit 1
+          fi
+          if [[ "${metadata_split}" != "${manifest_upstream_full_sha}" ]]; then
+            echo "ERROR: metadata subtree split mismatch: expected ${manifest_upstream_full_sha}, got ${metadata_split:-<missing>}" >&2
+            exit 1
+          fi
+
+          changed_paths="$(git diff --name-only "${base_sha}..${HEAD_SHA}")"
+          if [[ -z "${changed_paths}" ]]; then
+            echo "ERROR: promotion candidate has no changes relative to ${base_sha}" >&2
+            exit 1
+          fi
+          saw_metadata=false
+          saw_ffmpeg_content=false
+          while IFS= read -r path; do
+            [[ -z "${path}" ]] && continue
+            case "${path}" in
+              ffmpeg/.subtree-sync.env)
+                saw_metadata=true
+                ;;
+              ffmpeg/*)
+                saw_ffmpeg_content=true
+                ;;
+              CHANGELOG.md)
+                ;;
+              *)
+                echo "ERROR: ineligible promotion candidate touched unexpected path: ${path}" >&2
+                exit 1
+                ;;
+            esac
+          done <<< "${changed_paths}"
+          if [[ "${saw_metadata}" != "true" || "${saw_ffmpeg_content}" != "true" ]]; then
+            echo "ERROR: promotion candidate must update ffmpeg metadata and ffmpeg content" >&2
+            exit 1
+          fi
+
+          readonly_remote_url="https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git"
+          git fetch --tags "${readonly_remote_url}"
+          if git rev-parse -q --verify "refs/tags/${target_tag}" >/dev/null; then
+            echo "ERROR: target tag ${target_tag} already exists" >&2
+            exit 1
+          fi
+          expected_next_tag="$(bash scripts/next_patch_release.sh)"
+          if [[ "${target_tag}" != "${expected_next_tag}" ]]; then
+            echo "ERROR: target tag ${target_tag} is stale; next patch tag is ${expected_next_tag}" >&2
+            exit 1
+          fi
+
+          if ! awk -v tag="${target_tag}" '
+            BEGIN { found = 0 }
+            $0 ~ "^## \\[" tag "\\]" { found = 1 }
+            END { exit found ? 0 : 1 }
+          ' CHANGELOG.md; then
+            echo "ERROR: changelog top-level entry for ${target_tag} not found" >&2
+            exit 1
+          fi
+
+          required_jobs=(
+            "Detect changes"
+            "Swift (vtremoted) macOS arm64"
+            "Swift (vtremoted) macOS x86_64"
+            "FFmpeg (linux-x86_64)"
+            "FFmpeg (windows-x86_64)"
+            "FFmpeg (macos-x86_64)"
+            "FFmpeg (macos-arm64)"
+            "OBS plugin tests (Linux)"
+          )
+          jobs_output="$(gh api --paginate "repos/${REPOSITORY}/actions/runs/${CI_RUN_ID}/jobs?per_page=100" --jq '.jobs[] | [.name, .conclusion] | @tsv')"
+          for required_job in "${required_jobs[@]}"; do
+            if ! printf '%s\n' "${jobs_output}" | awk -F '\t' -v job="${required_job}" '$1 == job && $2 == "success" { found = 1 } END { exit found ? 0 : 1 }'; then
+              echo "ERROR: required CI job did not succeed before promotion: ${required_job}" >&2
+              exit 1
+            fi
+          done
+
+          echo "target_tag=${target_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Promote candidate to main and tag it
+        env:
+          PUSH_TOKEN: ${{ secrets.AUTOMATION_PROMOTE_TOKEN }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REPOSITORY: ${{ github.repository }}
+          TARGET_TAG: ${{ steps.inspect.outputs.target_tag }}
+        run: |
+          if [[ -z "${PUSH_TOKEN}" ]]; then
+            echo "ERROR: missing required secret AUTOMATION_PROMOTE_TOKEN" >&2
+            exit 1
+          fi
+
+          remote_url="https://x-access-token:${PUSH_TOKEN}@github.com/${REPOSITORY}.git"
+          git fetch "${remote_url}" "${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}"
+          if ! git merge-base --is-ancestor "origin/${DEFAULT_BRANCH}" "${HEAD_SHA}"; then
+            echo "ERROR: ${HEAD_SHA} is not a fast-forward of origin/${DEFAULT_BRANCH}" >&2
+            exit 1
+          fi
+
+          remote_branch_sha="$(git ls-remote "${remote_url}" "refs/heads/${HEAD_BRANCH}" | awk '{print $1}')"
+          if [[ "${remote_branch_sha}" != "${HEAD_SHA}" ]]; then
+            echo "ERROR: candidate branch moved before promotion: expected ${HEAD_SHA}, got ${remote_branch_sha:-<missing>}" >&2
+            exit 1
+          fi
+
+          git tag -a "${TARGET_TAG}" "${HEAD_SHA}" -m "${TARGET_TAG}"
+          git push --atomic "${remote_url}" "${HEAD_SHA}:refs/heads/${DEFAULT_BRANCH}" "refs/tags/${TARGET_TAG}"
+          git push "${remote_url}" ":refs/heads/${HEAD_BRANCH}"

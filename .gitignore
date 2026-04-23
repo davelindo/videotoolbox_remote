@@ -4,6 +4,7 @@ PRD.md
 
 # Local media and samples
 test.mov
+.env
 
 # SwiftPM / Xcode
 vtremoted/.build/
