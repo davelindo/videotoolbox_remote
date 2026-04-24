@@ -65,7 +65,7 @@ jobs:
             exit 1
           fi
 
-          latest_subtree_commit="$(git log --all --grep='git-subtree-dir: ffmpeg' --format=%H -n1)"
+          latest_subtree_commit="$(git log HEAD --grep='git-subtree-dir: ffmpeg' --format=%H -n1)"
           if [[ -z "${latest_subtree_commit}" ]]; then
             echo "ERROR: no recorded ffmpeg subtree split found in git history" >&2
             exit 1
