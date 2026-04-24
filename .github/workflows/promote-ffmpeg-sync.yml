@@ -263,6 +263,9 @@ jobs:
             exit 1
           fi
 
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           remote_url="https://x-access-token:${PUSH_TOKEN}@github.com/${REPOSITORY}.git"
           git fetch "${remote_url}" "${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}"
           if ! git merge-base --is-ancestor "origin/${DEFAULT_BRANCH}" "${HEAD_SHA}"; then
