@@ -1681,7 +1681,10 @@ static int configure_output_video_filter(FilterGraphPriv *fgp, AVFilterGraph *gr
         av_frame_side_data_remove(&ofp->side_data, &ofp->nb_side_data, AV_FRAME_DATA_DISPLAYMATRIX);
     }
 
-    if ((ofp->width || ofp->height) && (ofp->flags & OFILTER_FLAG_AUTOSCALE)) {
+    if ((ofp->width || ofp->height) && (ofp->flags & OFILTER_FLAG_AUTOSCALE) &&
+        // skip add scale for hardware format
+        !(ofp->format != AV_PIX_FMT_NONE &&
+          av_pix_fmt_desc_get(ofp->format)->flags & AV_PIX_FMT_FLAG_HWACCEL)) {
         char args[255];
         AVFilterContext *filter;
         const AVDictionaryEntry *e = NULL;
@@ -3181,7 +3184,7 @@ static int send_frame(FilterGraph *fg, FilterGraphThread *fgt,
                 const char *color_space_name = av_color_space_name(frame->colorspace);
                 const char *color_range_name = av_color_range_name(frame->color_range);
                 const char *alpha_mode = av_alpha_mode_name(frame->alpha_mode);
-                av_bprintf(&reason, "video parameters changed to %s(%s, %s), %dx%d, %s alpha,",
+                av_bprintf(&reason, "video parameters changed to %s(%s, %s), %dx%d, %s alpha, ",
                         unknown_if_null(pixel_format_name), unknown_if_null(color_range_name),
                         unknown_if_null(color_space_name), frame->width, frame->height,
                         unknown_if_null(alpha_mode));
@@ -3334,8 +3337,6 @@ static int filter_thread(void *arg)
             goto read_frames;
         }
         av_assert0(input_status >= 0);
-
-        o = (intptr_t)fgt.frame->opaque;
 
         o = (intptr_t)fgt.frame->opaque;
 

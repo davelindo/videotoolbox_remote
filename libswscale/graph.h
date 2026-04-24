@@ -61,6 +61,10 @@ typedef struct SwsPassBuffer {
 
     int width, height; /* dimensions of this buffer */
     AVFrame *avframe;  /* backing storage for `frame` */
+
+    /* Optional allocation hints for optimal performance */
+    int width_align;   /* Align width to multiple of this */
+    int width_pad;     /* Extra padding pixels */
 } SwsPassBuffer;
 
 /**
@@ -105,6 +109,11 @@ struct SwsPass {
     void (*free)(void *priv);
     void *priv;
 };
+
+/**
+ * Align `width` to the optimal size for `pass`.
+ */
+int ff_sws_pass_aligned_width(const SwsPass *pass, int width);
 
 /**
  * Filter graph, which represents a 'baked' pixel format conversion.
@@ -174,6 +183,11 @@ int ff_sws_graph_add_pass(SwsGraph *graph, enum AVPixelFormat fmt,
                           int align, SwsPassFunc run, SwsPassSetup setup,
                           void *priv, void (*free)(void *priv),
                           SwsPass **out_pass);
+
+/**
+ * Remove all passes added since the given index.
+ */
+void ff_sws_graph_rollback(SwsGraph *graph, int since_idx);
 
 /**
  * Uninitialize any state associate with this filter graph and free it.
