@@ -8,7 +8,7 @@ on:
         description: "Force the sync workflow to rerun even if the tracked upstream SHA appears unchanged"
         default: false
   schedule:
-    - cron: "0 9 * * 1"
+    - cron: "0 9 * * *"
 
 permissions:
   contents: read
