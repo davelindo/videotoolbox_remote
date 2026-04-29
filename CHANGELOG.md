@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 The format follows Keep a Changelog principles, using repository release tags (`v*`) in reverse chronological order.
 The non-version `nightly` tag is intentionally excluded.
 
+## [v0.3.7] - 2026-04-29
+
+### Changed
+- Rebased the vendored `ffmpeg/` subtree to upstream `master` snapshot `7c67748537d9` (from `3cdd76ba96ab`).
+
 ## [v0.3.6] - 2026-04-28
 
 ### Changed
