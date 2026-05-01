@@ -8683,8 +8683,10 @@ static int mov_read_lhvc(MOVContext *c, AVIOContext *pb, MOVAtom atom)
         // TODO: handle lhvC when present before hvcC
         return 0;
 
-    if (atom.size < 6 || st->codecpar->extradata_size < 23)
+    if (atom.size < 6 || st->codecpar->extradata_size < 23 ||
+        atom.size > INT_MAX - AV_INPUT_BUFFER_PADDING_SIZE) {
         return AVERROR_INVALIDDATA;
+    }
 
     buf = av_malloc(atom.size + AV_INPUT_BUFFER_PADDING_SIZE);
     if (!buf)
@@ -9217,6 +9219,13 @@ static int mov_read_iref_dimg(MOVContext *c, AVIOContext *pb, int version)
         return AVERROR_INVALIDDATA;
     }
 
+    entries = avio_rb16(pb);
+    if (!entries) {
+        av_log(c->fc, AV_LOG_ERROR,
+               "Derived image item references no input images\n");
+        return AVERROR_INVALIDDATA;
+    }
+
     grid = av_realloc_array(c->heif_grid, c->nb_heif_grid + 1U,
                             sizeof(*c->heif_grid));
     if (!grid)
@@ -9224,7 +9233,6 @@ static int mov_read_iref_dimg(MOVContext *c, AVIOContext *pb, int version)
     c->heif_grid = grid;
     grid = &grid[c->nb_heif_grid];
 
-    entries = avio_rb16(pb);
     grid->tile_id_list = av_malloc_array(entries, sizeof(*grid->tile_id_list));
     grid->tile_idx_list = av_calloc(entries, sizeof(*grid->tile_idx_list));
     grid->tile_item_list = av_calloc(entries, sizeof(*grid->tile_item_list));
