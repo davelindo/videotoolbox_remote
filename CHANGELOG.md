@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format follows Keep a Changelog principles, using repository release tags (`v*`) in reverse chronological order.
 The non-version `nightly` tag is intentionally excluded.
 
+## [v0.4.0] - 2026-05-11
+
+### Added
+- Added remote encoder hardware-frame ingest for local `AV_PIX_FMT_VIDEOTOOLBOX` inputs.
+- Added optional remote decoder hardware-frame output with `-vt_remote_output_hw_frames 1`.
+- Added HEVC remote encode support for `bgra`, `ayuv`, and `p210le` input paths.
+- Added protocol capability advertising and parsing for expanded pixel formats, VideoToolbox hardware-frame input/output, and typed frame side-data records.
+- Added real `vtremoted` integration coverage for HEVC pixel-format parity, hardware-frame ingest, and hardware-frame decoder output.
+
+### Changed
+- Generalized FFmpeg and Swift frame-plane handling beyond the original two-plane NV12/P010 assumptions.
+- Expanded frame side-data forwarding on the FFmpeg client side with allowlisted metadata types and bounded payload size.
+- Made server capability advertisement reflect the active backend so non-VideoToolbox builds do not claim unsupported hardware-frame or extended pixel-format support.
+- Updated protocol, mock-server, integration, and README parity documentation for the v0.4.0 pipeline-parity surface.
+
+### Fixed
+- Added client-side capability gates so unsupported server pixel formats or hardware-frame paths fail before CONFIGURE with clearer diagnostics.
+- Validated caller-provided VideoToolbox hardware frame/device contexts before decoder hardware-frame output setup.
+- Avoided retaining unused per-frame side-data copies in the Swift server encode path.
+
 ## [v0.3.19] - 2026-05-11
 
 ### Changed
