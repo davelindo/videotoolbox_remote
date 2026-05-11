@@ -43,7 +43,8 @@ if [[ -n "$SERVER_TOKEN" ]]; then
 fi
 
 "$FFMPEG_BIN" -v info -f lavfi -i testsrc2=size=320x180:rate=5 -t 1 -pix_fmt nv12 \
-  -c:v h264_videotoolbox_remote -vt_remote_host "$SERVER_ADDR" ${TOKEN_ARGS[@]+"${TOKEN_ARGS[@]}"} \
+  -c:v h264_videotoolbox_remote -vt_remote_host "$SERVER_ADDR" \
+  -vt_remote_wire_compression none ${TOKEN_ARGS[@]+"${TOKEN_ARGS[@]}"} \
   -f null - >/tmp/mock_vtremoted_ffmpeg.log 2>&1
 
 echo "OK: vtremote framing exercised; logs at /tmp/mock_vtremoted*.log"

@@ -203,7 +203,7 @@ run_override_case() {
     -vt_remote_host "$SERVER_HOST" \
     -vt_remote_port "$SERVER_PORT" \
     -vt_remote_out_codec hevc \
-    "${transcode_args[@]}" \
+    ${transcode_args[@]+"${transcode_args[@]}"} \
     -pix_fmt:v p010le \
     -color_range:v limited \
     -colorspace:v bt2020_ncl \
@@ -270,7 +270,7 @@ run_preserve_source_case() {
     -vt_remote_host "$SERVER_HOST" \
     -vt_remote_port "$SERVER_PORT" \
     -vt_remote_out_codec hevc \
-    "${transcode_args[@]}" \
+    ${transcode_args[@]+"${transcode_args[@]}"} \
     -pix_fmt:v p010le \
     -movflags +write_colr \
     -f hls \
@@ -318,7 +318,7 @@ run_rgb_alias_case() {
     -vt_remote_host "$SERVER_HOST" \
     -vt_remote_port "$SERVER_PORT" \
     -vt_remote_out_codec hevc \
-    "${transcode_args[@]}" \
+    ${transcode_args[@]+"${transcode_args[@]}"} \
     -pix_fmt:v p010le \
     -color_range:v full \
     -colorspace:v rgb \
@@ -349,7 +349,7 @@ run_invalid_numeric_case() {
     -vt_remote_host "$SERVER_HOST" \
     -vt_remote_port "$SERVER_PORT" \
     -vt_remote_out_codec hevc \
-    "${transcode_args[@]}" \
+    ${transcode_args[@]+"${transcode_args[@]}"} \
     -pix_fmt:v p010le \
     -colorspace:v 999 \
     -f null - > /dev/null 2>"$ffmpeg_log"; then
@@ -427,7 +427,7 @@ run_non_mp4_mux_case() {
     -vt_remote_transcode:v:0 \
     -vt_remote_host "$SERVER_HOST" \
     -vt_remote_port "$SERVER_PORT" \
-    "${transcode_args[@]}" \
+    ${transcode_args[@]+"${transcode_args[@]}"} \
     -f flv "$out_flv" > /dev/null 2>"$ffmpeg_log"
 
   wait_mock_server

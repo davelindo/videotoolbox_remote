@@ -146,7 +146,7 @@ final class StubCodecSession: CodecSession {
             return
         }
 
-        let bytesPerSample = (configuration.pixelFormat == 2) ? 2 : 1
+        let bytesPerSample = (configuration.pixelFormat == VTRPixelFormat.p010) ? 2 : 1
         let yStride = configuration.width * bytesPerSample
         let uvStride = configuration.width * bytesPerSample
         let yHeight = configuration.height

@@ -165,8 +165,8 @@
         private static func hevcProfileLevel(profile: Int, pixelFormat: UInt8) -> CFString? {
             func bitDepthForPixFmt(_ pixelFormat: UInt8) -> Int {
                 switch pixelFormat {
-                case 2: 10
-                case 1: 8
+                case VTRPixelFormat.p010, VTRPixelFormat.p210: 10
+                case VTRPixelFormat.nv12, VTRPixelFormat.bgra, VTRPixelFormat.ayuv: 8
                 default: 0
                 }
             }

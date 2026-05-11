@@ -107,6 +107,7 @@ typedef struct VTRemoteTranscodeContext {
     int sar_den;
     int a53_cc;
     int64_t flags;
+    uint64_t server_caps;
     int fd;
     int connected;
     int flushing;
@@ -819,27 +820,19 @@ static void vtremote_log_error_payload(AVBSFContext *ctx, const uint8_t *payload
 }
 
 static int vtremote_handle_hello_ack(AVBSFContext *ctx, const uint8_t *payload, int len) {
-    VTRemoteRBuf r;
-    vtremote_rbuf_init(&r, payload, len);
-    uint8_t status;
-    int ret = vtremote_rbuf_read_u8(&r, &status);
-    if (ret < 0)
-        return ret;
-
+    VTRemoteTranscodeContext *s = ctx->priv_data;
+    uint8_t status = 0;
     const uint8_t *server_name = NULL, *server_ver = NULL;
     int server_name_len = 0, server_ver_len = 0;
-    vtremote_rbuf_read_str(&r, &server_name, &server_name_len);
-    vtremote_rbuf_read_str(&r, &server_ver, &server_ver_len);
-    uint8_t caps = 0;
-    vtremote_rbuf_read_u8(&r, &caps);
-    for (int i = 0; i < caps; i++) {
-        const uint8_t *s = NULL;
-        int slen = 0;
-        vtremote_rbuf_read_str(&r, &s, &slen);
-    }
     uint16_t max_sessions = 0, active = 0;
-    vtremote_rbuf_read_u16(&r, &max_sessions);
-    vtremote_rbuf_read_u16(&r, &active);
+    uint64_t caps = 0;
+    int ret = vtremote_caps_parse_hello_ack(payload, len, &status,
+                                            &server_name, &server_name_len,
+                                            &server_ver, &server_ver_len,
+                                            &caps, &max_sessions, &active);
+    if (ret < 0)
+        return ret;
+    s->server_caps = caps;
 
     if (status != 0) {
         if (status == 1) {
@@ -862,6 +855,13 @@ static int vtremote_handle_hello_ack(AVBSFContext *ctx, const uint8_t *payload, 
                server_name_len, server_name ? (const char *)server_name : "",
                server_ver_len, server_ver ? (const char *)server_ver : "");
         return AVERROR(EACCES);
+    }
+    if (s->log_level >= AV_LOG_VERBOSE) {
+        av_log(ctx, AV_LOG_VERBOSE,
+               "vtremote server [%.*s %.*s] caps=0x%" PRIx64 " active=%u max=%u\n",
+               server_name_len, server_name ? (const char *)server_name : "",
+               server_ver_len, server_ver ? (const char *)server_ver : "",
+               caps, active, max_sessions);
     }
     return 0;
 }
@@ -917,6 +917,20 @@ static int vtremote_handle_configure_ack(AVBSFContext *ctx, const uint8_t *paylo
         av_log(ctx, AV_LOG_WARNING, "vtremote warning: %.*s\n", s_len, s_ptr);
     }
     return 0;
+}
+
+static int vtremote_require_server_cap(AVBSFContext *ctx, uint64_t required_cap,
+                                       const char *what)
+{
+    VTRemoteTranscodeContext *s = ctx->priv_data;
+
+    if (!required_cap || (s->server_caps & required_cap))
+        return 0;
+
+    av_log(ctx, AV_LOG_ERROR,
+           "vtremote server does not advertise required capability for %s.\n",
+           what);
+    return AVERROR(ENOSYS);
 }
 
 static int vtremote_build_hostport(const VTRemoteTranscodeContext *s,
@@ -1110,6 +1124,13 @@ static int vtremote_send_configure(AVBSFContext *ctx, VTRemoteKV *opts, int opt_
     AVRational tb = ctx->time_base_in.num && ctx->time_base_in.den ?
                     ctx->time_base_in : (AVRational){1, 90000};
     int ret;
+
+    ret = vtremote_require_server_cap(
+        ctx,
+        vtremote_cap_flag_for_pix_fmt((uint8_t)s->pixel_format),
+        vtremote_pix_fmt_name((uint8_t)s->pixel_format));
+    if (ret < 0)
+        return ret;
 
     vtremote_wbuf_init(&cfg);
     ret = vtremote_payload_configure(&cfg,
@@ -1402,7 +1423,7 @@ static int vtremote_transcode_init(AVBSFContext *ctx) {
         ctx->par_out->height = s->out_height;
     }
 
-    if (s->pixel_format != 1 && s->pixel_format != 2) {
+    if (s->pixel_format != VTREMOTE_PIX_FMT_NV12 && s->pixel_format != VTREMOTE_PIX_FMT_P010) {
         av_log(ctx, AV_LOG_ERROR, "vt_remote_pix_fmt must be 1 (nv12) or 2 (p010)\n");
         return AVERROR(EINVAL);
     }
@@ -1566,7 +1587,7 @@ static const AVOption vtremote_transcode_options[] = {
     { "vt_remote_out_width", "output width", OFFSET(out_width), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },
     { "vt_remote_out_height", "output height", OFFSET(out_height), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },
     { "vt_remote_scale_mode", "scale mode (stretch|aspect|aspect_fill)", OFFSET(scale_mode), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, FLAGS },
-    { "vt_remote_pix_fmt", "pixel format (1=nv12,2=p010)", OFFSET(pixel_format), AV_OPT_TYPE_INT, { .i64 = 1 }, 1, 2, FLAGS },
+    { "vt_remote_pix_fmt", "pixel format (1=nv12,2=p010)", OFFSET(pixel_format), AV_OPT_TYPE_INT, { .i64 = VTREMOTE_PIX_FMT_NV12 }, VTREMOTE_PIX_FMT_NV12, VTREMOTE_PIX_FMT_P010, FLAGS },
     { "vt_remote_decode_async", "allow async decode on server", OFFSET(decode_async), AV_OPT_TYPE_BOOL, { .i64 = 1 }, 0, 1, FLAGS },
     { "vt_remote_decode_reorder_depth", "decode reorder depth", OFFSET(decode_reorder_depth), AV_OPT_TYPE_INT, { .i64 = 2 }, -1, 64, FLAGS },
     { "vt_remote_bitrate", "target bitrate", OFFSET(bitrate), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },

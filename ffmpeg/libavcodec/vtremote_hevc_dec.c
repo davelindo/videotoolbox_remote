@@ -7,6 +7,7 @@
 #include "avcodec.h"
 #include "codec_internal.h"
 #include "decode.h"
+#include "hwconfig.h"
 #include "libavutil/opt.h"
 #include "vtremote_dec_common.h"
 
@@ -29,6 +30,32 @@ static const AVClass vtremote_hevc_dec_class = {
 
 static av_cold int vtremote_hevc_dec_init(AVCodecContext *avctx)
 {
+    VTRemoteDecContext *s = avctx->priv_data;
+    enum AVPixelFormat sw_fmt = (avctx->bits_per_raw_sample > 8) ? AV_PIX_FMT_P010LE : AV_PIX_FMT_NV12;
+#if CONFIG_VIDEOTOOLBOX && defined(__APPLE__)
+    if (s->output_hw_frames) {
+        /*
+         * CONFIGURE_ACK runs before hw_frames_ctx allocation and corrects
+         * sw_pix_fmt once the server reports the stream's actual output depth.
+         */
+        avctx->pix_fmt = AV_PIX_FMT_VIDEOTOOLBOX;
+        avctx->sw_pix_fmt = sw_fmt;
+        return ff_vtremote_dec_init(avctx);
+    }
+    static const enum AVPixelFormat pix_fmts_10_sw[] = {
+        AV_PIX_FMT_P010LE,
+        AV_PIX_FMT_NV12,
+        AV_PIX_FMT_VIDEOTOOLBOX,
+        AV_PIX_FMT_NONE,
+    };
+    static const enum AVPixelFormat pix_fmts_8_sw[] = {
+        AV_PIX_FMT_NV12,
+        AV_PIX_FMT_P010LE,
+        AV_PIX_FMT_VIDEOTOOLBOX,
+        AV_PIX_FMT_NONE,
+    };
+    const enum AVPixelFormat *pix_fmts = (avctx->bits_per_raw_sample > 8) ? pix_fmts_10_sw : pix_fmts_8_sw;
+#else
     static const enum AVPixelFormat pix_fmts_10[] = {
         AV_PIX_FMT_P010LE,
         AV_PIX_FMT_NV12,
@@ -40,10 +67,19 @@ static av_cold int vtremote_hevc_dec_init(AVCodecContext *avctx)
         AV_PIX_FMT_NONE,
     };
     const enum AVPixelFormat *pix_fmts = (avctx->bits_per_raw_sample > 8) ? pix_fmts_10 : pix_fmts_8;
+    if (s->output_hw_frames) {
+        av_log(avctx, AV_LOG_ERROR,
+               "VideoToolbox hardware-frame decode output requires macOS "
+               "VideoToolbox support.\n");
+        return AVERROR(ENOSYS);
+    }
+#endif
     int ret = ff_get_format(avctx, pix_fmts);
     if (ret < 0)
         return ret;
     avctx->pix_fmt = ret;
+    if (avctx->pix_fmt == AV_PIX_FMT_VIDEOTOOLBOX)
+        avctx->sw_pix_fmt = sw_fmt;
     return ff_vtremote_dec_init(avctx);
 }
 
@@ -51,6 +87,13 @@ static av_cold int vtremote_hevc_dec_close(AVCodecContext *avctx)
 {
     return ff_vtremote_dec_close(avctx);
 }
+
+#if CONFIG_VIDEOTOOLBOX && defined(__APPLE__)
+static const AVCodecHWConfigInternal *const vtremote_hevc_dec_hw_configs[] = {
+    VTREMOTE_HW_CONFIG_DECODER_FRAMES(VIDEOTOOLBOX, VIDEOTOOLBOX),
+    NULL
+};
+#endif
 
 const FFCodec ff_hevc_videotoolbox_remote_decoder = {
     .p.name         = "hevc_videotoolbox_remote",
@@ -65,5 +108,10 @@ const FFCodec ff_hevc_videotoolbox_remote_decoder = {
     .init           = vtremote_hevc_dec_init,
     .close          = vtremote_hevc_dec_close,
     FF_CODEC_DECODE_CB(ff_vtremote_decode),
+#if CONFIG_VIDEOTOOLBOX && defined(__APPLE__)
+    .hw_configs     = vtremote_hevc_dec_hw_configs,
+    CODEC_PIXFMTS(AV_PIX_FMT_NV12, AV_PIX_FMT_P010LE, AV_PIX_FMT_VIDEOTOOLBOX),
+#else
     CODEC_PIXFMTS(AV_PIX_FMT_NV12, AV_PIX_FMT_P010LE),
+#endif
 };

@@ -35,7 +35,7 @@ public final class VTRClientHandler: @unchecked Sendable {
         maxMessageBytes: Int = 256 * 1024 * 1024,
         serverName: String = "vtremoted",
         serverVersion: String = "unknown",
-        serverCapabilities: [String] = ["h264", "hevc"],
+        serverCapabilities: [String] = VTRCapability.baseline,
         serverSessionSnapshot: @escaping () -> (maxSessions: Int, activeSessions: Int) = { (0, 0) },
         sessionFactory: @escaping SessionFactory = CodecSessionFactory.make
     ) {
@@ -195,7 +195,8 @@ public final class VTRClientHandler: @unchecked Sendable {
         logger.info(
             "CONFIGURE req mode=\(config.mode.rawValue) codec=\(config.codec.rawValue) " +
                 "\(config.width)x\(config.height) " +
-                "pix=\(config.pixelFormat) tb=\(config.timebase.num)/\(config.timebase.den) " +
+                "pix=\(config.pixelFormat)(\(VTRPixelFormat.name(config.pixelFormat))) " +
+                "tb=\(config.timebase.num)/\(config.timebase.den) " +
                 "fr=\(config.frameRate.num)/\(config.frameRate.den) br=\(config.options.bitrate) " +
                 "gop=\(config.options.gop) wc=\(config.options.wireCompression)" +
                 transcodeLogSuffix(for: config)
@@ -229,7 +230,8 @@ public final class VTRClientHandler: @unchecked Sendable {
             logger.info(
                 "CONFIGURE ok mode=\(config.mode.rawValue) codec=\(config.codec.rawValue) " +
                     "\(config.width)x\(config.height) " +
-                    "pixfmt=\(config.pixelFormat) tb=\(config.timebase.num)/\(config.timebase.den) " +
+                    "pixfmt=\(config.pixelFormat)(\(VTRPixelFormat.name(config.pixelFormat))) " +
+                    "tb=\(config.timebase.num)/\(config.timebase.den) " +
                     "br=\(config.options.bitrate) " +
                     "gop=\(config.options.gop) wc=\(config.options.wireCompression)" +
                     transcodeLogSuffix(for: config)

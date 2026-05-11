@@ -66,12 +66,10 @@
 
         private class FrameContext {
             let seq: UInt64
-            let sideData: [Data]
             let pixelBuffer: CVPixelBuffer?
             let isWarmup: Bool
-            init(seq: UInt64, sideData: [Data], pixelBuffer: CVPixelBuffer? = nil, isWarmup: Bool = false) {
+            init(seq: UInt64, pixelBuffer: CVPixelBuffer? = nil, isWarmup: Bool = false) {
                 self.seq = seq
-                self.sideData = sideData
                 self.pixelBuffer = pixelBuffer
                 self.isWarmup = isWarmup
             }
@@ -164,15 +162,13 @@
             }
         }
 
-        // `flags` and `sideData` mirror FRAME wire fields passed to VideoToolbox.
-        // swiftlint:disable:next function_parameter_count
+        // `flags` mirrors the FRAME wire keyframe request passed to VideoToolbox.
         private func encodePreparedFrame(
             session: VTCompressionSession,
             pixelBuffer: CVPixelBuffer,
             ptsTicks: Int64,
             durTicks: Int64,
-            flags: UInt32,
-            sideData: [Data]
+            flags: UInt32
         ) throws {
             guard let config else { throw VTRemotedError.protocolViolation("FRAME before CONFIGURE") }
 
@@ -184,7 +180,7 @@
             let seq = nextEncodeSeq()
             // Retain the pixel buffer until the encoder callback fires. VideoToolbox may consume frames
             // asynchronously, and the pool can otherwise recycle the buffer while it is still in use.
-            let frameContext = FrameContext(seq: seq, sideData: sideData, pixelBuffer: pixelBuffer)
+            let frameContext = FrameContext(seq: seq, pixelBuffer: pixelBuffer)
             let ctxPtr = Unmanaged.passRetained(frameContext).toOpaque()
 
             var infoFlags = VTEncodeInfoFlags()
@@ -223,9 +219,44 @@
         }
 
         private static func planeRowBytes(width: Int, pixelFormat: UInt8) -> (y: Int, uv: Int) {
-            let bytesPerSample = (pixelFormat == 2) ? 2 : 1
+            if pixelFormat == VTRPixelFormat.bgra || pixelFormat == VTRPixelFormat.ayuv {
+                return (width * 4, 0)
+            }
+            let bytesPerSample = (pixelFormat == VTRPixelFormat.p010 || pixelFormat == VTRPixelFormat.p210) ? 2 : 1
             let rowBytes = width * bytesPerSample
             return (rowBytes, rowBytes)
+        }
+
+        private static func expectedPlaneCount(pixelFormat: UInt8) -> UInt8 {
+            switch pixelFormat {
+            case VTRPixelFormat.bgra, VTRPixelFormat.ayuv:
+                return 1
+            default:
+                return 2
+            }
+        }
+
+        private static func planeHeights(frameHeight: Int, pixelFormat: UInt8) -> (first: Int, second: Int) {
+            switch pixelFormat {
+            case VTRPixelFormat.bgra, VTRPixelFormat.ayuv:
+                return (frameHeight, 0)
+            case VTRPixelFormat.p210:
+                return (frameHeight, frameHeight)
+            default:
+                return (frameHeight, frameHeight / 2)
+            }
+        }
+
+        private static func baseAddressAndStride(
+            pixelBuffer: CVPixelBuffer,
+            planeIndex: Int
+        ) -> (base: UnsafeMutableRawPointer, stride: Int)? {
+            if CVPixelBufferIsPlanar(pixelBuffer) {
+                guard let base = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, planeIndex) else { return nil }
+                return (base, CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, planeIndex))
+            }
+            guard planeIndex == 0, let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return nil }
+            return (base, CVPixelBufferGetBytesPerRow(pixelBuffer))
         }
 
         func configure(_ configuration: SessionConfiguration) throws -> Data {
@@ -302,7 +333,10 @@
             let durTicks = try Int64(bitPattern: reader.readBEUInt64())
             let flags = try reader.readBEUInt32()
             let planes = try reader.readUInt8()
-            guard planes == 2 else { throw VTRemotedError.protocolViolation("expected 2 planes") }
+            let expectedPlanes = Self.expectedPlaneCount(pixelFormat: config.pixelFormat)
+            guard planes == expectedPlanes else {
+                throw VTRemotedError.protocolViolation("expected \(expectedPlanes) planes")
+            }
 
             let stride0 = try Int(reader.readBEUInt32())
             let height0 = try Int(reader.readBEUInt32())
@@ -310,11 +344,20 @@
             // Zero-copy: get range instead of copying data
             let yRange = try reader.sliceRange(count: len0)
 
-            let stride1 = try Int(reader.readBEUInt32())
-            let height1 = try Int(reader.readBEUInt32())
-            let len1 = try Int(reader.readBEUInt32())
-            // Zero-copy: get range instead of copying data
-            let uvRange = try reader.sliceRange(count: len1)
+            let stride1: Int
+            let height1: Int
+            let uvRange: Range<Int>
+            if planes > 1 {
+                stride1 = try Int(reader.readBEUInt32())
+                height1 = try Int(reader.readBEUInt32())
+                let len1 = try Int(reader.readBEUInt32())
+                // Zero-copy: get range instead of copying data
+                uvRange = try reader.sliceRange(count: len1)
+            } else {
+                stride1 = 0
+                height1 = 0
+                uvRange = 0..<0
+            }
 
             let expectedY = max(0, stride0 * height0)
             let expectedUV = max(0, stride1 * height1)
@@ -336,8 +379,9 @@
                 stride: Int,
                 rowBytes: Int
             ) throws {
-                guard let destBase = CVPixelBufferGetBaseAddressOfPlane(pBuffer, planeIndex) else { return }
-                let destStride = CVPixelBufferGetBytesPerRowOfPlane(pBuffer, planeIndex)
+                guard let destination = Self.baseAddressAndStride(pixelBuffer: pBuffer, planeIndex: planeIndex) else { return }
+                let destBase = destination.base
+                let destStride = destination.stride
 
                 if config.options.wireCompression == 0 {
                     // No compression: copy directly from payload into the pixel buffer (avoid temp buffer).
@@ -408,10 +452,11 @@
                 }
             }
 
-            let errorSlots = UnsafeMutableBufferPointer<Error?>.allocate(capacity: 2)
+            let planeIterations = Int(planes)
+            let errorSlots = UnsafeMutableBufferPointer<Error?>.allocate(capacity: planeIterations)
             errorSlots.initialize(repeating: nil)
             defer { errorSlots.deallocate() }
-            DispatchQueue.concurrentPerform(iterations: 2) { plane in
+            DispatchQueue.concurrentPerform(iterations: planeIterations) { plane in
                 do {
                     if plane == 0 {
                         try processPlane(
@@ -435,19 +480,16 @@
                 }
             }
             if let err = errorSlots[0] { throw err }
-            if let err = errorSlots[1] { throw err }
+            if planeIterations > 1, let err = errorSlots[1] { throw err }
 
-            // Parse side data (V1 extension)
-            var sideData: [Data] = []
+            // Consume side-data records for wire compatibility. Encoder output
+            // packet side-data propagation is not implemented yet.
             if reader.remaining > 0 {
                 let sideDataCount = try reader.readUInt8()
                 for _ in 0 ..< sideDataCount {
-                    let type = try reader.readBEUInt32()
+                    _ = try reader.readBEUInt32()
                     let size = try reader.readBEUInt32()
-                    let data = try reader.readBytes(count: Int(size))
-                    if type == 2 { // A53_CC
-                        sideData.append(data)
-                    }
+                    _ = try reader.sliceRange(count: Int(size))
                 }
             }
 
@@ -456,8 +498,7 @@
                 pixelBuffer: pBuffer,
                 ptsTicks: ptsTicks,
                 durTicks: durTicks,
-                flags: flags,
-                sideData: sideData
+                flags: flags
             )
         }
 
@@ -510,7 +551,10 @@
             let durTicks = Int64(bitPattern: try readBEUInt64())
             let flags = try readBEUInt32()
             let planes = try readUInt8()
-            guard planes == 2 else { throw VTRemotedError.protocolViolation("expected 2 planes") }
+            let expectedPlanes = Self.expectedPlaneCount(pixelFormat: config.pixelFormat)
+            guard planes == expectedPlanes else {
+                throw VTRemotedError.protocolViolation("expected \(expectedPlanes) planes")
+            }
 
             let stride0 = Int(try readBEUInt32())
             let height0 = Int(try readBEUInt32())
@@ -546,11 +590,12 @@
                 guard wireLen >= 0 else { throw VTRemotedError.protocolViolation("negative plane length") }
                 try require(wireLen)
 
-                guard let destBase = CVPixelBufferGetBaseAddressOfPlane(pBuffer, planeIndex) else {
+                guard let destination = Self.baseAddressAndStride(pixelBuffer: pBuffer, planeIndex: planeIndex) else {
                     try skipBytes(wireLen)
                     return
                 }
-                let destStride = CVPixelBufferGetBytesPerRowOfPlane(pBuffer, planeIndex)
+                let destBase = destination.base
+                let destStride = destination.stride
 
                 if config.options.wireCompression == 0 {
                     guard wireLen >= expectedSize else {
@@ -641,38 +686,32 @@
                 rowBytes: rowBytesY
             )
 
-            // Plane metadata is interleaved with plane bytes on the wire:
-            // [plane0 meta][plane0 bytes][plane1 meta][plane1 bytes]...
-            let stride1 = Int(try readBEUInt32())
-            let height1 = Int(try readBEUInt32())
-            let len1 = Int(try readBEUInt32())
-            let expectedUV = max(0, stride1 * height1)
+            if planes > 1 {
+                // Plane metadata is interleaved with plane bytes on the wire:
+                // [plane0 meta][plane0 bytes][plane1 meta][plane1 bytes]...
+                let stride1 = Int(try readBEUInt32())
+                let height1 = Int(try readBEUInt32())
+                let len1 = Int(try readBEUInt32())
+                let expectedUV = max(0, stride1 * height1)
 
-            try processPlane(
-                planeIndex: 1,
-                wireLen: len1,
-                expectedSize: expectedUV,
-                stride: stride1,
-                height: height1,
-                rowBytes: rowBytesUV
-            )
+                try processPlane(
+                    planeIndex: 1,
+                    wireLen: len1,
+                    expectedSize: expectedUV,
+                    stride: stride1,
+                    height: height1,
+                    rowBytes: rowBytesUV
+                )
+            }
 
-            // Parse side data (V1 extension)
-            var sideData: [Data] = []
+            // Consume side-data records for wire compatibility. Encoder output
+            // packet side-data propagation is not implemented yet.
             if remaining > 0 {
                 let sideDataCount = Int(try readUInt8())
                 for _ in 0 ..< sideDataCount {
-                    let type = try readBEUInt32()
+                    _ = try readBEUInt32()
                     let size = Int(try readBEUInt32())
-                    try require(size)
-                    if type == 2 { // A53_CC
-                        var data = Data(count: size)
-                        try streamIO.readExact(into: &data, count: size)
-                        remaining -= size
-                        sideData.append(data)
-                    } else {
-                        try skipBytes(size)
-                    }
+                    try skipBytes(size)
                 }
             }
 
@@ -687,8 +726,7 @@
                 pixelBuffer: pBuffer,
                 ptsTicks: ptsTicks,
                 durTicks: durTicks,
-                flags: flags,
-                sideData: sideData
+                flags: flags
             )
         }
 
@@ -698,7 +736,7 @@
             let props: CFDictionary? = forceKey ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
 
             let seq = nextEncodeSeq()
-            let frameContext = FrameContext(seq: seq, sideData: [], pixelBuffer: pixelBuffer)
+            let frameContext = FrameContext(seq: seq, pixelBuffer: pixelBuffer)
             let ctxPtr = Unmanaged.passRetained(frameContext).toOpaque()
 
             let status = VTCompressionSessionEncodeFrame(
@@ -868,7 +906,7 @@
             case .hevc: kCMVideoCodecType_HEVC
             }
 
-            if codec == .h264, config.pixelFormat != 1 {
+            if codec == .h264, config.pixelFormat != VTRPixelFormat.nv12 {
                 throw VTRemotedError.unsupported("h264 requires nv12")
             }
 
@@ -1857,7 +1895,7 @@
             var warmupSubmitted = false
 
             for (idx, pts) in presentationCandidates.enumerated() {
-                let warmupContext = FrameContext(seq: UInt64.max, sideData: [], isWarmup: true)
+                let warmupContext = FrameContext(seq: UInt64.max, isWarmup: true)
                 let ctxPtr = Unmanaged.passRetained(warmupContext).toOpaque()
 
                 var infoFlags = VTEncodeInfoFlags()
@@ -2308,12 +2346,18 @@
 
         private func pickCVPixelFormat(pixelFormat: UInt8) throws -> OSType {
             switch pixelFormat {
-            case 1:
+            case VTRPixelFormat.nv12:
                 return kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
-            case 2:
+            case VTRPixelFormat.p010:
                 return kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+            case VTRPixelFormat.bgra:
+                return kCVPixelFormatType_32BGRA
+            case VTRPixelFormat.ayuv:
+                return kCVPixelFormatType_4444AYpCbCr8
+            case VTRPixelFormat.p210:
+                return kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange
             default:
-                throw VTRemotedError.unsupported("pix_fmt=\(pixelFormat)")
+                throw VTRemotedError.unsupported("pix_fmt=\(pixelFormat)(\(VTRPixelFormat.name(pixelFormat)))")
             }
         }
 

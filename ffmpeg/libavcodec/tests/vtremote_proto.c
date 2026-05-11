@@ -9,6 +9,7 @@
 
 #include "libavutil/avassert.h"
 #include "libavutil/error.h"
+#include "libavutil/frame.h"
 #include "libavutil/log.h"
 #include "libavutil/mem.h"
 #include "libavcodec/vtremote_proto.h"
@@ -134,7 +135,8 @@ static int test_build_configure(void)
     };
     VTRemoteWBuf b;
     vtremote_wbuf_init(&b);
-    av_assert0(vtremote_payload_configure(&b, 1920, 1080, 1, 1, 30, 30, 1, opts, 2, NULL, 0) == 0);
+    av_assert0(vtremote_payload_configure(&b, 1920, 1080, VTREMOTE_PIX_FMT_NV12,
+                                          1, 30, 30, 1, opts, 2, NULL, 0) == 0);
     VTRemoteMsgHeader hdr = { VTREMOTE_PROTO_MAGIC, VTREMOTE_PROTO_VERSION, VTREMOTE_MSG_CONFIGURE, (uint32_t)b.size };
     uint8_t header[VTREMOTE_HEADER_SIZE];
     av_assert0(vtremote_write_header(header, sizeof(header), &hdr) == VTREMOTE_HEADER_SIZE);
@@ -146,7 +148,7 @@ static int test_build_configure(void)
     uint16_t count;
     av_assert0(vtremote_rbuf_read_u32(&r, &w) == 0 && w==1920);
     av_assert0(vtremote_rbuf_read_u32(&r, &h) == 0 && h==1080);
-    av_assert0(vtremote_rbuf_read_u8(&r, &pf) == 0 && pf==1);
+    av_assert0(vtremote_rbuf_read_u8(&r, &pf) == 0 && pf==VTREMOTE_PIX_FMT_NV12);
     av_assert0(vtremote_rbuf_read_u32(&r, &tbn)==0 && tbn==1);
     av_assert0(vtremote_rbuf_read_u32(&r, &tbd)==0 && tbd==30);
     av_assert0(vtremote_rbuf_read_u32(&r, &frn)==0 && frn==30);
@@ -170,15 +172,29 @@ static int test_frame_and_packet_parse(void)
     uint32_t strides[2] = {2,2};
     uint32_t heights[2] = {2,1};
     uint32_t sizes[2] = {4,2};
+    uint8_t hdr_data[3] = {7,8,9};
+    uint8_t cc_data[2] = {10,11};
+    VTRemoteSideData side_data[2] = {
+        { AV_FRAME_DATA_MASTERING_DISPLAY_METADATA, sizeof(hdr_data), hdr_data },
+        { AV_FRAME_DATA_A53_CC, sizeof(cc_data), cc_data },
+    };
     VTRemoteWBuf b;
     vtremote_wbuf_init(&b);
-    av_assert0(vtremote_payload_frame(&b, 10, 2, 1, 2, planes, strides, heights, sizes) == 0);
+    av_assert0(vtremote_payload_frame(&b, 10, 2, 1, 2, planes, strides, heights, sizes,
+                                      side_data, 2) == 0);
     VTRemoteFrameView fview;
     av_assert0(vtremote_parse_frame(b.data, b.size, &fview) == 0);
     av_assert0(fview.pts == 10 && fview.duration == 2);
     av_assert0(fview.flags == 1 && fview.plane_count == 2);
     av_assert0(fview.planes[0].stride == 2 && fview.planes[0].height == 2);
     av_assert0(fview.planes[1].stride == 2 && fview.planes[1].height == 1);
+    av_assert0(fview.side_data_count == 2);
+    av_assert0(fview.side_data[0].type == AV_FRAME_DATA_MASTERING_DISPLAY_METADATA);
+    av_assert0(fview.side_data[0].size == sizeof(hdr_data));
+    av_assert0(!memcmp(fview.side_data[0].data, hdr_data, sizeof(hdr_data)));
+    av_assert0(fview.side_data[1].type == AV_FRAME_DATA_A53_CC);
+    av_assert0(fview.side_data[1].size == sizeof(cc_data));
+    av_assert0(!memcmp(fview.side_data[1].data, cc_data, sizeof(cc_data)));
 
     /* Build a full message and parse PACKET view */
     VTRemoteWBuf pkt_payload;
@@ -201,6 +217,70 @@ static int test_frame_and_packet_parse(void)
     return 0;
 }
 
+static int test_pix_fmt_and_cap_helpers(void)
+{
+    uint64_t flag = 0;
+
+    av_assert0(!strcmp(vtremote_pix_fmt_name(VTREMOTE_PIX_FMT_NV12), "nv12"));
+    av_assert0(!strcmp(vtremote_pix_fmt_name(VTREMOTE_PIX_FMT_P010), "p010"));
+    av_assert0(!strcmp(vtremote_pix_fmt_name(VTREMOTE_PIX_FMT_BGRA), "bgra"));
+    av_assert0(!strcmp(vtremote_pix_fmt_name(VTREMOTE_PIX_FMT_AYUV), "ayuv"));
+    av_assert0(!strcmp(vtremote_pix_fmt_name(VTREMOTE_PIX_FMT_P210), "p210"));
+    av_assert0(!strcmp(vtremote_pix_fmt_name(VTREMOTE_PIX_FMT_VIDEOTOOLBOX), "videotoolbox"));
+    av_assert0(!strcmp(vtremote_pix_fmt_name(0xff), "unknown"));
+    av_assert0(vtremote_cap_flag_for_pix_fmt(VTREMOTE_PIX_FMT_NV12) == VTREMOTE_CAP_PIXFMT_NV12);
+    av_assert0(vtremote_cap_flag_for_pix_fmt(VTREMOTE_PIX_FMT_P210) == VTREMOTE_CAP_PIXFMT_P210);
+    av_assert0(vtremote_cap_flag_for_pix_fmt(VTREMOTE_PIX_FMT_VIDEOTOOLBOX) == 0);
+
+    av_assert0(vtremote_cap_flag_from_name((const uint8_t *)"pixfmt.bgra", 11, &flag) == 0);
+    av_assert0(flag == VTREMOTE_CAP_PIXFMT_BGRA);
+    av_assert0(vtremote_cap_flag_from_name((const uint8_t *)"side_data.v2", 12, &flag) == 0);
+    av_assert0(flag == VTREMOTE_CAP_SIDE_DATA_V2);
+    av_assert0(vtremote_cap_flag_from_name((const uint8_t *)"unknown", 7, &flag) == 0);
+    av_assert0(flag == 0);
+
+    return 0;
+}
+
+static int test_parse_hello_ack_caps(void)
+{
+    VTRemoteWBuf b;
+    vtremote_wbuf_init(&b);
+    av_assert0(vtremote_wbuf_put_u8(&b, 0) == 0);
+    av_assert0(vtremote_wbuf_put_str(&b, "vtremoted") == 0);
+    av_assert0(vtremote_wbuf_put_str(&b, "test") == 0);
+    av_assert0(vtremote_wbuf_put_u8(&b, 4) == 0);
+    av_assert0(vtremote_wbuf_put_str(&b, "h264") == 0);
+    av_assert0(vtremote_wbuf_put_str(&b, "hevc") == 0);
+    av_assert0(vtremote_wbuf_put_str(&b, "pixfmt.p210") == 0);
+    av_assert0(vtremote_wbuf_put_str(&b, "hwframes.videotoolbox.output") == 0);
+    av_assert0(vtremote_wbuf_put_u16(&b, 8) == 0);
+    av_assert0(vtremote_wbuf_put_u16(&b, 3) == 0);
+
+    uint8_t status = 0xff;
+    const uint8_t *server_name = NULL, *server_version = NULL;
+    int server_name_len = 0, server_version_len = 0;
+    uint64_t caps = 0;
+    uint16_t max_sessions = 0, active_sessions = 0;
+    av_assert0(vtremote_caps_parse_hello_ack(b.data, b.size, &status,
+                                             &server_name, &server_name_len,
+                                             &server_version, &server_version_len,
+                                             &caps, &max_sessions, &active_sessions) == 0);
+    av_assert0(status == 0);
+    av_assert0(server_name_len == 9 && !memcmp(server_name, "vtremoted", 9));
+    av_assert0(server_version_len == 4 && !memcmp(server_version, "test", 4));
+    av_assert0((caps & VTREMOTE_CAP_H264) != 0);
+    av_assert0((caps & VTREMOTE_CAP_HEVC) != 0);
+    av_assert0((caps & VTREMOTE_CAP_PIXFMT_P210) != 0);
+    av_assert0((caps & VTREMOTE_CAP_HWFRAMES_VIDEOTOOLBOX_OUT) != 0);
+    av_assert0((caps & VTREMOTE_CAP_PIXFMT_BGRA) == 0);
+    av_assert0(max_sessions == 8);
+    av_assert0(active_sessions == 3);
+
+    vtremote_wbuf_free(&b);
+    return 0;
+}
+
 int main(void)
 {
     int ret = 0;
@@ -211,5 +291,7 @@ int main(void)
     ret |= test_build_and_parse_hello();
     ret |= test_build_configure();
     ret |= test_frame_and_packet_parse();
+    ret |= test_pix_fmt_and_cap_helpers();
+    ret |= test_parse_hello_ack_caps();
     return ret ? 1 : 0;
 }

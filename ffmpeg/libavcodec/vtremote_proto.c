@@ -30,6 +30,151 @@ const char *vtremote_msg_type_name(int type)
     return msg_names[type] ? msg_names[type] : "UNKNOWN";
 }
 
+const char *vtremote_pix_fmt_name(uint8_t pix_fmt)
+{
+    switch (pix_fmt) {
+    case VTREMOTE_PIX_FMT_NV12: return "nv12";
+    case VTREMOTE_PIX_FMT_P010: return "p010";
+    case VTREMOTE_PIX_FMT_BGRA: return "bgra";
+    case VTREMOTE_PIX_FMT_AYUV: return "ayuv";
+    case VTREMOTE_PIX_FMT_P210: return "p210";
+    case VTREMOTE_PIX_FMT_VIDEOTOOLBOX: return "videotoolbox";
+    default: return "unknown";
+    }
+}
+
+uint64_t vtremote_cap_flag_for_pix_fmt(uint8_t pix_fmt)
+{
+    switch (pix_fmt) {
+    case VTREMOTE_PIX_FMT_NV12: return VTREMOTE_CAP_PIXFMT_NV12;
+    case VTREMOTE_PIX_FMT_P010: return VTREMOTE_CAP_PIXFMT_P010;
+    case VTREMOTE_PIX_FMT_BGRA: return VTREMOTE_CAP_PIXFMT_BGRA;
+    case VTREMOTE_PIX_FMT_AYUV: return VTREMOTE_CAP_PIXFMT_AYUV;
+    case VTREMOTE_PIX_FMT_P210: return VTREMOTE_CAP_PIXFMT_P210;
+    default: return 0;
+    }
+}
+
+static int cap_name_equals(const uint8_t *name, int name_len, const char *expected)
+{
+    size_t expected_len;
+
+    if (!name || name_len < 0 || !expected)
+        return 0;
+    expected_len = strlen(expected);
+    return expected_len == (size_t)name_len && !memcmp(name, expected, expected_len);
+}
+
+int vtremote_cap_flag_from_name(const uint8_t *name, int name_len, uint64_t *flag)
+{
+    uint64_t value = 0;
+
+    if (!flag)
+        return AVERROR(EINVAL);
+
+    if (cap_name_equals(name, name_len, "h264")) {
+        value = VTREMOTE_CAP_H264;
+    } else if (cap_name_equals(name, name_len, "hevc")) {
+        value = VTREMOTE_CAP_HEVC;
+    } else if (cap_name_equals(name, name_len, "pixfmt.nv12")) {
+        value = VTREMOTE_CAP_PIXFMT_NV12;
+    } else if (cap_name_equals(name, name_len, "pixfmt.p010")) {
+        value = VTREMOTE_CAP_PIXFMT_P010;
+    } else if (cap_name_equals(name, name_len, "pixfmt.bgra")) {
+        value = VTREMOTE_CAP_PIXFMT_BGRA;
+    } else if (cap_name_equals(name, name_len, "pixfmt.ayuv")) {
+        value = VTREMOTE_CAP_PIXFMT_AYUV;
+    } else if (cap_name_equals(name, name_len, "pixfmt.p210")) {
+        value = VTREMOTE_CAP_PIXFMT_P210;
+    } else if (cap_name_equals(name, name_len, "hwframes.videotoolbox.input")) {
+        value = VTREMOTE_CAP_HWFRAMES_VIDEOTOOLBOX_IN;
+    } else if (cap_name_equals(name, name_len, "hwframes.videotoolbox.output")) {
+        value = VTREMOTE_CAP_HWFRAMES_VIDEOTOOLBOX_OUT;
+    } else if (cap_name_equals(name, name_len, "side_data.v2")) {
+        value = VTREMOTE_CAP_SIDE_DATA_V2;
+    }
+
+    *flag = value;
+    return 0;
+}
+
+int vtremote_caps_parse_hello_ack(const uint8_t *payload, int len,
+                                  uint8_t *status,
+                                  const uint8_t **server_name, int *server_name_len,
+                                  const uint8_t **server_version, int *server_version_len,
+                                  uint64_t *caps,
+                                  uint16_t *max_sessions, uint16_t *active_sessions)
+{
+    VTRemoteRBuf r;
+    uint8_t cap_count = 0;
+    uint64_t parsed_caps = 0;
+    int ret;
+
+    if (!payload || len < 0 || !status)
+        return AVERROR(EINVAL);
+
+    if (server_name)
+        *server_name = NULL;
+    if (server_name_len)
+        *server_name_len = 0;
+    if (server_version)
+        *server_version = NULL;
+    if (server_version_len)
+        *server_version_len = 0;
+    if (caps)
+        *caps = 0;
+    if (max_sessions)
+        *max_sessions = 0;
+    if (active_sessions)
+        *active_sessions = 0;
+
+    vtremote_rbuf_init(&r, payload, len);
+    ret = vtremote_rbuf_read_u8(&r, status);
+    if (ret < 0)
+        return ret;
+
+    ret = vtremote_rbuf_read_str(&r, server_name, server_name_len);
+    if (ret < 0)
+        return ret;
+    ret = vtremote_rbuf_read_str(&r, server_version, server_version_len);
+    if (ret < 0)
+        return ret;
+    ret = vtremote_rbuf_read_u8(&r, &cap_count);
+    if (ret < 0)
+        return ret;
+
+    for (int i = 0; i < cap_count; i++) {
+        const uint8_t *name = NULL;
+        int name_len = 0;
+        uint64_t flag = 0;
+
+        ret = vtremote_rbuf_read_str(&r, &name, &name_len);
+        if (ret < 0)
+            return ret;
+        ret = vtremote_cap_flag_from_name(name, name_len, &flag);
+        if (ret < 0)
+            return ret;
+        parsed_caps |= flag;
+    }
+
+    uint16_t parsed_max_sessions = 0;
+    uint16_t parsed_active_sessions = 0;
+    ret = vtremote_rbuf_read_u16(&r, &parsed_max_sessions);
+    if (ret < 0)
+        return ret;
+    ret = vtremote_rbuf_read_u16(&r, &parsed_active_sessions);
+    if (ret < 0)
+        return ret;
+    if (caps)
+        *caps = parsed_caps;
+    if (max_sessions)
+        *max_sessions = parsed_max_sessions;
+    if (active_sessions)
+        *active_sessions = parsed_active_sessions;
+
+    return 0;
+}
+
 /* --- write buffer helpers ------------------------------------------------ */
 
 #include "libavutil/mem.h"
@@ -429,8 +574,10 @@ int vtremote_parse_frame(const uint8_t *payload, int payload_size, VTRemoteFrame
         if (ret < 0)
             return ret;
         
-        out->side_data_count = sd_count > 8 ? 8 : sd_count;
+        out->side_data_count = sd_count > 16 ? 16 : sd_count;
         
+        /* Iterate over the full wire count to consume all records even when
+         * retaining only the bounded local prefix. */
         for (int i = 0; i < sd_count; i++) {
             uint32_t type, size;
             ret |= vtremote_rbuf_read_u32(&r, &type);
@@ -440,7 +587,7 @@ int vtremote_parse_frame(const uint8_t *payload, int payload_size, VTRemoteFrame
             if (size > (uint32_t)(r.size - r.pos))
                 return AVERROR_INVALIDDATA;
             
-            if (i < 8) {
+            if (i < 16) {
                 out->side_data[i].type = type;
                 out->side_data[i].size = size;
                 out->side_data[i].data = r.data + r.pos;
