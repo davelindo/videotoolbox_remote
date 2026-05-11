@@ -237,7 +237,7 @@ install-vtremoted-restart: build-vtremoted install-vtremoted verify-vtremoted-in
 verify-vtremoted-install:
 ifeq ($(IS_DARWIN),Darwin)
 	@domain="gui/$$(id -u)"; \
-	if [ -n "$(VTREMOTED_SYSTEM)" ]; then domain="system"; fi; \
+	if [ -n "$(VTREMOTED_SYSTEM)" ] || [ "$$(id -u)" = "0" ]; then domain="system"; fi; \
 	port="$(VTREMOTED_LISTEN)"; port="$${port##*:}"; \
 	echo "launchd service: $$domain/$(VTREMOTED_LABEL)"; \
 	launchctl print "$$domain/$(VTREMOTED_LABEL)" 2>/dev/null | sed -n '/program =/p;/arguments =/,/}/p;/pid =/p;/last exit/p' || true; \

@@ -24,4 +24,9 @@ final class ArgumentsTests: XCTestCase {
         XCTAssertTrue(Arguments.usage.contains("--listen HOST:PORT"))
         XCTAssertEqual(Arguments.version, "0.4.1")
     }
+
+    func testUnknownArgumentIsParseError() {
+        let args = Arguments.parse(["vtremoted", "--bogus"])
+        XCTAssertEqual(args.parseError, "unknown argument: --bogus")
+    }
 }

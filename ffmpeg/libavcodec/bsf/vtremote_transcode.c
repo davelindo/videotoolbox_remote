@@ -108,6 +108,7 @@ typedef struct VTRemoteTranscodeContext {
     int a53_cc;
     int64_t flags;
     uint64_t server_caps;
+    int warned_packet_side_data_no_cap;
     int fd;
     int connected;
     int flushing;
@@ -1263,7 +1264,35 @@ static int pop_packet(VTRemoteTranscodeContext *s, AVPacket *pkt) {
     return 0;
 }
 
-static int vtremote_send_packet(VTRemoteTranscodeContext *s, const AVPacket *pkt) {
+static int packet_side_data_from_avpacket(AVBSFContext *ctx,
+                                          const AVPacket *pkt,
+                                          VTRemoteSideData *side_data,
+                                          int max_side_data)
+{
+    int count = 0;
+    int valid_count = 0;
+
+    if (!pkt || !side_data || max_side_data <= 0)
+        return 0;
+    for (int i = 0; i < pkt->side_data_elems; i++) {
+        if (!pkt->side_data[i].data || pkt->side_data[i].size <= 0)
+            continue;
+        valid_count++;
+        if (count >= max_side_data)
+            continue;
+        side_data[count].type = (uint32_t)pkt->side_data[i].type;
+        side_data[count].size = (uint32_t)pkt->side_data[i].size;
+        side_data[count].data = pkt->side_data[i].data;
+        count++;
+    }
+    if (valid_count > count)
+        av_log(ctx, AV_LOG_DEBUG,
+               "Truncating packet side data records from %d to %d\n",
+               valid_count, count);
+    return count;
+}
+
+static int vtremote_send_packet(AVBSFContext *ctx, VTRemoteTranscodeContext *s, const AVPacket *pkt) {
     if (!s || !pkt)
         return AVERROR(EINVAL);
     VTRemoteWBuf *payload = &s->pkt_buf;
@@ -1274,13 +1303,15 @@ static int vtremote_send_packet(VTRemoteTranscodeContext *s, const AVPacket *pkt
     int64_t dur = pkt->duration > 0 ? pkt->duration : 0;
     VTRemoteSideData side_data[16];
     int side_data_count = 0;
-    for (int i = 0; i < pkt->side_data_elems && side_data_count < FF_ARRAY_ELEMS(side_data); i++) {
-        if (!pkt->side_data[i].data || pkt->side_data[i].size <= 0)
-            continue;
-        side_data[side_data_count].type = (uint32_t)pkt->side_data[i].type;
-        side_data[side_data_count].size = (uint32_t)pkt->side_data[i].size;
-        side_data[side_data_count].data = pkt->side_data[i].data;
-        side_data_count++;
+    if (pkt->side_data_elems > 0) {
+        if (s->server_caps & VTREMOTE_CAP_SIDE_DATA_V2) {
+            side_data_count = packet_side_data_from_avpacket(
+                ctx, pkt, side_data, FF_ARRAY_ELEMS(side_data));
+        } else if (!s->warned_packet_side_data_no_cap) {
+            av_log(ctx, AV_LOG_WARNING,
+                   "Remote server does not advertise side_data.v2; dropping packet side data\n");
+            s->warned_packet_side_data_no_cap = 1;
+        }
     }
     int ret = vtremote_payload_packet_ex(payload,
                                          pts, dts, dur,
@@ -1554,7 +1585,7 @@ static int vtremote_transcode_filter(AVBSFContext *ctx, AVPacket *pkt) {
         }
     }
 
-    ret = vtremote_send_packet(s, &in_pkt);
+    ret = vtremote_send_packet(ctx, s, &in_pkt);
     av_packet_unref(&in_pkt);
     if (ret < 0)
         return ret;

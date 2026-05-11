@@ -2278,11 +2278,30 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame) {
   VTRemoteSideData sd[VTREMOTE_MAX_FRAME_SIDE_DATA];
   int sd_count = 0;
   int side_data_bytes = 0;
-  if (frame->nb_side_data > 0) {
-    for (int i = 0; i < frame->nb_side_data && sd_count < VTREMOTE_MAX_FRAME_SIDE_DATA; i++) {
+  int valid_side_data = 0;
+  if (frame->nb_side_data > 0 &&
+      !(s->server_caps & VTREMOTE_CAP_SIDE_DATA_V2)) {
+    for (int i = 0; i < frame->nb_side_data; i++) {
       AVFrameSideData *frame_sd = frame->side_data[i];
       if (frame_sd->size > 0 &&
           vtremote_should_forward_frame_side_data(frame_sd->type)) {
+        valid_side_data = 1;
+        break;
+      }
+    }
+    if (valid_side_data > 0 && !s->warned_frame_side_data_no_cap) {
+      av_log(avctx, AV_LOG_WARNING,
+             "Remote server does not advertise side_data.v2; dropping frame side data\n");
+      s->warned_frame_side_data_no_cap = 1;
+    }
+  } else if (frame->nb_side_data > 0) {
+    for (int i = 0; i < frame->nb_side_data; i++) {
+      AVFrameSideData *frame_sd = frame->side_data[i];
+      if (frame_sd->size > 0 &&
+          vtremote_should_forward_frame_side_data(frame_sd->type)) {
+        valid_side_data++;
+        if (sd_count >= VTREMOTE_MAX_FRAME_SIDE_DATA)
+          continue;
         /* Check the per-entry limit before the aggregate limit; the subtraction
          * below relies on size staying within the bounded byte budget. */
         if (frame_sd->size > VTREMOTE_MAX_FRAME_SIDE_DATA_BYTES ||
@@ -2299,6 +2318,10 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame) {
         side_data_bytes += (int)frame_sd->size;
       }
     }
+    if (valid_side_data > sd_count)
+      av_log(avctx, AV_LOG_DEBUG,
+             "Truncating frame side data records from %d to %d\n",
+             valid_side_data, sd_count);
   }
 
   ret = vtremote_sendq_enqueue_frame(

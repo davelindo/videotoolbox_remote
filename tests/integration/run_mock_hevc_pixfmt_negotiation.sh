@@ -5,6 +5,16 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FFMPEG_BIN="${FFMPEG_BIN:-${ROOT}/ffmpeg/ffmpeg}"
+SERVER_PID=""
+
+cleanup() {
+  if [[ -n "$SERVER_PID" ]]; then
+    kill "$SERVER_PID" 2>/dev/null || true
+    wait "$SERVER_PID" 2>/dev/null || true
+    SERVER_PID=""
+  fi
+}
+trap cleanup EXIT
 
 if [[ ! -x "$FFMPEG_BIN" ]]; then
   echo "ffmpeg binary not found at $FFMPEG_BIN" >&2
@@ -24,7 +34,6 @@ PY
 run_case() {
   local pix_fmt="$1"
   local port
-  local server_pid
   local server_log="/tmp/mock_vtremote_hevc_${pix_fmt}.log"
   local ffmpeg_log="/tmp/mock_vtremote_hevc_${pix_fmt}_ffmpeg.log"
 
@@ -33,8 +42,7 @@ run_case() {
     --listen "127.0.0.1:${port}" \
     --strict-config-options \
     --once >"$server_log" 2>&1 &
-  server_pid=$!
-  trap 'kill "$server_pid" 2>/dev/null || true' RETURN
+  SERVER_PID=$!
   sleep 0.2
 
   "$FFMPEG_BIN" -hide_banner -v warning -xerror \
@@ -46,8 +54,8 @@ run_case() {
     -b:v 500k -g 10 \
     -f null - >"$ffmpeg_log" 2>&1
 
-  wait "$server_pid"
-  trap - RETURN
+  wait "$SERVER_PID"
+  SERVER_PID=""
   echo "OK: mock HEVC pix_fmt=${pix_fmt} negotiation passed"
 }
 

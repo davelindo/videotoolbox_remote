@@ -574,6 +574,8 @@ int vtremote_parse_packet(const uint8_t *payload, int payload_size, VTRemotePack
             }
             r.pos += size;
         }
+        if (r.pos != r.size)
+            return AVERROR_INVALIDDATA;
     } else {
         out->side_data_count = 0;
     }
@@ -644,6 +646,8 @@ int vtremote_parse_frame(const uint8_t *payload, int payload_size, VTRemoteFrame
             }
             r.pos += size;
         }
+        if (r.pos != r.size)
+            return AVERROR_INVALIDDATA;
     } else {
         out->side_data_count = 0;
     }

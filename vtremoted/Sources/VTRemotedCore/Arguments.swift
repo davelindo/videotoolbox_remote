@@ -19,6 +19,7 @@ public struct Arguments: Equatable, Sendable {
     public var once: Bool = false
     public var showHelp: Bool = false
     public var showVersion: Bool = false
+    public var parseError: String = ""
 
     public init() {}
 
@@ -86,7 +87,8 @@ public struct Arguments: Equatable, Sendable {
             case "--version":
                 args.showVersion = true
             default:
-                break
+                args.parseError = "unknown argument: \(arg)"
+                return args
             }
         }
         return args

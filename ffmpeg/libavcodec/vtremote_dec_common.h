@@ -32,6 +32,7 @@ typedef struct VTRemoteDecContext {
     int output_hw_frames;
     int owns_hw_frames_ctx;
     uint64_t server_caps;
+    int warned_packet_side_data_no_cap;
     int codec_id;
     int fd;
     int connected;

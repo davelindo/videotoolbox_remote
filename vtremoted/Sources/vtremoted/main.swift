@@ -3,6 +3,12 @@ import VTRemotedCore
 
 let args = Arguments.parse(CommandLine.arguments)
 
+if !args.parseError.isEmpty {
+    let message = "error: \(args.parseError)\n\n\(Arguments.usage)\n"
+    FileHandle.standardError.write(Data(message.utf8))
+    exit(2)
+}
+
 if args.showHelp {
     print(Arguments.usage)
     exit(0)

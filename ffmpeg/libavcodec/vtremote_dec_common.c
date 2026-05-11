@@ -491,22 +491,31 @@ static int vtremote_decompress_plane_payload(VTRemoteDecContext *s,
     return AVERROR_INVALIDDATA;
 }
 
-static int packet_side_data_from_avpacket(const AVPacket *pkt,
+static int packet_side_data_from_avpacket(AVCodecContext *avctx,
+                                          const AVPacket *pkt,
                                           VTRemoteSideData *side_data,
                                           int max_side_data)
 {
     int count = 0;
+    int valid_count = 0;
 
     if (!pkt || !side_data || max_side_data <= 0)
         return 0;
-    for (int i = 0; i < pkt->side_data_elems && count < max_side_data; i++) {
+    for (int i = 0; i < pkt->side_data_elems; i++) {
         if (!pkt->side_data[i].data || pkt->side_data[i].size <= 0)
+            continue;
+        valid_count++;
+        if (count >= max_side_data)
             continue;
         side_data[count].type = (uint32_t)pkt->side_data[i].type;
         side_data[count].size = (uint32_t)pkt->side_data[i].size;
         side_data[count].data = pkt->side_data[i].data;
         count++;
     }
+    if (valid_count > count)
+        av_log(avctx, AV_LOG_DEBUG,
+               "Truncating packet side data records from %d to %d\n",
+               valid_count, count);
     return count;
 }
 
@@ -1164,8 +1173,17 @@ int ff_vtremote_decode(AVCodecContext *avctx, AVFrame *frame, int *got_frame, AV
         int64_t dts = pkt->dts;
         int64_t dur = pkt->duration > 0 ? pkt->duration : 0;
         VTRemoteSideData side_data[16];
-        int side_data_count = packet_side_data_from_avpacket(
-            pkt, side_data, FF_ARRAY_ELEMS(side_data));
+        int side_data_count = 0;
+        if (pkt->side_data_elems > 0) {
+            if (s->server_caps & VTREMOTE_CAP_SIDE_DATA_V2) {
+                side_data_count = packet_side_data_from_avpacket(
+                    avctx, pkt, side_data, FF_ARRAY_ELEMS(side_data));
+            } else if (!s->warned_packet_side_data_no_cap) {
+                av_log(avctx, AV_LOG_WARNING,
+                       "Remote server does not advertise side_data.v2; dropping packet side data\n");
+                s->warned_packet_side_data_no_cap = 1;
+            }
+        }
         int ret = vtremote_payload_packet_ex(payload,
                                              pts, dts, dur,
                                              (pkt->flags & AV_PKT_FLAG_KEY) ? 1 : 0,

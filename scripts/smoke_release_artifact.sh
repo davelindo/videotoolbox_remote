@@ -27,7 +27,11 @@ fi
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/vtremote-artifact-smoke.XXXXXX")"
 trap 'rm -rf "$tmpdir"' EXIT
 
-tar -xzf "$artifact" -C "$tmpdir"
+tar_args=(-xzf "$artifact" -C "$tmpdir")
+if tar --help 2>&1 | grep -q -- '--no-same-owner'; then
+  tar_args=(--no-same-owner --no-same-permissions "${tar_args[@]}")
+fi
+tar "${tar_args[@]}"
 
 grep_feature() {
   local label="$1"

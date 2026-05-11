@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Real vtremoted regression: encode an HEVC Main10 HDR-signaled source through
-# the remote encoder and verify the mux-facing stream keeps the HDR/color fields.
+# Real vtremoted regressions:
+# - send frame side-data through the encoder wire path and verify it returns on PACKET
+# - encode an HEVC Main10 HDR-signaled source and verify mux-facing HDR/color fields
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FFMPEG_BIN="${FFMPEG_BIN:-${ROOT}/ffmpeg/ffmpeg}"
@@ -60,6 +61,123 @@ if [[ -z "${VTREMOTE_USE_EXISTING:-}" ]]; then
 else
   echo "Using existing vtremoted on 127.0.0.1:${PORT}..."
 fi
+
+echo "Verifying real vtremoted frame side-data wire round-trip..."
+python3 - "$PORT" "$TOKEN" <<'PY'
+import socket
+import struct
+import sys
+
+port = int(sys.argv[1])
+token = sys.argv[2]
+
+magic = 0x56545231
+version = 1
+header = struct.Struct(">IHHI")
+MSG_HELLO = 1
+MSG_HELLO_ACK = 2
+MSG_CONFIGURE = 3
+MSG_CONFIGURE_ACK = 4
+MSG_FRAME = 5
+MSG_PACKET = 6
+MSG_FLUSH = 7
+MSG_DONE = 8
+MSG_ERROR = 9
+
+
+def write_str(value: str) -> bytes:
+    raw = value.encode("utf-8")
+    return struct.pack(">H", len(raw)) + raw
+
+
+def write_msg(sock: socket.socket, typ: int, payload: bytes = b"") -> None:
+    sock.sendall(header.pack(magic, version, typ, len(payload)) + payload)
+
+
+def read_exact(sock: socket.socket, n: int) -> bytes:
+    data = bytearray()
+    while len(data) < n:
+        chunk = sock.recv(n - len(data))
+        if not chunk:
+            raise RuntimeError("socket closed")
+        data.extend(chunk)
+    return bytes(data)
+
+
+def read_msg(sock: socket.socket):
+    raw = read_exact(sock, header.size)
+    got_magic, got_version, typ, length = header.unpack(raw)
+    if got_magic != magic or got_version != version:
+        raise RuntimeError("bad message header")
+    payload = read_exact(sock, length)
+    if typ == MSG_ERROR:
+        msg = payload[6:].decode("utf-8", "replace") if len(payload) >= 6 else repr(payload)
+        raise RuntimeError(f"server error: {msg}")
+    return typ, payload
+
+
+def write_config_option(key: str, value: str) -> bytes:
+    return write_str(key) + write_str(value)
+
+
+side_payload = b"vtremote-real-frame-side-data"
+side_blob = struct.pack(">BII", 1, 11, len(side_payload)) + side_payload
+
+with socket.create_connection(("127.0.0.1", port), timeout=10) as sock:
+    hello = write_str(token) + write_str("h264") + write_str("hdr-side-data-test") + write_str("test")
+    write_msg(sock, MSG_HELLO, hello)
+    typ, payload = read_msg(sock)
+    if typ != MSG_HELLO_ACK or not payload or payload[0] != 0:
+        raise RuntimeError("HELLO_ACK failed")
+
+    options = [
+        ("mode", "encode"),
+        ("wire_compression", "0"),
+        ("bitrate", "200000"),
+        ("gop", "10"),
+        ("max_b_frames", "0"),
+    ]
+    config = bytearray()
+    config.extend(struct.pack(">IIBIIII", 64, 64, 1, 1, 1000, 5, 1))
+    config.extend(struct.pack(">H", len(options)))
+    for key, value in options:
+        config.extend(write_config_option(key, value))
+    config.extend(struct.pack(">I", 0))
+    write_msg(sock, MSG_CONFIGURE, bytes(config))
+    typ, payload = read_msg(sock)
+    if typ != MSG_CONFIGURE_ACK or not payload or payload[0] != 0:
+        raise RuntimeError("CONFIGURE_ACK failed")
+
+    y = bytes([0x40]) * (64 * 64)
+    uv = bytes([0x80]) * (64 * 32)
+    frame = bytearray()
+    frame.extend(struct.pack(">qqIB", 0, 200, 1, 2))
+    frame.extend(struct.pack(">III", 64, 64, len(y)))
+    frame.extend(y)
+    frame.extend(struct.pack(">III", 64, 32, len(uv)))
+    frame.extend(uv)
+    frame.extend(side_blob)
+    write_msg(sock, MSG_FRAME, bytes(frame))
+    write_msg(sock, MSG_FLUSH)
+
+    saw_packet = False
+    while True:
+        typ, payload = read_msg(sock)
+        if typ == MSG_PACKET:
+            saw_packet = True
+            off = 8 + 8 + 8 + 4
+            data_len = struct.unpack_from(">I", payload, off)[0]
+            off += 4 + data_len
+            got_side = payload[off:]
+            if got_side != side_blob:
+                raise RuntimeError(f"side-data mismatch: {got_side!r} != {side_blob!r}")
+        elif typ == MSG_DONE:
+            break
+    if not saw_packet:
+        raise RuntimeError("server returned DONE without PACKET")
+
+print("OK: real vtremoted frame side-data round-trip passed")
+PY
 
 echo "Encoding remote HEVC Main10 with HDR color signaling..."
 "$FFMPEG_BIN" -hide_banner -v warning -y \

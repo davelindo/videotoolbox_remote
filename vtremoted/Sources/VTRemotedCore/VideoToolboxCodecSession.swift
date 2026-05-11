@@ -50,6 +50,7 @@
         private var decodeReorderBuffer: DecodeReorderBuffer<[Data]>?
         private var transcodeReorderBuffer: DecodeReorderBuffer<TranscodeFramePayload>?
         private var pendingDecodeSideDataByPts: [Int64: [WireSideData]] = [:]
+        private var pendingDecodeSideDataOrder: [Int64] = []
         private var transcodeOutputPool: CVPixelBufferPool?
         private var transcodeTransferSession: VTPixelTransferSession?
         private var transcodeOutputWidth: Int = 0
@@ -86,6 +87,47 @@
                 self.sideData = sideData
                 self.isWarmup = isWarmup
             }
+        }
+
+        private func clearPendingDecodeSideData() {
+            callbackLock.lock()
+            pendingDecodeSideDataByPts.removeAll(keepingCapacity: true)
+            pendingDecodeSideDataOrder.removeAll(keepingCapacity: true)
+            callbackLock.unlock()
+        }
+
+        private func storePendingDecodeSideData(ptsTicks: Int64, sideData: [WireSideData]) {
+            guard !sideData.isEmpty else { return }
+            guard ptsTicks != Self.noPtsTicks else {
+                logger.debug("dropping decode side data without PTS")
+                return
+            }
+
+            callbackLock.lock()
+            if pendingDecodeSideDataByPts[ptsTicks] != nil {
+                pendingDecodeSideDataOrder.removeAll { $0 == ptsTicks }
+            }
+            pendingDecodeSideDataByPts[ptsTicks] = sideData
+            pendingDecodeSideDataOrder.append(ptsTicks)
+
+            let limit = max(16, decodeReorderDepth + 8)
+            while pendingDecodeSideDataOrder.count > limit {
+                let evictedPts = pendingDecodeSideDataOrder.removeFirst()
+                pendingDecodeSideDataByPts.removeValue(forKey: evictedPts)
+            }
+            callbackLock.unlock()
+        }
+
+        private func takePendingDecodeSideData(ptsTicks: Int64) -> [WireSideData] {
+            guard ptsTicks != Self.noPtsTicks else { return [] }
+
+            callbackLock.lock()
+            let sideData = pendingDecodeSideDataByPts.removeValue(forKey: ptsTicks) ?? []
+            if !sideData.isEmpty {
+                pendingDecodeSideDataOrder.removeAll { $0 == ptsTicks }
+            }
+            callbackLock.unlock()
+            return sideData
         }
 
         private struct PendingEncodedPacket {
@@ -320,7 +362,7 @@
             decodeReorderDepth = 0
             decodeReorderBuffer = nil
             transcodeReorderBuffer = nil
-            pendingDecodeSideDataByPts.removeAll(keepingCapacity: true)
+            clearPendingDecodeSideData()
             transcodeOutputPool = nil
             transcodeTransferSession = nil
             transcodeOutputWidth = 0
@@ -828,9 +870,7 @@
             let dataLen = try Int(reader.readBEUInt32())
             let annexB = try reader.readBytes(count: dataLen)
             let sideData = try Self.readWireSideData(&reader)
-            if !sideData.isEmpty {
-                pendingDecodeSideDataByPts[ptsTicks] = sideData
-            }
+            storePendingDecodeSideData(ptsTicks: ptsTicks, sideData: sideData)
 
             let lengthPrefixed = AnnexB.toLengthPrefixed(annexB, lengthSize: nalLengthField)
 
@@ -2085,7 +2125,7 @@
             } else {
                 0
             }
-            let sideData = pendingDecodeSideDataByPts.removeValue(forKey: ptsTicks) ?? []
+            let sideData = takePendingDecodeSideData(ptsTicks: ptsTicks)
             let payload = TranscodeFramePayload(pixelBuffer: pixelBuffer, durTicks: durTicks, sideData: sideData)
 
             callbackLock.lock()
@@ -2323,7 +2363,7 @@
             } else {
                 0
             }
-            let sideData = pendingDecodeSideDataByPts.removeValue(forKey: ptsTicks) ?? []
+            let sideData = takePendingDecodeSideData(ptsTicks: ptsTicks)
 
             var chunks: [Data] = []
             chunks.reserveCapacity(sideData.isEmpty ? 5 : 6)
