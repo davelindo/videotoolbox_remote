@@ -105,10 +105,12 @@ fi
 
 echo "Running simultaneous decode/encode test..."
 "$FFMPEG_BIN" -v info -y \
-  -c:v h264_videotoolbox_remote ${DECODE_ARGS[@]+"${DECODE_ARGS[@]}"} -vt_remote_host "$SERVER_ADDR" ${TOKEN_ARGS[@]+"${TOKEN_ARGS[@]}"} \
+  -c:v h264_videotoolbox_remote ${DECODE_ARGS[@]+"${DECODE_ARGS[@]}"} -vt_remote_host "$SERVER_ADDR" \
+  -vt_remote_wire_compression none ${TOKEN_ARGS[@]+"${TOKEN_ARGS[@]}"} \
   -i "$INPUT_FILE" \
   -vf "scale=640:360,format=nv12" \
-  -c:v h264_videotoolbox_remote -vt_remote_host "$SERVER_ADDR" ${TOKEN_ARGS[@]+"${TOKEN_ARGS[@]}"} \
+  -c:v h264_videotoolbox_remote -vt_remote_host "$SERVER_ADDR" \
+  -vt_remote_wire_compression none ${TOKEN_ARGS[@]+"${TOKEN_ARGS[@]}"} \
   -b:v 1M \
   -f null - >/tmp/vtremoted_ffmpeg_transcode.log 2>&1
 

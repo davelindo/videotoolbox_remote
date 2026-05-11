@@ -66,6 +66,7 @@ echo "Running complex complex filter chain..."
   -map "[out]" \
   -c:v h264_videotoolbox_remote \
   -vt_remote_host "$SERVER_ADDR" \
+  -vt_remote_wire_compression none \
   ${TOKEN_ARGS[@]+"${TOKEN_ARGS[@]}"} \
   -b:v 2M \
   -f null - >/tmp/mock_vtremoted_complex_ffmpeg.log 2>&1

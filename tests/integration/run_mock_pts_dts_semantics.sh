@@ -52,7 +52,8 @@ sleep 0.2
 
 "$FFMPEG_BIN" -hide_banner -loglevel verbose -debug_ts \
   -f lavfi -i testsrc2=size=64x64:rate=5 -t 1 -pix_fmt nv12 \
-  -c:v h264_videotoolbox_remote -vt_remote_host "$SERVER_ADDR" ${TOKEN_ARGS[@]+"${TOKEN_ARGS[@]}"} \
+  -c:v h264_videotoolbox_remote -vt_remote_host "$SERVER_ADDR" \
+  -vt_remote_wire_compression none ${TOKEN_ARGS[@]+"${TOKEN_ARGS[@]}"} \
   -f null - > /dev/null 2>"$FFMPEG_LOG"
 
 python3 - <<PY
@@ -90,4 +91,3 @@ if not seen_pts_lt_dts:
 PY
 
 echo "OK: pts<dts preserved; logs at ${SERVER_LOG} and ${FFMPEG_LOG}"
-
