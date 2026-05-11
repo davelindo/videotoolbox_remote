@@ -15,7 +15,7 @@ Follow these steps to set up the macOS server and build the FFmpeg client.
 ## Prerequisites
 
 - **Server**: A Mac with Apple Silicon (M1/M2/M3) or T2 Security Chip running macOS.
-- **Client**: Linux, Windows, or macOS.
+- **Client**: Linux, Windows, or macOS. Prebuilt Linux artifacts target `x86_64`; 32-bit `i686` builds are not part of the supported release matrix.
 - **Network**: Wired LAN is strongly recommended (1GbE minimum, 2.5GbE+ for 4K).
 
 ## Step 1: Prepare the Mac (Server)
@@ -44,7 +44,14 @@ Follow these steps to set up the macOS server and build the FFmpeg client.
 
     > [!TIP]
     > To install as a background service, run:
-    > `./install_launchd.sh --bin /usr/local/bin/vtremoted --listen 0.0.0.0:5555`
+    > `make install-vtremoted-restart VTREMOTED_LISTEN=0.0.0.0:5555`
+
+5.  **Verify the server**:
+    ```bash
+    vtremoted/.build/release/vtremoted --version
+    pgrep -fl vtremoted
+    lsof -nP -iTCP:5555 -sTCP:LISTEN
+    ```
 
 ## Step 2: Build FFmpeg (Client)
 
@@ -59,6 +66,12 @@ On your Linux or Windows machine (or the same Mac if testing locally):
     git clone https://github.com/davelindo/videotoolbox_remote.git
     cd videotoolbox_remote
     make build-ffmpeg
+    ```
+
+    If a Linux `x86_64` source build fails inside FFmpeg x86 assembly, first install current `nasm` and `yasm`. To confirm the failure is assembler-specific, rebuild with:
+    ```bash
+    make clean-ffmpeg
+    make build-ffmpeg FFMPEG_DISABLE_X86ASM=1
     ```
 
 ## Step 3: Usage Examples

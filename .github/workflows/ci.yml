@@ -184,6 +184,9 @@ jobs:
           cp vtremoted/install_launchd.sh dist/vtremoted/install_launchd.sh
           tar -C dist -czf vtremoted-macos-arm64.tar.gz vtremoted
           shasum -a 256 vtremoted-macos-arm64.tar.gz > vtremoted-macos-arm64.tar.gz.sha256
+      - name: Smoke packaged vtremoted artifact
+        run: |
+          bash scripts/smoke_release_artifact.sh vtremoted vtremoted-macos-arm64.tar.gz
       - name: Upload vtremoted artifact
         uses: actions/upload-artifact@v4
         with:
@@ -226,6 +229,9 @@ jobs:
           cp vtremoted/install_launchd.sh dist/vtremoted/install_launchd.sh
           tar -C dist -czf vtremoted-macos-x86_64.tar.gz vtremoted
           shasum -a 256 vtremoted-macos-x86_64.tar.gz > vtremoted-macos-x86_64.tar.gz.sha256
+      - name: Smoke packaged vtremoted artifact
+        run: |
+          bash scripts/smoke_release_artifact.sh vtremoted vtremoted-macos-x86_64.tar.gz
       - name: Upload vtremoted artifact
         uses: actions/upload-artifact@v4
         with:
@@ -375,10 +381,14 @@ jobs:
         if: matrix.label == 'linux-x86_64'
         run: |
           bash tests/integration/run_mock_roundtrip.sh
+          bash tests/integration/run_mock_wire_compression.sh
           bash tests/integration/run_mock_decode.sh
           bash tests/integration/run_mock_pts_dts_semantics.sh
           bash tests/integration/run_mock_transcode_pts_dts_semantics.sh
           bash tests/integration/run_mock_transcode_hvc1_hdr_signaling.sh
+          bash tests/integration/run_mock_protocol_capabilities.sh
+          bash tests/integration/run_mock_side_data_roundtrip.sh
+          bash tests/integration/run_mock_hevc_pixfmt_negotiation.sh
 
       - name: Package ffmpeg (Linux/macOS)
         if: runner.os != 'Windows'
@@ -390,6 +400,10 @@ jobs:
           fi
           tar -C dist -czf ffmpeg-${{ matrix.label }}.tar.gz .
           shasum -a 256 ffmpeg-${{ matrix.label }}.tar.gz > ffmpeg-${{ matrix.label }}.tar.gz.sha256
+      - name: Smoke packaged ffmpeg artifact (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          bash scripts/smoke_release_artifact.sh ffmpeg ffmpeg-${{ matrix.label }}.tar.gz
 
       - name: Configure + build (Windows/MSYS2)
         if: runner.os == 'Windows'
@@ -421,6 +435,11 @@ jobs:
           fi
           tar -C dist -czf ffmpeg-${{ matrix.label }}.tar.gz .
           sha256sum ffmpeg-${{ matrix.label }}.tar.gz > ffmpeg-${{ matrix.label }}.tar.gz.sha256
+      - name: Smoke packaged ffmpeg artifact (Windows/MSYS2)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          bash scripts/smoke_release_artifact.sh ffmpeg ffmpeg-${{ matrix.label }}.tar.gz
 
       - name: Upload ffmpeg artifact
         uses: actions/upload-artifact@v4

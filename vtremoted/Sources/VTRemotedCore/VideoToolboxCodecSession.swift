@@ -49,6 +49,8 @@
         private var decodeReorderDepth = 0
         private var decodeReorderBuffer: DecodeReorderBuffer<[Data]>?
         private var transcodeReorderBuffer: DecodeReorderBuffer<TranscodeFramePayload>?
+        private var pendingDecodeSideDataByPts: [Int64: [WireSideData]] = [:]
+        private var pendingDecodeSideDataOrder: [Int64] = []
         private var transcodeOutputPool: CVPixelBufferPool?
         private var transcodeTransferSession: VTPixelTransferSession?
         private var transcodeOutputWidth: Int = 0
@@ -64,15 +66,68 @@
         private var nominalFrameDurTicks: Int64 = 0
         private var encodeDtsOffsetTicks: Int64 = 0
 
+        private struct WireSideData {
+            let type: UInt32
+            let data: Data
+        }
+
         private class FrameContext {
             let seq: UInt64
             let pixelBuffer: CVPixelBuffer?
+            let sideData: [WireSideData]
             let isWarmup: Bool
-            init(seq: UInt64, pixelBuffer: CVPixelBuffer? = nil, isWarmup: Bool = false) {
+            init(
+                seq: UInt64,
+                pixelBuffer: CVPixelBuffer? = nil,
+                sideData: [WireSideData] = [],
+                isWarmup: Bool = false
+            ) {
                 self.seq = seq
                 self.pixelBuffer = pixelBuffer
+                self.sideData = sideData
                 self.isWarmup = isWarmup
             }
+        }
+
+        private func clearPendingDecodeSideData() {
+            callbackLock.lock()
+            pendingDecodeSideDataByPts.removeAll(keepingCapacity: true)
+            pendingDecodeSideDataOrder.removeAll(keepingCapacity: true)
+            callbackLock.unlock()
+        }
+
+        private func storePendingDecodeSideData(ptsTicks: Int64, sideData: [WireSideData]) {
+            guard !sideData.isEmpty else { return }
+            guard ptsTicks != Self.noPtsTicks else {
+                logger.debug("dropping decode side data without PTS")
+                return
+            }
+
+            callbackLock.lock()
+            if pendingDecodeSideDataByPts[ptsTicks] != nil {
+                pendingDecodeSideDataOrder.removeAll { $0 == ptsTicks }
+            }
+            pendingDecodeSideDataByPts[ptsTicks] = sideData
+            pendingDecodeSideDataOrder.append(ptsTicks)
+
+            let limit = max(16, decodeReorderDepth + 8)
+            while pendingDecodeSideDataOrder.count > limit {
+                let evictedPts = pendingDecodeSideDataOrder.removeFirst()
+                pendingDecodeSideDataByPts.removeValue(forKey: evictedPts)
+            }
+            callbackLock.unlock()
+        }
+
+        private func takePendingDecodeSideData(ptsTicks: Int64) -> [WireSideData] {
+            guard ptsTicks != Self.noPtsTicks else { return [] }
+
+            callbackLock.lock()
+            let sideData = pendingDecodeSideDataByPts.removeValue(forKey: ptsTicks) ?? []
+            if !sideData.isEmpty {
+                pendingDecodeSideDataOrder.removeAll { $0 == ptsTicks }
+            }
+            callbackLock.unlock()
+            return sideData
         }
 
         private struct PendingEncodedPacket {
@@ -81,11 +136,13 @@
             let durTicks: Int64
             let isKey: Bool
             let annex: Data
+            let sideData: [WireSideData]
         }
 
         private struct TranscodeFramePayload {
             let pixelBuffer: CVPixelBuffer
             let durTicks: Int64
+            let sideData: [WireSideData]
         }
         private let inputBufferPool = BufferPool()
         private let outputBufferPool = BufferPool()
@@ -137,6 +194,34 @@
             }
         }
 
+        private static func readWireSideData(_ reader: inout ByteReader) throws -> [WireSideData] {
+            guard reader.remaining > 0 else { return [] }
+            let count = Int(try reader.readUInt8())
+            var records: [WireSideData] = []
+            records.reserveCapacity(min(count, 16))
+            for index in 0 ..< count {
+                let type = try reader.readBEUInt32()
+                let size = try Int(reader.readBEUInt32())
+                let data = try reader.readBytes(count: size)
+                if index < 16 {
+                    records.append(WireSideData(type: type, data: data))
+                }
+            }
+            return records
+        }
+
+        private static func writeWireSideData(_ sideData: [WireSideData]) -> Data {
+            guard !sideData.isEmpty else { return Data() }
+            var writer = ByteWriter()
+            writer.write(UInt8(clamping: sideData.count))
+            for record in sideData.prefix(16) {
+                writer.writeBE(record.type)
+                writer.writeBE(UInt32(clamping: record.data.count))
+                writer.write(record.data)
+            }
+            return writer.data
+        }
+
         // `heightHint` lets callers override inferred row count when wire payload includes padding.
         // swiftlint:disable:next function_parameter_count
         private static func copyPlaneBytes(
@@ -168,7 +253,8 @@
             pixelBuffer: CVPixelBuffer,
             ptsTicks: Int64,
             durTicks: Int64,
-            flags: UInt32
+            flags: UInt32,
+            sideData: [WireSideData] = []
         ) throws {
             guard let config else { throw VTRemotedError.protocolViolation("FRAME before CONFIGURE") }
 
@@ -180,7 +266,7 @@
             let seq = nextEncodeSeq()
             // Retain the pixel buffer until the encoder callback fires. VideoToolbox may consume frames
             // asynchronously, and the pool can otherwise recycle the buffer while it is still in use.
-            let frameContext = FrameContext(seq: seq, pixelBuffer: pixelBuffer)
+            let frameContext = FrameContext(seq: seq, pixelBuffer: pixelBuffer, sideData: sideData)
             let ctxPtr = Unmanaged.passRetained(frameContext).toOpaque()
 
             var infoFlags = VTEncodeInfoFlags()
@@ -276,6 +362,7 @@
             decodeReorderDepth = 0
             decodeReorderBuffer = nil
             transcodeReorderBuffer = nil
+            clearPendingDecodeSideData()
             transcodeOutputPool = nil
             transcodeTransferSession = nil
             transcodeOutputWidth = 0
@@ -482,23 +569,15 @@
             if let err = errorSlots[0] { throw err }
             if planeIterations > 1, let err = errorSlots[1] { throw err }
 
-            // Consume side-data records for wire compatibility. Encoder output
-            // packet side-data propagation is not implemented yet.
-            if reader.remaining > 0 {
-                let sideDataCount = try reader.readUInt8()
-                for _ in 0 ..< sideDataCount {
-                    _ = try reader.readBEUInt32()
-                    let size = try reader.readBEUInt32()
-                    _ = try reader.sliceRange(count: Int(size))
-                }
-            }
+            let sideData = try Self.readWireSideData(&reader)
 
             try encodePreparedFrame(
                 session: session,
                 pixelBuffer: pBuffer,
                 ptsTicks: ptsTicks,
                 durTicks: durTicks,
-                flags: flags
+                flags: flags,
+                sideData: sideData
             )
         }
 
@@ -575,6 +654,20 @@
                 try require(count)
                 try streamIO.skip(length: count)
                 remaining -= count
+            }
+
+            func readBytes(_ count: Int) throws -> Data {
+                guard count > 0 else { return Data() }
+                try require(count)
+                var data = Data(count: count)
+                try data.withUnsafeMutableBytes { raw in
+                    guard let base = raw.baseAddress else {
+                        throw VTRemotedError.protocolViolation("empty destination")
+                    }
+                    try streamIO.readExact(into: base, count: count)
+                }
+                remaining -= count
+                return data
             }
 
             // Plane fields mirror wire metadata and destination buffer geometry.
@@ -704,14 +797,17 @@
                 )
             }
 
-            // Consume side-data records for wire compatibility. Encoder output
-            // packet side-data propagation is not implemented yet.
+            var sideData: [WireSideData] = []
             if remaining > 0 {
                 let sideDataCount = Int(try readUInt8())
-                for _ in 0 ..< sideDataCount {
-                    _ = try readBEUInt32()
+                sideData.reserveCapacity(min(sideDataCount, 16))
+                for index in 0 ..< sideDataCount {
+                    let type = try readBEUInt32()
                     let size = Int(try readBEUInt32())
-                    try skipBytes(size)
+                    let data = try readBytes(size)
+                    if index < 16 {
+                        sideData.append(WireSideData(type: type, data: data))
+                    }
                 }
             }
 
@@ -726,17 +822,23 @@
                 pixelBuffer: pBuffer,
                 ptsTicks: ptsTicks,
                 durTicks: durTicks,
-                flags: flags
+                flags: flags,
+                sideData: sideData
             )
         }
 
-        private func encodePixelBuffer(_ pixelBuffer: CVPixelBuffer, pts: CMTime, duration: CMTime) {
+        private func encodePixelBuffer(
+            _ pixelBuffer: CVPixelBuffer,
+            pts: CMTime,
+            duration: CMTime,
+            sideData: [WireSideData] = []
+        ) {
             guard let session = compressionSession else { return }
             let forceKey = takeForceKeyframeNext()
             let props: CFDictionary? = forceKey ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
 
             let seq = nextEncodeSeq()
-            let frameContext = FrameContext(seq: seq, pixelBuffer: pixelBuffer)
+            let frameContext = FrameContext(seq: seq, pixelBuffer: pixelBuffer, sideData: sideData)
             let ctxPtr = Unmanaged.passRetained(frameContext).toOpaque()
 
             let status = VTCompressionSessionEncodeFrame(
@@ -767,6 +869,8 @@
             _ = try reader.readBEUInt32() // isKey
             let dataLen = try Int(reader.readBEUInt32())
             let annexB = try reader.readBytes(count: dataLen)
+            let sideData = try Self.readWireSideData(&reader)
+            storePendingDecodeSideData(ptsTicks: ptsTicks, sideData: sideData)
 
             let lengthPrefixed = AnnexB.toLengthPrefixed(annexB, lengthSize: nalLengthField)
 
@@ -1534,7 +1638,12 @@
 
             do {
                 // Avoid copying potentially large Annex-B payload into the meta buffer.
-                try send(.packet, [meta.data, pkt.annex])
+                let sideDataBlob = Self.writeWireSideData(pkt.sideData)
+                if sideDataBlob.isEmpty {
+                    try send(.packet, [meta.data, pkt.annex])
+                } else {
+                    try send(.packet, [meta.data, pkt.annex, sideDataBlob])
+                }
             } catch {
                 logger.error("send packet failed: \(error)")
             }
@@ -1656,7 +1765,8 @@
                 dtsTicks: rawDtsTicks,
                 durTicks: durTicks,
                 isKey: isKey,
-                annex: annex
+                annex: annex,
+                sideData: context?.sideData ?? []
             )
 
             if encodeReorderBySeq {
@@ -1998,7 +2108,12 @@
                 guard let outputBuffer = prepareTranscodePixelBuffer(frame.payload.pixelBuffer, config: config) else {
                     continue
                 }
-                encodePixelBuffer(outputBuffer, pts: pts, duration: duration)
+                encodePixelBuffer(
+                    outputBuffer,
+                    pts: pts,
+                    duration: duration,
+                    sideData: frame.payload.sideData
+                )
             }
         }
 
@@ -2010,7 +2125,8 @@
             } else {
                 0
             }
-            let payload = TranscodeFramePayload(pixelBuffer: pixelBuffer, durTicks: durTicks)
+            let sideData = takePendingDecodeSideData(ptsTicks: ptsTicks)
+            let payload = TranscodeFramePayload(pixelBuffer: pixelBuffer, durTicks: durTicks, sideData: sideData)
 
             callbackLock.lock()
             let frames: [ReorderedDecodedFrame<TranscodeFramePayload>]
@@ -2247,9 +2363,10 @@
             } else {
                 0
             }
+            let sideData = takePendingDecodeSideData(ptsTicks: ptsTicks)
 
             var chunks: [Data] = []
-            chunks.reserveCapacity(5)
+            chunks.reserveCapacity(sideData.isEmpty ? 5 : 6)
             chunks.append(makeDecodedFrameMeta(ptsTicks: ptsTicks, durTicks: durTicks))
 
             struct PlaneResult {
@@ -2338,6 +2455,10 @@
             chunks.append(res0.data)
             chunks.append(res1.meta)
             chunks.append(res1.data)
+            let sideDataBlob = Self.writeWireSideData(sideData)
+            if !sideDataBlob.isEmpty {
+                chunks.append(sideDataBlob)
+            }
 
             enqueueDecodedFrame(ptsTicks: ptsTicks, durTicks: durTicks, chunks: chunks)
         }

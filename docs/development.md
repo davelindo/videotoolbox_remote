@@ -30,16 +30,40 @@ This produces:
 
 ### Linux / Windows (Client Only)
 
-1.  **Configure**:
+Linux CI and release artifacts target `x86_64`. The project does not publish or test 32-bit `i686` Linux builds.
+
+1.  **Install assembler and library dependencies**:
+    ```bash
+    nasm -v
+    yasm --version
+    ```
+    Install current `nasm` and `yasm` before building. FFmpeg's x86 assembly can fail early with older or missing assemblers.
+
+2.  **Configure**:
     ```bash
     cd ffmpeg
     ./configure --enable-videotoolbox-remote --enable-liblz4 --enable-libzstd \
       --enable-libvmaf --enable-libaom --enable-libdav1d --enable-libsvtav1
     ```
-2.  **Build**:
+3.  **Build**:
     ```bash
     make -j$(nproc)
     ```
+
+The repository Makefile wraps the same build with project defaults:
+
+```bash
+make build-ffmpeg
+```
+
+If a Linux `x86_64` source build fails in FFmpeg x86 assembly after installing current assemblers, use the diagnostic compatibility fallback:
+
+```bash
+make clean-ffmpeg
+make build-ffmpeg FFMPEG_DISABLE_X86ASM=1
+```
+
+This appends `--disable-x86asm`. It is slower and should not be the default path, but it confirms whether the failure is limited to the assembler/toolchain surface.
 
 ## Testing & Benchmarks
 
@@ -55,6 +79,15 @@ export VTREMOTED="$PWD/vtremoted/.build/release/vtremoted"
 - **`run_all.sh`**: Standard integration suite.
 - **`bench_vtremote.sh`**: Perform encoding/transcoding benchmarks.
 - **`run_vtremoted_roundtrip.sh`**: Verify H.264/HEVC roundtrip correctness.
+- **`run_mock_wire_compression.sh`**: Validate LZ4 and Zstd compressed frame payloads against the Python mock server.
+- **`run_mock_protocol_capabilities.sh`**: Validate 0.4.1 configure-time capability negotiation and clear rejection of unsupported surfaces.
+- **`run_mock_side_data_roundtrip.sh`**: Validate exact protocol side-data round-trips against the Python mock server.
+- **`run_mock_hevc_pixfmt_negotiation.sh`**: Validate HEVC `bgra`, `ayuv`, and `p210le` negotiation against the Python mock server.
+- **`run_vtremoted_hardware_ingest.sh`**: Verify remote encoders accept local VideoToolbox hardware frames.
+- **`run_vtremoted_transcode_hardware_ingest.sh`**: Verify a local VideoToolbox hardware-decode pipeline can feed remote HEVC encode.
+- **`run_vtremoted_decode_hardware_output.sh`**: Verify remote decoders can return VideoToolbox-backed frames when requested.
+- **`run_vtremoted_hevc_pixfmts.sh`**: Verify real `vtremoted` accepts HEVC `bgra`, `ayuv`, and `p210le` inputs.
+- **`run_vtremoted_hdr_side_data.sh`**: Verify real `vtremoted` preserves HEVC HDR color signaling.
 - **`run_obs_plugin_client_mock.sh`**: OBS plugin protocol smoke test against the Python mock server.
 
 ### Running a Benchmark
@@ -95,3 +128,14 @@ What they do:
 - `make release-notes TAG=...` regenerates and applies the onboarding-style release body for one GitHub release.
 - `make release-notes-all` backfills all existing GitHub releases with the generated notes format.
 - `bash scripts/generate_release_notes.sh <tag>` previews the generated release body locally without editing GitHub.
+
+## Artifact Smoke Checks
+
+CI smoke-tests packaged tarballs after creating them. To reproduce locally:
+
+```bash
+bash scripts/smoke_release_artifact.sh ffmpeg ffmpeg-linux-x86_64.tar.gz
+bash scripts/smoke_release_artifact.sh vtremoted vtremoted-macos-arm64.tar.gz
+```
+
+The FFmpeg smoke check unpacks the tarball and verifies the remote encoders, remote decoders, `vtremote_transcode`, and quality filters are present. The `vtremoted` smoke check verifies `--version` and `--help` without binding a socket.

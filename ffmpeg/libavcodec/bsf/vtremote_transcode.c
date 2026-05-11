@@ -108,6 +108,7 @@ typedef struct VTRemoteTranscodeContext {
     int a53_cc;
     int64_t flags;
     uint64_t server_caps;
+    int warned_packet_side_data_no_cap;
     int fd;
     int connected;
     int flushing;
@@ -1221,6 +1222,18 @@ static int enqueue_packet(AVBSFContext *ctx, const uint8_t *payload, int payload
     dst->dts = view.dts;
     dst->duration = view.duration;
     dst->flags = (view.flags & 1) ? AV_PKT_FLAG_KEY : 0;
+    for (int i = 0; i < view.side_data_count; i++) {
+        uint8_t *sd = av_packet_new_side_data(
+            dst, (enum AVPacketSideDataType)view.side_data[i].type,
+            view.side_data[i].size);
+        if (!sd) {
+            av_log(ctx, AV_LOG_WARNING,
+                   "Could not attach packet side data type=%u size=%u\n",
+                   view.side_data[i].type, view.side_data[i].size);
+            continue;
+        }
+        memcpy(sd, view.side_data[i].data, view.side_data[i].size);
+    }
     if (dst->dts == AV_NOPTS_VALUE)
         dst->dts = dst->pts;
     if (dst->dts != AV_NOPTS_VALUE) {
@@ -1251,7 +1264,35 @@ static int pop_packet(VTRemoteTranscodeContext *s, AVPacket *pkt) {
     return 0;
 }
 
-static int vtremote_send_packet(VTRemoteTranscodeContext *s, const AVPacket *pkt) {
+static int packet_side_data_from_avpacket(AVBSFContext *ctx,
+                                          const AVPacket *pkt,
+                                          VTRemoteSideData *side_data,
+                                          int max_side_data)
+{
+    int count = 0;
+    int valid_count = 0;
+
+    if (!pkt || !side_data || max_side_data <= 0)
+        return 0;
+    for (int i = 0; i < pkt->side_data_elems; i++) {
+        if (!pkt->side_data[i].data || pkt->side_data[i].size <= 0)
+            continue;
+        valid_count++;
+        if (count >= max_side_data)
+            continue;
+        side_data[count].type = (uint32_t)pkt->side_data[i].type;
+        side_data[count].size = (uint32_t)pkt->side_data[i].size;
+        side_data[count].data = pkt->side_data[i].data;
+        count++;
+    }
+    if (valid_count > count)
+        av_log(ctx, AV_LOG_DEBUG,
+               "Truncating packet side data records from %d to %d\n",
+               valid_count, count);
+    return count;
+}
+
+static int vtremote_send_packet(AVBSFContext *ctx, VTRemoteTranscodeContext *s, const AVPacket *pkt) {
     if (!s || !pkt)
         return AVERROR(EINVAL);
     VTRemoteWBuf *payload = &s->pkt_buf;
@@ -1260,10 +1301,24 @@ static int vtremote_send_packet(VTRemoteTranscodeContext *s, const AVPacket *pkt
     int64_t pts = pkt->pts;
     int64_t dts = pkt->dts;
     int64_t dur = pkt->duration > 0 ? pkt->duration : 0;
-    int ret = vtremote_payload_packet(payload,
-                                      pts, dts, dur,
-                                      (pkt->flags & AV_PKT_FLAG_KEY) ? 1 : 0,
-                                      pkt->data, pkt->size);
+    VTRemoteSideData side_data[16];
+    int side_data_count = 0;
+    if (pkt->side_data_elems > 0) {
+        if (s->server_caps & VTREMOTE_CAP_SIDE_DATA_V2) {
+            side_data_count = packet_side_data_from_avpacket(
+                ctx, pkt, side_data, FF_ARRAY_ELEMS(side_data));
+        } else if (!s->warned_packet_side_data_no_cap) {
+            av_log(ctx, AV_LOG_WARNING,
+                   "Remote server does not advertise side_data.v2; dropping packet side data\n");
+            s->warned_packet_side_data_no_cap = 1;
+        }
+    }
+    int ret = vtremote_payload_packet_ex(payload,
+                                         pts, dts, dur,
+                                         (pkt->flags & AV_PKT_FLAG_KEY) ? 1 : 0,
+                                         pkt->data, pkt->size,
+                                         side_data,
+                                         (uint8_t)side_data_count);
     if (ret < 0)
         return ret;
     ret = vtremote_send_msg(s, VTREMOTE_MSG_PACKET, payload);
@@ -1423,8 +1478,14 @@ static int vtremote_transcode_init(AVBSFContext *ctx) {
         ctx->par_out->height = s->out_height;
     }
 
-    if (s->pixel_format != VTREMOTE_PIX_FMT_NV12 && s->pixel_format != VTREMOTE_PIX_FMT_P010) {
-        av_log(ctx, AV_LOG_ERROR, "vt_remote_pix_fmt must be 1 (nv12) or 2 (p010)\n");
+    if (s->pixel_format != VTREMOTE_PIX_FMT_NV12 &&
+        s->pixel_format != VTREMOTE_PIX_FMT_P010 &&
+        s->pixel_format != VTREMOTE_PIX_FMT_BGRA &&
+        s->pixel_format != VTREMOTE_PIX_FMT_AYUV &&
+        s->pixel_format != VTREMOTE_PIX_FMT_P210) {
+        av_log(ctx, AV_LOG_ERROR,
+               "vt_remote_pix_fmt must be 1 (nv12), 2 (p010), 3 (bgra), "
+               "4 (ayuv), or 5 (p210)\n");
         return AVERROR(EINVAL);
     }
 
@@ -1524,7 +1585,7 @@ static int vtremote_transcode_filter(AVBSFContext *ctx, AVPacket *pkt) {
         }
     }
 
-    ret = vtremote_send_packet(s, &in_pkt);
+    ret = vtremote_send_packet(ctx, s, &in_pkt);
     av_packet_unref(&in_pkt);
     if (ret < 0)
         return ret;
@@ -1587,7 +1648,7 @@ static const AVOption vtremote_transcode_options[] = {
     { "vt_remote_out_width", "output width", OFFSET(out_width), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },
     { "vt_remote_out_height", "output height", OFFSET(out_height), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },
     { "vt_remote_scale_mode", "scale mode (stretch|aspect|aspect_fill)", OFFSET(scale_mode), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, FLAGS },
-    { "vt_remote_pix_fmt", "pixel format (1=nv12,2=p010)", OFFSET(pixel_format), AV_OPT_TYPE_INT, { .i64 = VTREMOTE_PIX_FMT_NV12 }, VTREMOTE_PIX_FMT_NV12, VTREMOTE_PIX_FMT_P010, FLAGS },
+    { "vt_remote_pix_fmt", "pixel format (1=nv12,2=p010,3=bgra,4=ayuv,5=p210)", OFFSET(pixel_format), AV_OPT_TYPE_INT, { .i64 = VTREMOTE_PIX_FMT_NV12 }, VTREMOTE_PIX_FMT_NV12, VTREMOTE_PIX_FMT_P210, FLAGS },
     { "vt_remote_decode_async", "allow async decode on server", OFFSET(decode_async), AV_OPT_TYPE_BOOL, { .i64 = 1 }, 0, 1, FLAGS },
     { "vt_remote_decode_reorder_depth", "decode reorder depth", OFFSET(decode_reorder_depth), AV_OPT_TYPE_INT, { .i64 = 2 }, -1, 64, FLAGS },
     { "vt_remote_bitrate", "target bitrate", OFFSET(bitrate), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },

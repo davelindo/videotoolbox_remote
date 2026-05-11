@@ -17,8 +17,31 @@ public struct Arguments: Equatable, Sendable {
 
     public var logLevel: LogLevel = .info
     public var once: Bool = false
+    public var showHelp: Bool = false
+    public var showVersion: Bool = false
+    public var parseError: String = ""
 
     public init() {}
+
+    public static let version = "0.4.1"
+
+    public static let usage = """
+    Usage: vtremoted [options]
+
+    Options:
+      --listen HOST:PORT          Address to listen on (default: 127.0.0.1:5555)
+      --token TOKEN               Authentication token (prefer --token-file or --token-env)
+      --token-file PATH           Read authentication token from a file
+      --token-env VAR             Read authentication token from an environment variable
+      --max-sessions N            Maximum concurrent sessions (default: 4)
+      --handshake-timeout S       Handshake timeout in seconds (default: 10)
+      --idle-timeout S            Idle timeout in seconds (default: 60)
+      --max-message-bytes N       Maximum protocol message size (default: 268435456)
+      --log-level LEVEL           error, info, debug, or numeric 0..2 (default: info)
+      --once                      Handle one accepted connection, then exit
+      --version                   Print version and exit
+      -h, --help                  Print this help and exit
+    """
 
     public static func parse(_ argv: [String]) -> Arguments {
         var args = Arguments()
@@ -59,8 +82,13 @@ public struct Arguments: Equatable, Sendable {
                 }
             case "--once":
                 args.once = true
+            case "-h", "--help":
+                args.showHelp = true
+            case "--version":
+                args.showVersion = true
             default:
-                break
+                args.parseError = "unknown argument: \(arg)"
+                return args
             }
         }
         return args

@@ -5,7 +5,7 @@ description: "System design of VideoToolbox Remote: lightweight TCP protocol con
 
 # Architecture
 
-**Updated:** 2026-01-30
+**Updated:** 2026-05-11
 
 ## System Context
 
@@ -30,7 +30,7 @@ flowchart LR
 - **Daemon**: Listens on TCP 5555.
 - **Session**: Manages one `VTCompressionSession` or `VTDecompressionSession` per connection.
 - **Pipeline**:
-    1.  Receives **NV12/P010** planes.
+    1.  Receives negotiated software planes or VideoToolbox-backed hardware-frame uploads.
     2.  Wraps in `CVPixelBuffer`.
     3.  Encodes via Hardware.
     4.  Converts output NALs to **Annex B**.
@@ -41,8 +41,8 @@ flowchart LR
 1.  **Handshake**: Message `HELLO` exchange.
 2.  **Config**: Client sends `CONFIGURE`, Server creates `VTCompressionSession`.
 3.  **Stream**:
-    - **In**: `FRAME` (Pixels)
-    - **Out**: `PACKET` (H.264/HEVC)
+    - **In**: `FRAME` (pixels, optional side data)
+    - **Out**: `PACKET` (H.264/HEVC, optional side data)
 4.  **Teardown**: Client sends `FLUSH`, then closes.
 
 ## 3. Data Flow (Decode)
@@ -50,8 +50,8 @@ flowchart LR
 1.  **Handshake**: Message `HELLO` exchange.
 2.  **Config**: Client sends `CONFIGURE`, Server creates `VTDecompressionSession`.
 3.  **Stream**:
-    - **In**: `PACKET` (Annex B)
-    - **Out**: `FRAME` (NV12/P010)
+    - **In**: `PACKET` (Annex B, optional side data)
+    - **Out**: `FRAME` (software planes or negotiated VideoToolbox output)
 4.  **Teardown**: Client sends `FLUSH`, then closes.
 
 ## 4. Data Flow (Transcode)
@@ -59,18 +59,34 @@ flowchart LR
 1.  **Handshake**: Message `HELLO` exchange.
 2.  **Config**: Client sends `CONFIGURE` with `mode=transcode`.
 3.  **Stream**:
-    - **In**: `PACKET` (Annex B)
-    - **Out**: `PACKET` (Annex B)
+    - **In**: `PACKET` (Annex B, optional side data)
+    - **Out**: `PACKET` (Annex B, optional side data)
 4.  **Teardown**: Client sends `FLUSH`, then closes.
 
-## 5. Repository Layout
+## 5. Capability-Gated Media Surfaces
+
+The protocol advertises optional capabilities so newer clients can keep working
+with older servers for the original software-frame paths while failing newer
+requests during configure. The negotiated 0.4.1 surfaces include:
+- VideoToolbox hardware-frame ingest for remote encode and transcode inputs.
+- Optional decoder hardware-frame output for callers that request it.
+- HEVC input formats beyond NV12/P010, including `bgra`, `ayuv`, and `p210le`.
+- Typed frame and packet side-data records used for HDR/colorimetry, display,
+  caption, timing, and mux-facing metadata.
+
+Hardware-frame ingest across a network is represented as an explicit upload path:
+local VideoToolbox frames are mapped into the negotiated wire pixel format before
+the server creates its own `CVPixelBuffer`. Handles such as IOSurface or
+CVPixelBuffer references are not treated as cross-host zero-copy objects.
+
+## 6. Repository Layout
 
 - **`ffmpeg/`**: Forked codebase with `libavcodec/vtremote*`.
 - **`vtremoted/`**: SwiftPM server implementation.
 - **`tests/`**: Integration tests and Python mock server.
 - **`docs/`**: Protocol and Architecture documentation.
 
-## 6. Performance Defaults
+## 7. Performance Defaults
 
 Defaults applied when the client does not override settings:
 

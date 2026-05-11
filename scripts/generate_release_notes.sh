@@ -17,6 +17,7 @@ nightly_assets_stale="${NIGHTLY_ASSETS_STALE:-false}"
 
 readme_url="https://github.com/${repo_slug}/blob/${doc_ref}/README.md"
 getting_started_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/getting-started.md"
+troubleshooting_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/troubleshooting.md"
 security_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/security.md"
 architecture_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/architecture.md"
 changelog_url="https://github.com/${repo_slug}/blob/${doc_ref}/CHANGELOG.md"
@@ -114,6 +115,13 @@ tar -xzf ffmpeg-linux-x86_64.tar.gz -C ffmpeg-client
 - \`ffmpeg-macos-x86_64.tar.gz\`: FFmpeg client build for Intel Macs.
 - \`ffmpeg-windows-x86_64.tar.gz\`: FFmpeg client build for Windows.
 - \`SHA256SUMS.txt\`: checksums for all release tarballs.
+
+## Build and upgrade notes
+
+- v0.4.1-capable clients and servers negotiate the expanded media surface explicitly: hardware-frame ingest/output, HEVC \`bgra\`/\`ayuv\`/\`p210le\`, frame and packet side-data forwarding, and \`vtremote_transcode\` HDR signaling.
+- Linux FFmpeg artifacts are built for \`x86_64\`. If a source build fails in FFmpeg x86 assembly, first install current \`nasm\` and \`yasm\`; as a compatibility fallback, rebuild with \`make build-ffmpeg FFMPEG_DISABLE_X86ASM=1\`.
+- To verify a macOS server upgrade, run \`vtremoted --version\`, \`pgrep -fl vtremoted\`, and \`lsof -nP -iTCP:5555 -sTCP:LISTEN\` on the Mac.
+- Release tarballs are smoke-tested after packaging to confirm the vtremote FFmpeg encoders, decoders, and \`vtremote_transcode\` bitstream filter are present.
 EOF
 
   if [[ "${tag}" == "nightly" ]]; then
@@ -144,6 +152,7 @@ EOF
 
 - [README](${readme_url})
 - [Getting started](${getting_started_url})
+- [Troubleshooting](${troubleshooting_url})
 - [Security](${security_url})
 - [Architecture](${architecture_url})
 EOF
