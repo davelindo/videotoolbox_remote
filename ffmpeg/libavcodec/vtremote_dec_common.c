@@ -25,6 +25,7 @@
 #include "internal.h"
 #include "libavutil/avstring.h"
 #include "libavutil/ffversion.h"
+#include "libavutil/hwcontext.h"
 #include "libavutil/opt.h"
 #include "libavutil/mem.h"
 #include "libavutil/common.h"
@@ -35,6 +36,13 @@
 #include "vtremote_proto.h"
 #include <lz4.h>
 #include <zstd.h>
+
+#if CONFIG_VIDEOTOOLBOX && defined(__APPLE__)
+#include "libavutil/hwcontext_videotoolbox.h"
+#define VTREMOTE_HAVE_VIDEOTOOLBOX_OUTPUT 1
+#else
+#define VTREMOTE_HAVE_VIDEOTOOLBOX_OUTPUT 0
+#endif
 
 static inline int vtremote_log_enabled(const VTRemoteDecContext *s, int level);
 
@@ -349,28 +357,19 @@ static int vtremote_read_msg(VTRemoteDecContext *s, VTRemoteMsgHeader *hdr, uint
 
 static int vtremote_handle_hello_ack(AVCodecContext *avctx, const uint8_t *payload, int len)
 {
-    VTRemoteRBuf r;
-    vtremote_rbuf_init(&r, payload, len);
-    uint8_t status;
-    int ret = vtremote_rbuf_read_u8(&r, &status);
-    if (ret < 0)
-        return ret;
-
-    /* Best-effort parse server info so we can produce useful diagnostics on failure. */
+    VTRemoteDecContext *s = avctx->priv_data;
+    uint8_t status = 0;
     const uint8_t *server_name = NULL, *server_ver = NULL;
     int server_name_len = 0, server_ver_len = 0;
-    vtremote_rbuf_read_str(&r, &server_name, &server_name_len);
-    vtremote_rbuf_read_str(&r, &server_ver, &server_ver_len);
-    uint8_t caps = 0;
-    vtremote_rbuf_read_u8(&r, &caps);
-    for (int i = 0; i < caps; i++) {
-        const uint8_t *s = NULL;
-        int slen = 0;
-        vtremote_rbuf_read_str(&r, &s, &slen);
-    }
     uint16_t max_sessions = 0, active = 0;
-    vtremote_rbuf_read_u16(&r, &max_sessions);
-    vtremote_rbuf_read_u16(&r, &active);
+    uint64_t caps = 0;
+    int ret = vtremote_caps_parse_hello_ack(payload, len, &status,
+                                            &server_name, &server_name_len,
+                                            &server_ver, &server_ver_len,
+                                            &caps, &max_sessions, &active);
+    if (ret < 0)
+        return ret;
+    s->server_caps = caps;
 
     if (status != 0) {
         /* The server reports:
@@ -398,16 +397,83 @@ static int vtremote_handle_hello_ack(AVCodecContext *avctx, const uint8_t *paylo
                server_ver_len, server_ver ? (const char *)server_ver : "");
         return AVERROR(EACCES);
     }
+    if (vtremote_log_enabled(s, AV_LOG_VERBOSE)) {
+        av_log(avctx, AV_LOG_VERBOSE,
+               "vtremote server [%.*s %.*s] caps=0x%" PRIx64 " active=%u max=%u\n",
+               server_name_len, server_name ? (const char *)server_name : "",
+               server_ver_len, server_ver ? (const char *)server_ver : "",
+               caps, active, max_sessions);
+    }
     return 0;
 }
 
 static enum AVPixelFormat pix_fmt_from_wire(uint8_t pix)
 {
     switch (pix) {
-    case 1: return AV_PIX_FMT_NV12;
-    case 2: return AV_PIX_FMT_P010LE;
+    case VTREMOTE_PIX_FMT_NV12: return AV_PIX_FMT_NV12;
+    case VTREMOTE_PIX_FMT_P010: return AV_PIX_FMT_P010LE;
     default: return AV_PIX_FMT_NONE;
     }
+}
+
+static enum AVPixelFormat vtremote_decode_sw_pix_fmt(const AVCodecContext *avctx)
+{
+    if (!avctx)
+        return AV_PIX_FMT_NONE;
+    if (avctx->pix_fmt == AV_PIX_FMT_VIDEOTOOLBOX)
+        return avctx->sw_pix_fmt != AV_PIX_FMT_NONE ? avctx->sw_pix_fmt
+                                                    : AV_PIX_FMT_NV12;
+    return avctx->pix_fmt;
+}
+
+static int wire_pix_fmt_from_av_pix_fmt(enum AVPixelFormat pix_fmt)
+{
+    switch (pix_fmt) {
+    case AV_PIX_FMT_NV12:
+        return VTREMOTE_PIX_FMT_NV12;
+    case AV_PIX_FMT_P010LE:
+        return VTREMOTE_PIX_FMT_P010;
+    default:
+        return 0;
+    }
+}
+
+static void vtremote_copy_plane_rows(uint8_t *dst, int dst_stride,
+                                     const uint8_t *src, int src_stride,
+                                     int row_bytes, int rows)
+{
+    for (int y = 0; y < rows; y++)
+        memcpy(dst + y * dst_stride, src + y * src_stride, row_bytes);
+}
+
+static int vtremote_decompress_plane_payload(VTRemoteDecContext *s,
+                                             uint8_t *dst, int dst_size,
+                                             const VTRemotePlaneView *p)
+{
+    if (!s || !dst || dst_size <= 0 || !p)
+        return AVERROR_INVALIDDATA;
+
+    if (s->wire_compression == 1) {
+        int decoded = LZ4_decompress_safe((const char *)p->data,
+                                          (char *)dst,
+                                          p->data_len,
+                                          dst_size);
+        return decoded == dst_size ? 0 : AVERROR_INVALIDDATA;
+    }
+    if (s->wire_compression == 2) {
+        size_t zret;
+
+        if (!s->zstd_dctx) {
+            s->zstd_dctx = ZSTD_createDCtx();
+            if (!s->zstd_dctx)
+                return AVERROR(ENOMEM);
+        }
+        zret = ZSTD_decompressDCtx(s->zstd_dctx, dst, dst_size,
+                                   p->data, p->data_len);
+        return (!ZSTD_isError(zret) && zret == (size_t)dst_size) ? 0
+                                                                 : AVERROR_INVALIDDATA;
+    }
+    return AVERROR_INVALIDDATA;
 }
 
 static int vtremote_handle_configure_ack(AVCodecContext *avctx, const uint8_t *payload, int len)
@@ -431,8 +497,11 @@ static int vtremote_handle_configure_ack(AVCodecContext *avctx, const uint8_t *p
     uint8_t reported_pix = 0;
     vtremote_rbuf_read_u8(&r, &reported_pix);
     enum AVPixelFormat pf = pix_fmt_from_wire(reported_pix);
-    if (pf != AV_PIX_FMT_NONE)
+    if (pf != AV_PIX_FMT_NONE && avctx->pix_fmt == AV_PIX_FMT_VIDEOTOOLBOX) {
+        avctx->sw_pix_fmt = pf;
+    } else if (pf != AV_PIX_FMT_NONE) {
         avctx->pix_fmt = pf;
+    }
     uint8_t warn_count = 0;
     vtremote_rbuf_read_u8(&r, &warn_count);
     const uint8_t *s_ptr; int s_len;
@@ -558,17 +627,10 @@ static int vtremote_handshake(AVCodecContext *avctx)
         if (ret < 0) goto cfg_fail;
     }
 
-    int wire_pix_fmt = 0;
-    switch (avctx->pix_fmt) {
-    case AV_PIX_FMT_NV12:
-        wire_pix_fmt = 1;
-        break;
-    case AV_PIX_FMT_P010LE:
-        wire_pix_fmt = 2;
-        break;
-    default:
+    int wire_pix_fmt = wire_pix_fmt_from_av_pix_fmt(vtremote_decode_sw_pix_fmt(avctx));
+    if (!wire_pix_fmt) {
         av_log(avctx, AV_LOG_ERROR, "Unsupported pix_fmt for vtremote decode: %s\n",
-               av_get_pix_fmt_name(avctx->pix_fmt));
+               av_get_pix_fmt_name(vtremote_decode_sw_pix_fmt(avctx)));
         ret = AVERROR(EINVAL);
         goto cfg_fail;
     }
@@ -633,6 +695,85 @@ cfg_fail:
     return 0;
 }
 
+static int vtremote_setup_hw_frames(AVCodecContext *avctx)
+{
+#if VTREMOTE_HAVE_VIDEOTOOLBOX_OUTPUT
+    VTRemoteDecContext *s = avctx->priv_data;
+    AVBufferRef *device_ref = NULL;
+    AVBufferRef *frames_ref = NULL;
+    AVHWFramesContext *frames_ctx;
+    enum AVPixelFormat sw_fmt = vtremote_decode_sw_pix_fmt(avctx);
+    int ret;
+
+    if (avctx->pix_fmt != AV_PIX_FMT_VIDEOTOOLBOX)
+        return 0;
+    if (sw_fmt != AV_PIX_FMT_NV12 && sw_fmt != AV_PIX_FMT_P010LE) {
+        av_log(avctx, AV_LOG_ERROR,
+               "VideoToolbox remote decode output supports NV12/P010 backing "
+               "buffers only; got %s.\n",
+               av_get_pix_fmt_name(sw_fmt));
+        return AVERROR(EINVAL);
+    }
+
+    s->output_hw_frames = 1;
+    if (avctx->hw_frames_ctx) {
+        AVHWFramesContext *provided =
+            (AVHWFramesContext *)avctx->hw_frames_ctx->data;
+        if (!provided || provided->format != AV_PIX_FMT_VIDEOTOOLBOX ||
+            provided->sw_format != sw_fmt ||
+            provided->width != avctx->width ||
+            provided->height != avctx->height) {
+            av_log(avctx, AV_LOG_ERROR,
+                   "Provided VideoToolbox hw_frames_ctx does not match "
+                   "format=%s sw_format=%s size=%dx%d.\n",
+                   av_get_pix_fmt_name(AV_PIX_FMT_VIDEOTOOLBOX),
+                   av_get_pix_fmt_name(sw_fmt), avctx->width, avctx->height);
+            return AVERROR(EINVAL);
+        }
+        return 0;
+    }
+
+    if (avctx->hw_device_ctx) {
+        device_ref = av_buffer_ref(avctx->hw_device_ctx);
+        if (!device_ref)
+            return AVERROR(ENOMEM);
+    } else {
+        ret = av_hwdevice_ctx_create(&device_ref, AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
+                                     NULL, NULL, 0);
+        if (ret < 0)
+            return ret;
+    }
+
+    frames_ref = av_hwframe_ctx_alloc(device_ref);
+    av_buffer_unref(&device_ref);
+    if (!frames_ref)
+        return AVERROR(ENOMEM);
+
+    frames_ctx = (AVHWFramesContext *)frames_ref->data;
+    frames_ctx->format = AV_PIX_FMT_VIDEOTOOLBOX;
+    frames_ctx->sw_format = sw_fmt;
+    frames_ctx->width = avctx->width;
+    frames_ctx->height = avctx->height;
+
+    ret = av_hwframe_ctx_init(frames_ref);
+    if (ret < 0) {
+        av_buffer_unref(&frames_ref);
+        return ret;
+    }
+
+    avctx->hw_frames_ctx = frames_ref;
+    s->owns_hw_frames_ctx = 1;
+    return 0;
+#else
+    if (avctx->pix_fmt != AV_PIX_FMT_VIDEOTOOLBOX)
+        return 0;
+    av_log(avctx, AV_LOG_ERROR,
+           "VideoToolbox hardware-frame decode output requires a macOS build "
+           "with VideoToolbox enabled.\n");
+    return AVERROR(ENOSYS);
+#endif
+}
+
 int ff_vtremote_dec_init(AVCodecContext *avctx)
 {
     VTRemoteDecContext *s = avctx->priv_data;
@@ -652,6 +793,8 @@ int ff_vtremote_dec_init(AVCodecContext *avctx)
     s->rx_buf_cap = 0;
     s->rx_buf_len = 0;
     s->last_frame_pts = AV_NOPTS_VALUE;
+    s->output_hw_frames = avctx->pix_fmt == AV_PIX_FMT_VIDEOTOOLBOX;
+    s->owns_hw_frames_ctx = 0;
 
     if (!s->host) {
         av_log(avctx, AV_LOG_ERROR, "vt_remote_host is required\n");
@@ -670,6 +813,8 @@ int ff_vtremote_dec_init(AVCodecContext *avctx)
         return ret;
 
     ret = vtremote_handshake(avctx);
+    if (ret >= 0)
+        ret = vtremote_setup_hw_frames(avctx);
     if (ret < 0)
         vtremote_net_close();
     return ret;
@@ -682,6 +827,8 @@ int ff_vtremote_dec_close(AVCodecContext *avctx)
         av_log(avctx, AV_LOG_VERBOSE, "VT remote decode close\n");
     if (s->fd >= 0)
         VTR_CLOSE_SOCKET(s->fd);
+    if (s->owns_hw_frames_ctx)
+        av_buffer_unref(&avctx->hw_frames_ctx);
     vtremote_net_close();
     vtremote_wbuf_free(&s->pkt_buf);
     av_freep(&s->comp_buf[0]);
@@ -723,8 +870,149 @@ static void add_side_data_to_frame(AVFrame *frame, const VTRemoteFrameView *view
     }
 }
 
+static int vtremote_copy_or_decompress_plane(VTRemoteDecContext *s,
+                                             uint8_t *dst, int dst_stride,
+                                             const VTRemotePlaneView *p,
+                                             int plane)
+{
+    int rows;
+    int expected;
+    int ret;
+
+    if (!dst || dst_stride <= 0 || !p || p->stride <= 0 || p->height <= 0)
+        return AVERROR_INVALIDDATA;
+
+    rows = p->height;
+    if (p->stride > INT_MAX / rows)
+        return AVERROR_INVALIDDATA;
+    expected = (int)p->stride * rows;
+    if (expected <= 0)
+        return AVERROR_INVALIDDATA;
+
+    if (!s || s->wire_compression == 0) {
+        int row_bytes = FFMIN((int)p->stride, dst_stride);
+        vtremote_copy_plane_rows(dst, dst_stride, p->data, p->stride,
+                                 row_bytes, rows);
+        return 0;
+    }
+
+    if (plane < 0 || plane >= 2)
+        return AVERROR_INVALIDDATA;
+
+    if (dst_stride == (int)p->stride) {
+        return vtremote_decompress_plane_payload(s, dst, expected, p);
+    }
+
+    if (expected > s->comp_buf_cap[plane]) {
+        uint8_t *tmp = av_realloc(s->comp_buf[plane], expected);
+        if (!tmp)
+            return AVERROR(ENOMEM);
+        s->comp_buf[plane] = tmp;
+        s->comp_buf_cap[plane] = expected;
+    }
+    ret = vtremote_decompress_plane_payload(s, s->comp_buf[plane], expected, p);
+    if (ret < 0)
+        return ret;
+
+    vtremote_copy_plane_rows(dst, dst_stride, s->comp_buf[plane],
+                             p->stride, FFMIN((int)p->stride, dst_stride),
+                             rows);
+    return 0;
+}
+
+static int fill_hw_frame_from_view(AVCodecContext *avctx,
+                                   VTRemoteDecContext *s,
+                                   AVFrame *frame,
+                                   const VTRemoteFrameView *view)
+{
+#if VTREMOTE_HAVE_VIDEOTOOLBOX_OUTPUT
+    CVPixelBufferRef pixbuf;
+    CVReturn cvret;
+    int ret;
+    int cv_planes;
+    enum AVPixelFormat sw_fmt = vtremote_decode_sw_pix_fmt(avctx);
+
+    if (!view || view->plane_count < 1 || view->plane_count > 2)
+        return AVERROR_INVALIDDATA;
+    if (!avctx->hw_frames_ctx)
+        return AVERROR(EINVAL);
+
+    frame->format = AV_PIX_FMT_VIDEOTOOLBOX;
+    frame->width = avctx->width;
+    frame->height = avctx->height;
+    ret = av_hwframe_get_buffer(avctx->hw_frames_ctx, frame, 0);
+    if (ret < 0)
+        return ret;
+
+    pixbuf = (CVPixelBufferRef)frame->data[3];
+    if (!pixbuf)
+        return AVERROR_INVALIDDATA;
+    if (av_map_videotoolbox_format_to_pixfmt(
+            CVPixelBufferGetPixelFormatType(pixbuf)) != sw_fmt) {
+        av_log(avctx, AV_LOG_ERROR,
+               "Allocated VideoToolbox decode output has format %s, expected %s.\n",
+               av_fourcc2str(CVPixelBufferGetPixelFormatType(pixbuf)),
+               av_get_pix_fmt_name(sw_fmt));
+        return AVERROR_INVALIDDATA;
+    }
+
+    cv_planes = CVPixelBufferIsPlanar(pixbuf)
+                    ? (int)CVPixelBufferGetPlaneCount(pixbuf)
+                    : 1;
+    if (cv_planes < view->plane_count)
+        return AVERROR_INVALIDDATA;
+
+    cvret = CVPixelBufferLockBaseAddress(pixbuf, 0);
+    if (cvret != kCVReturnSuccess)
+        return AVERROR_EXTERNAL;
+
+    for (int i = 0; i < view->plane_count; i++) {
+        uint8_t *dst;
+        size_t dst_stride_size;
+        int dst_stride;
+
+        if (CVPixelBufferIsPlanar(pixbuf)) {
+            dst = CVPixelBufferGetBaseAddressOfPlane(pixbuf, i);
+            dst_stride_size = CVPixelBufferGetBytesPerRowOfPlane(pixbuf, i);
+        } else {
+            dst = CVPixelBufferGetBaseAddress(pixbuf);
+            dst_stride_size = CVPixelBufferGetBytesPerRow(pixbuf);
+        }
+        if (!dst || dst_stride_size > INT_MAX) {
+            ret = AVERROR_INVALIDDATA;
+            goto unlock;
+        }
+        dst_stride = (int)dst_stride_size;
+        ret = vtremote_copy_or_decompress_plane(s, dst, dst_stride,
+                                                &view->planes[i], i);
+        if (ret < 0)
+            goto unlock;
+    }
+
+    frame->pts = view->pts;
+    frame->duration = view->duration;
+    frame->pkt_dts = frame->pts;
+    add_side_data_to_frame(frame, view);
+    ret = 0;
+
+unlock:
+    CVPixelBufferUnlockBaseAddress(pixbuf, 0);
+    return ret;
+#else
+    (void)s;
+    (void)frame;
+    (void)view;
+    av_log(avctx, AV_LOG_ERROR,
+           "VideoToolbox hardware-frame decode output requires a macOS build "
+           "with VideoToolbox enabled.\n");
+    return AVERROR(ENOSYS);
+#endif
+}
+
 static int fill_frame_from_view(AVCodecContext *avctx, AVFrame *frame, const VTRemoteFrameView *view)
 {
+    if (avctx->pix_fmt == AV_PIX_FMT_VIDEOTOOLBOX)
+        return fill_hw_frame_from_view(avctx, NULL, frame, view);
     if (!view || view->plane_count < 1 || view->plane_count > 4)
         return AVERROR_INVALIDDATA;
     frame->format = avctx->pix_fmt;
@@ -745,14 +1033,8 @@ static int fill_frame_from_view(AVCodecContext *avctx, AVFrame *frame, const VTR
         int dst_stride = frame->linesize[i];
         if (!dst)
             break;
-        if (src_stride == dst_stride) {
-            memcpy(dst, src, (size_t)src_stride * (size_t)rows);
-        } else {
-            int row_bytes = FFMIN(src_stride, dst_stride);
-            for (int y = 0; y < rows; y++) {
-                memcpy(dst + y * dst_stride, src + y * src_stride, row_bytes);
-            }
-        }
+        vtremote_copy_plane_rows(dst, dst_stride, src, src_stride,
+                                 FFMIN(src_stride, dst_stride), rows);
     }
 
     add_side_data_to_frame(frame, view);
@@ -781,6 +1063,8 @@ static int fill_frame_from_compressed_view(AVCodecContext *avctx, VTRemoteDecCon
 {
     if (!avctx || !s || !frame || !view)
         return AVERROR(EINVAL);
+    if (avctx->pix_fmt == AV_PIX_FMT_VIDEOTOOLBOX)
+        return fill_hw_frame_from_view(avctx, s, frame, view);
     if (view->plane_count < 2)
         return AVERROR_INVALIDDATA;
 
@@ -796,75 +1080,12 @@ static int fill_frame_from_compressed_view(AVCodecContext *avctx, VTRemoteDecCon
     frame->pkt_dts = frame->pts;
 
     for (int i = 0; i < 2; i++) {
-        const VTRemotePlaneView *p = &view->planes[i];
-        int expected = (int)p->stride * (int)p->height;
-        if (expected <= 0)
-            return AVERROR_INVALIDDATA;
-
         uint8_t *dst = frame->data[i];
         int dst_stride = frame->linesize[i];
-
-        /* Fast path: decompress directly into the destination plane when strides match. */
-        if (dst_stride == (int)p->stride) {
-            if (s->wire_compression == 1) {
-                int decoded = LZ4_decompress_safe((const char *)p->data,
-                                                  (char *)dst,
-                                                  p->data_len,
-                                                  expected);
-                if (decoded != expected)
-                    return AVERROR_INVALIDDATA;
-            } else if (s->wire_compression == 2) {
-                if (!s->zstd_dctx) {
-                    s->zstd_dctx = ZSTD_createDCtx();
-                    if (!s->zstd_dctx)
-                        return AVERROR(ENOMEM);
-                }
-                size_t zret = ZSTD_decompressDCtx(s->zstd_dctx, dst, expected,
-                                                  p->data, p->data_len);
-                if (ZSTD_isError(zret) || zret != (size_t)expected)
-                    return AVERROR_INVALIDDATA;
-            } else {
-                return AVERROR_INVALIDDATA;
-            }
-            continue;
-        }
-
-        /* Fallback: decompress into a tightly-packed scratch buffer then copy rows. */
-        if (expected > s->comp_buf_cap[i]) {
-            uint8_t *tmp = av_realloc(s->comp_buf[i], expected);
-            if (!tmp)
-                return AVERROR(ENOMEM);
-            s->comp_buf[i] = tmp;
-            s->comp_buf_cap[i] = expected;
-        }
-        if (s->wire_compression == 1) {
-            int decoded = LZ4_decompress_safe((const char *)p->data,
-                                              (char *)s->comp_buf[i],
-                                              p->data_len,
-                                              expected);
-            if (decoded != expected)
-                return AVERROR_INVALIDDATA;
-        } else if (s->wire_compression == 2) {
-            if (!s->zstd_dctx) {
-                s->zstd_dctx = ZSTD_createDCtx();
-                if (!s->zstd_dctx)
-                    return AVERROR(ENOMEM);
-            }
-            size_t zret = ZSTD_decompressDCtx(s->zstd_dctx, s->comp_buf[i], expected,
-                                              p->data, p->data_len);
-            if (ZSTD_isError(zret) || zret != (size_t)expected)
-                return AVERROR_INVALIDDATA;
-        } else {
-            return AVERROR_INVALIDDATA;
-        }
-
-        const uint8_t *src = s->comp_buf[i];
-        int src_stride = p->stride;
-        int rows = p->height;
-        int row_bytes = FFMIN(src_stride, dst_stride);
-        for (int y = 0; y < rows; y++) {
-            memcpy(dst + y * dst_stride, src + y * src_stride, row_bytes);
-        }
+        ret = vtremote_copy_or_decompress_plane(s, dst, dst_stride,
+                                                &view->planes[i], i);
+        if (ret < 0)
+            return ret;
     }
 
     add_side_data_to_frame(frame, view);

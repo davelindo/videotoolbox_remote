@@ -294,13 +294,24 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
             _ = requested_codec, client_name, client_build
 
             def hello_ack(status: int) -> bytes:
-                codecs = ["h264", "hevc"]
+                capabilities = [
+                    "h264",
+                    "hevc",
+                    "pixfmt.nv12",
+                    "pixfmt.p010",
+                    "pixfmt.bgra",
+                    "pixfmt.ayuv",
+                    "pixfmt.p210",
+                    "hwframes.videotoolbox.input",
+                    "hwframes.videotoolbox.output",
+                    "side_data.v2",
+                ]
                 body = struct.pack(">B", status)
-                body += struct.pack(">H", 0)  # reserved
-                body += struct.pack(">H", 0)  # reserved
-                body += struct.pack(">B", len(codecs))
-                body += b"".join(write_str(c) for c in codecs)
-                body += struct.pack(">HH", 4, 1)  # nal length size, reserved
+                body += write_str("mock-vtremoted")
+                body += write_str("test")
+                body += struct.pack(">B", len(capabilities))
+                body += b"".join(write_str(cap) for cap in capabilities)
+                body += struct.pack(">HH", args.max_sessions, 1)
                 return body
 
             if expected_token and token != expected_token:

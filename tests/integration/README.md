@@ -14,6 +14,9 @@ This tree holds VideoToolbox Remote integration tests and benchmarks.
 - `check_bitrate.sh`: validates average bitrate within a tolerance window (guards against broken rate-control).
 - `bench_vtremote.sh`: local vs remote encode benchmark across multiple sizes + framerates (skips local codec if unavailable), plus an optional transcode section. Prefers `vtremoted/.build/release/vtremoted` when present.
 - `run_vtremoted_roundtrip.sh`: launches `vtremoted` on loopback, runs short H.264 + HEVC `*_videotoolbox_remote` encodes, validates PTS/DTS via `check_pts_dts.sh`, and decodes the result with `ffmpeg -xerror` to catch bad bytestream/packet formatting.
+- `run_vtremoted_hevc_pixfmt_parity.sh`: launches `vtremoted` on loopback and verifies remote HEVC accepts `bgra`, `ayuv`, and `p210le` inputs, then decodes each output with `ffmpeg -xerror`.
+- `run_vtremoted_hwframe_ingest.sh`: launches `vtremoted` on loopback and verifies H.264/HEVC remote encoders accept `AV_PIX_FMT_VIDEOTOOLBOX` frames from FFmpeg's VideoToolbox `hwupload` path.
+- `run_vtremoted_hwframe_decode.sh`: launches `vtremoted` on loopback and verifies H.264/HEVC remote decoders can return local `AV_PIX_FMT_VIDEOTOOLBOX` frames that survive `hwdownload`.
 - `run_vtremoted_decode.sh`: generates short local H.264/HEVC inputs and validates remote decode with `h264_videotoolbox_remote` / `hevc_videotoolbox_remote`.
 - `run_transcode_test.sh`: simultaneous remote decode + encode pipeline (sanity + stability).
 - `run_option_surface_parity.sh`: compares local (`*_videotoolbox`) vs remote (`*_videotoolbox_remote`) encoder option surfaces for H.264/HEVC and fails on drift (ignoring `vt_remote_*` transport-only options).

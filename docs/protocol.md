@@ -97,6 +97,9 @@ sequenceDiagram
 - `server_name` (string): Server ID.
 - `server_version` (string): Server version string (freeform).
 - `caps` (string[]): Capability strings (may be empty).
+  - Common values: `h264`, `hevc`, `pixfmt.nv12`, `pixfmt.p010`, `pixfmt.bgra`,
+    `pixfmt.ayuv`, `pixfmt.p210`, `hwframes.videotoolbox.input`,
+    `hwframes.videotoolbox.output`, `side_data.v2`.
 - `max_sessions` (uint16): Concurrency limit.
 - `active_sessions` (uint16): Current active sessions.
 
@@ -104,7 +107,7 @@ sequenceDiagram
 
 **CONFIGURE (Type 3)**
 - `width`, `height` (uint32): Video dimensions.
-- `pix_fmt` (uint32): `1=NV12`, `2=P010`.
+- `pix_fmt` (uint8): `1=NV12`, `2=P010`, `3=BGRA`, `4=AYUV`, `5=P210`, `6=VideoToolbox`.
 - `options` (map): Key-value pairs (bitrate, GOP, etc.).
 - `extradata` (bytes): Header data (decoding only).
 
@@ -115,9 +118,12 @@ sequenceDiagram
 ### Streaming
 
 **FRAME (Type 5)**
-Raw NV12/P010 planes.
+Raw frame planes.
 - `pts`, `duration` (int64).
-- `planes` (struct): Stride, height, scale, data.
+- `flags` (uint32): Bit 0 = Keyframe request/indicator.
+- `plane_count` (uint8): Number of following planes.
+- `planes` (struct[]): Stride, height, byte length, data.
+- Optional side data: `side_data_count` followed by `(type, size, data)` records.
 
 **PACKET (Type 6)**
 Encoded Annex B NAL units.

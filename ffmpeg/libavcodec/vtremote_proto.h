@@ -22,6 +22,24 @@
 #define VTREMOTE_PROTO_VERSION 1
 #define VTREMOTE_HEADER_SIZE   12
 
+#define VTREMOTE_PIX_FMT_NV12          1
+#define VTREMOTE_PIX_FMT_P010          2
+#define VTREMOTE_PIX_FMT_BGRA          3
+#define VTREMOTE_PIX_FMT_AYUV          4
+#define VTREMOTE_PIX_FMT_P210          5
+#define VTREMOTE_PIX_FMT_VIDEOTOOLBOX  6
+
+#define VTREMOTE_CAP_H264                      (UINT64_C(1) << 0)
+#define VTREMOTE_CAP_HEVC                      (UINT64_C(1) << 1)
+#define VTREMOTE_CAP_PIXFMT_NV12               (UINT64_C(1) << 2)
+#define VTREMOTE_CAP_PIXFMT_P010               (UINT64_C(1) << 3)
+#define VTREMOTE_CAP_PIXFMT_BGRA               (UINT64_C(1) << 4)
+#define VTREMOTE_CAP_PIXFMT_AYUV               (UINT64_C(1) << 5)
+#define VTREMOTE_CAP_PIXFMT_P210               (UINT64_C(1) << 6)
+#define VTREMOTE_CAP_HWFRAMES_VIDEOTOOLBOX_IN  (UINT64_C(1) << 7)
+#define VTREMOTE_CAP_HWFRAMES_VIDEOTOOLBOX_OUT (UINT64_C(1) << 8)
+#define VTREMOTE_CAP_SIDE_DATA_V2              (UINT64_C(1) << 9)
+
 enum VTRemoteMsgType {
     VTREMOTE_MSG_HELLO = 1,
     VTREMOTE_MSG_HELLO_ACK,
@@ -89,6 +107,14 @@ static inline int vtremote_read_header(const uint8_t *src, size_t src_size,
 
 /* Return a short string for logging; returns "UNKNOWN" if out of range. */
 const char *vtremote_msg_type_name(int type);
+const char *vtremote_pix_fmt_name(uint8_t pix_fmt);
+int vtremote_cap_flag_from_name(const uint8_t *name, int name_len, uint64_t *flag);
+int vtremote_caps_parse_hello_ack(const uint8_t *payload, int len,
+                                  uint8_t *status,
+                                  const uint8_t **server_name, int *server_name_len,
+                                  const uint8_t **server_version, int *server_version_len,
+                                  uint64_t *caps,
+                                  uint16_t *max_sessions, uint16_t *active_sessions);
 
 /* Simple growable payload buffer for outgoing messages. */
 typedef struct VTRemoteWBuf {
@@ -211,7 +237,7 @@ typedef struct VTRemoteFrameView {
     uint8_t plane_count;
     VTRemotePlaneView planes[4];
     uint8_t side_data_count;
-    VTRemoteSideData side_data[8];
+    VTRemoteSideData side_data[16];
 } VTRemoteFrameView;
 
 int vtremote_parse_frame(const uint8_t *payload, int payload_size, VTRemoteFrameView *out);

@@ -7,6 +7,7 @@
 #include "avcodec.h"
 #include "codec_internal.h"
 #include "encode.h"
+#include "hwconfig.h"
 #include "libavutil/opt.h"
 #include "vtremote_enc_common.h"
 
@@ -55,6 +56,11 @@ static av_cold int vtremote_hevc_close(AVCodecContext *avctx)
     return ff_vtremote_common_close(avctx);
 }
 
+static const AVCodecHWConfigInternal *const vtremote_hevc_hw_configs[] = {
+    HW_CONFIG_ENCODER_FRAMES(VIDEOTOOLBOX, VIDEOTOOLBOX),
+    NULL
+};
+
 const FFCodec ff_hevc_videotoolbox_remote_encoder = {
     .p.name         = "hevc_videotoolbox_remote",
     CODEC_LONG_NAME("HEVC (Remote VideoToolbox)"),
@@ -69,6 +75,8 @@ const FFCodec ff_hevc_videotoolbox_remote_encoder = {
     .init           = vtremote_hevc_init,
     .close          = vtremote_hevc_close,
     FF_CODEC_ENCODE_CB(ff_vtremote_encode),
-    CODEC_PIXFMTS(AV_PIX_FMT_NV12, AV_PIX_FMT_YUV420P, AV_PIX_FMT_P010LE,
-                  AV_PIX_FMT_YUV420P10LE, AV_PIX_FMT_YUV420P10BE),
+    .hw_configs     = vtremote_hevc_hw_configs,
+    CODEC_PIXFMTS(AV_PIX_FMT_VIDEOTOOLBOX, AV_PIX_FMT_NV12, AV_PIX_FMT_YUV420P, AV_PIX_FMT_P010LE,
+                  AV_PIX_FMT_YUV420P10LE, AV_PIX_FMT_YUV420P10BE,
+                  AV_PIX_FMT_BGRA, AV_PIX_FMT_AYUV, AV_PIX_FMT_P210LE),
 };

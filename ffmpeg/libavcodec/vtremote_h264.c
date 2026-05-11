@@ -7,6 +7,7 @@
 #include "avcodec.h"
 #include "codec_internal.h"
 #include "encode.h"
+#include "hwconfig.h"
 #include "libavutil/opt.h"
 #include "vtremote_enc_common.h"
 
@@ -77,6 +78,11 @@ static av_cold int vtremote_h264_close(AVCodecContext *avctx)
     return ff_vtremote_common_close(avctx);
 }
 
+static const AVCodecHWConfigInternal *const vtremote_h264_hw_configs[] = {
+    HW_CONFIG_ENCODER_FRAMES(VIDEOTOOLBOX, VIDEOTOOLBOX),
+    NULL
+};
+
 const FFCodec ff_h264_videotoolbox_remote_encoder = {
     .p.name         = "h264_videotoolbox_remote",
     CODEC_LONG_NAME("H.264 (Remote VideoToolbox)"),
@@ -91,5 +97,6 @@ const FFCodec ff_h264_videotoolbox_remote_encoder = {
     .init           = vtremote_h264_init,
     .close          = vtremote_h264_close,
     FF_CODEC_ENCODE_CB(ff_vtremote_encode),
-    CODEC_PIXFMTS(AV_PIX_FMT_NV12, AV_PIX_FMT_YUV420P),
+    .hw_configs     = vtremote_h264_hw_configs,
+    CODEC_PIXFMTS(AV_PIX_FMT_VIDEOTOOLBOX, AV_PIX_FMT_NV12, AV_PIX_FMT_YUV420P),
 };

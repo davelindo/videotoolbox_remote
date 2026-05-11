@@ -2,6 +2,48 @@
 import XCTest
 
 final class MessageCodecTests: XCTestCase {
+    func testProtocolPixelFormatConstants() {
+        XCTAssertEqual(VTRPixelFormat.nv12, 1)
+        XCTAssertEqual(VTRPixelFormat.p010, 2)
+        XCTAssertEqual(VTRPixelFormat.bgra, 3)
+        XCTAssertEqual(VTRPixelFormat.ayuv, 4)
+        XCTAssertEqual(VTRPixelFormat.p210, 5)
+        XCTAssertEqual(VTRPixelFormat.videoToolbox, 6)
+        XCTAssertEqual(VTRPixelFormat.name(VTRPixelFormat.nv12), "nv12")
+        XCTAssertEqual(VTRPixelFormat.name(VTRPixelFormat.videoToolbox), "videotoolbox")
+        XCTAssertEqual(VTRPixelFormat.name(255), "unknown")
+    }
+
+    func testBaselineCapabilities() {
+        XCTAssertEqual(
+            VTRCapability.baseline,
+            [
+                VTRCapability.h264,
+                VTRCapability.hevc,
+                VTRCapability.pixfmtNV12,
+                VTRCapability.pixfmtP010
+            ]
+        )
+    }
+
+    func testDefaultServerCapabilities() {
+        XCTAssertEqual(
+            VTRCapability.defaultServer,
+            [
+                VTRCapability.h264,
+                VTRCapability.hevc,
+                VTRCapability.pixfmtNV12,
+                VTRCapability.pixfmtP010,
+                VTRCapability.pixfmtBGRA,
+                VTRCapability.pixfmtAYUV,
+                VTRCapability.pixfmtP210,
+                VTRCapability.hwFramesVideoToolboxInput,
+                VTRCapability.hwFramesVideoToolboxOutput,
+                VTRCapability.sideDataV2
+            ]
+        )
+    }
+
     func testHelloDecode() throws {
         var writer = ByteWriter()
         writer.writeLengthPrefixedUTF8("tkn")
@@ -20,7 +62,7 @@ final class MessageCodecTests: XCTestCase {
         var writer = ByteWriter()
         writer.writeBE(UInt32(1920))
         writer.writeBE(UInt32(1080))
-        writer.write(UInt8(1))
+        writer.write(VTRPixelFormat.nv12)
         writer.writeBE(UInt32(1))
         writer.writeBE(UInt32(30))
         writer.writeBE(UInt32(30000))
@@ -39,7 +81,7 @@ final class MessageCodecTests: XCTestCase {
         let cfg = try ConfigureRequest.decode(writer.data)
         XCTAssertEqual(cfg.width, 1920)
         XCTAssertEqual(cfg.height, 1080)
-        XCTAssertEqual(cfg.pixelFormat, 1)
+        XCTAssertEqual(cfg.pixelFormat, VTRPixelFormat.nv12)
         XCTAssertEqual(cfg.timebase, Timebase(num: 1, den: 30))
         XCTAssertEqual(cfg.frameRate.num, 30000)
         XCTAssertEqual(cfg.frameRate.den, 1001)
