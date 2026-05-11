@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format follows Keep a Changelog principles, using repository release tags (`v*`) in reverse chronological order.
 The non-version `nightly` tag is intentionally excluded.
 
+## [v0.4.1] - 2026-05-11
+
+### Added
+- Added expanded 0.4.1 protocol capability negotiation for hardware-frame ingest, decoder hardware-frame output, HEVC `bgra`/`ayuv`/`p210le`, and typed frame/packet side-data surfaces.
+- Added PACKET side-data forwarding across remote decode and `vtremote_transcode`, complementing the existing frame-side metadata path for HDR/colorimetry and mux-facing metadata.
+- Added mock protocol tests for strict capability rejection, exact side-data round-trips, and HEVC extended pixel-format negotiation.
+- Added real `vtremoted` coverage for hardware-frame encode ingest, hardware-frame transcode ingest, decoder hardware-frame output, HEVC `bgra`/`ayuv`/`p210le`, and HDR color-signaling preservation.
+- Added `FFMPEG_DISABLE_X86ASM=1` as a documented compatibility fallback for Linux environments with broken or unsupported FFmpeg x86 assembler toolchains.
+- Added `vtremoted --help` and `vtremoted --version` so packaged server artifacts can be checked without binding a socket.
+- Added CI artifact smoke checks that unpack packaged FFmpeg and `vtremoted` tarballs before upload and verify the expected vtremote feature surface.
+- Added explicit mock coverage for LZ4 and Zstd frame-payload compression.
+- Added a `make install-vtremoted-restart` workflow and launchd verification output for macOS server upgrades.
+
+### Changed
+- Expanded `tests/integration/run_all.sh` so the standard macOS suite exercises the new capability, side-data, hardware-frame, and HEVC pixel-format checks.
+- Updated protocol, architecture, README, development, and integration-test documentation for the expanded 0.4.1 media surface and compatibility gates.
+- Updated Linux build, macOS install, troubleshooting, and release-note documentation with concrete recovery and verification commands.
+- Made release notes call out x86 assembly build fallback guidance and packaged-artifact smoke validation.
+
+### Fixed
+- Preserved packet side data returned by remote encode/decode/transcode sessions instead of dropping optional trailing PACKET metadata.
+- Kept 0.4.1-only media requests behind configure-time capability checks so older or reduced-capability servers fail clearly before frame processing.
+- Kept framing-only mock tests isolated from automatic wire-compression defaults by testing compressed-frame behavior in a dedicated script.
+- Hardened launchd installer output so user vs system service domains, binary paths, and verification commands are explicit.
+
 ## [v0.4.0] - 2026-05-11
 
 ### Added

@@ -2,6 +2,17 @@ import Foundation
 import VTRemotedCore
 
 let args = Arguments.parse(CommandLine.arguments)
+
+if args.showHelp {
+    print(Arguments.usage)
+    exit(0)
+}
+
+if args.showVersion {
+    print("vtremoted \(Arguments.version)")
+    exit(0)
+}
+
 Logger.shared.level = args.logLevel
 
 VideoToolboxPreflight.checkOrExit()

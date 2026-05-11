@@ -43,10 +43,14 @@ run_step() {
 }
 
 run_step "mock_roundtrip"      bash "${ROOT}/tests/integration/run_mock_roundtrip.sh"
+run_step "mock_wire_compression" bash "${ROOT}/tests/integration/run_mock_wire_compression.sh"
 run_step "mock_pts_dts"        bash "${ROOT}/tests/integration/run_mock_pts_dts_semantics.sh"
 run_step "mock_transcode_pts_dts" bash "${ROOT}/tests/integration/run_mock_transcode_pts_dts_semantics.sh"
 run_step "mock_transcode_hvc1_hdr" bash "${ROOT}/tests/integration/run_mock_transcode_hvc1_hdr_signaling.sh"
 run_step "mock_decode"         bash "${ROOT}/tests/integration/run_mock_decode.sh"
+run_step "mock_protocol_capabilities" bash "${ROOT}/tests/integration/run_mock_protocol_capabilities.sh"
+run_step "mock_side_data_roundtrip" bash "${ROOT}/tests/integration/run_mock_side_data_roundtrip.sh"
+run_step "mock_hevc_pixfmt_negotiation" bash "${ROOT}/tests/integration/run_mock_hevc_pixfmt_negotiation.sh"
 if [[ "${VTREMOTE_RUN_OBS_PLUGIN:-0}" != "0" ]]; then
   run_step "obs_plugin_client_mock" bash "${ROOT}/tests/integration/run_obs_plugin_client_mock.sh"
   run_step "obs_plugin_libobs_integration" bash "${ROOT}/tests/integration/run_obs_plugin_integration.sh"
@@ -54,6 +58,11 @@ fi
 run_step "complex_chain"       bash "${ROOT}/tests/integration/run_complex_chain_test.sh"
 run_step "vtremoted_roundtrip" bash "${ROOT}/tests/integration/run_vtremoted_roundtrip.sh"
 run_step "vtremoted_decode"    bash "${ROOT}/tests/integration/run_vtremoted_decode.sh"
+run_step "vtremoted_hardware_ingest" bash "${ROOT}/tests/integration/run_vtremoted_hardware_ingest.sh"
+run_step "vtremoted_decode_hardware_output" bash "${ROOT}/tests/integration/run_vtremoted_decode_hardware_output.sh"
+run_step "vtremoted_transcode_hardware_ingest" bash "${ROOT}/tests/integration/run_vtremoted_transcode_hardware_ingest.sh"
+run_step "vtremoted_hevc_pixfmts" bash "${ROOT}/tests/integration/run_vtremoted_hevc_pixfmts.sh"
+run_step "vtremoted_hdr_side_data" bash "${ROOT}/tests/integration/run_vtremoted_hdr_side_data.sh"
 run_step "transcode_test"      bash "${ROOT}/tests/integration/run_transcode_test.sh"
 if [[ "${VTREMOTE_RUN_OPTION_PARITY:-0}" != "0" ]]; then
   run_step "option_surface_parity" bash "${ROOT}/tests/integration/run_option_surface_parity.sh"

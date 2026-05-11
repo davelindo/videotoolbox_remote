@@ -211,6 +211,11 @@ int vtremote_payload_frame(VTRemoteWBuf *b,
 int vtremote_payload_packet(VTRemoteWBuf *b,
                            int64_t pts, int64_t dts, int64_t duration, uint32_t flags,
                            const uint8_t *data, uint32_t data_len);
+int vtremote_payload_packet_ex(VTRemoteWBuf *b,
+                              int64_t pts, int64_t dts, int64_t duration, uint32_t flags,
+                              const uint8_t *data, uint32_t data_len,
+                              const VTRemoteSideData *side_data,
+                              uint8_t side_data_count);
 
 /* Packet view after parsing (points into buffer). */
 typedef struct VTRemotePacketView {
@@ -220,6 +225,8 @@ typedef struct VTRemotePacketView {
     uint32_t flags;
     const uint8_t *data;
     uint32_t data_len;
+    uint8_t side_data_count;
+    VTRemoteSideData side_data[16];
 } VTRemotePacketView;
 
 int vtremote_parse_packet(const uint8_t *payload, int payload_size, VTRemotePacketView *out);

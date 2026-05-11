@@ -36,16 +36,57 @@ MSG_PONG = 11
 
 HEADER_STRUCT = struct.Struct(">IHHI")  # magic, version, type, length
 STREAM_CHUNK_BYTES = 64 * 1024
+DEFAULT_CAPABILITIES = [
+    "h264",
+    "hevc",
+    "pixfmt.nv12",
+    "pixfmt.p010",
+    "pixfmt.bgra",
+    "pixfmt.ayuv",
+    "pixfmt.p210",
+    "hwframes.videotoolbox.input",
+    "hwframes.videotoolbox.output",
+    "side_data.v2",
+]
+PIX_FMT_CAPABILITY = {
+    1: "pixfmt.nv12",
+    2: "pixfmt.p010",
+    3: "pixfmt.bgra",
+    4: "pixfmt.ayuv",
+    5: "pixfmt.p210",
+}
 
 _LZ4 = None
 _ZSTD = None
+
+
+def _find_library(name: str, candidates):
+    path = ctypes.util.find_library(name)
+    if path:
+        return path
+    for candidate in candidates:
+        if candidate:
+            try:
+                with open(candidate, "rb"):
+                    return candidate
+            except OSError:
+                pass
+    return None
 
 
 def _load_lz4():
     global _LZ4
     if _LZ4 is not None:
         return _LZ4
-    path = ctypes.util.find_library("lz4")
+    path = _find_library(
+        "lz4",
+        (
+            "/opt/homebrew/lib/liblz4.dylib",
+            "/usr/local/lib/liblz4.dylib",
+            "/usr/lib/liblz4.so",
+            "/usr/local/lib/liblz4.so",
+        ),
+    )
     if not path:
         raise RuntimeError("liblz4 not found")
     lib = ctypes.CDLL(path)
@@ -64,7 +105,15 @@ def _load_zstd():
     global _ZSTD
     if _ZSTD is not None:
         return _ZSTD
-    path = ctypes.util.find_library("zstd")
+    path = _find_library(
+        "zstd",
+        (
+            "/opt/homebrew/lib/libzstd.dylib",
+            "/usr/local/lib/libzstd.dylib",
+            "/usr/lib/libzstd.so",
+            "/usr/local/lib/libzstd.so",
+        ),
+    )
     if not path:
         raise RuntimeError("libzstd not found")
     lib = ctypes.CDLL(path)
@@ -243,6 +292,17 @@ def make_configure_ack(pix_fmt: int, extradata: bytes = b"") -> bytes:
 
 
 def make_packet_body(data: bytes, pts: int, dts: int, duration: int, flags: int) -> bytes:
+    return make_packet_body_with_side_data(data, pts, dts, duration, flags, b"")
+
+
+def make_packet_body_with_side_data(
+    data: bytes,
+    pts: int,
+    dts: int,
+    duration: int,
+    flags: int,
+    side_data_blob: bytes,
+) -> bytes:
     pkt_flags = 1 if (flags & 0x1) else 0
     return (
         struct.pack(">q", pts)
@@ -251,7 +311,35 @@ def make_packet_body(data: bytes, pts: int, dts: int, duration: int, flags: int)
         + struct.pack(">I", pkt_flags)
         + struct.pack(">I", len(data))
         + data
+        + side_data_blob
     )
+
+
+def parse_packet_body(payload: memoryview) -> Tuple[int, int, int, int, bytes]:
+    off = 0
+    pts, off = read_u64(payload, off)
+    dts, off = read_u64(payload, off)
+    dur, off = read_u64(payload, off)
+    flags, off = read_u32(payload, off)
+    data_len, off = read_u32(payload, off)
+    if off + data_len > len(payload):
+        raise ValueError("packet data length exceeds payload")
+    off += data_len
+    if off == len(payload):
+        return pts, dts, dur, flags, b""
+
+    side_start = off
+    side_count = payload[off]
+    off += 1
+    for _ in range(side_count):
+        _side_type, off = read_u32(payload, off)
+        side_size, off = read_u32(payload, off)
+        if off + side_size > len(payload):
+            raise ValueError("packet side-data length exceeds payload")
+        off += side_size
+    if off != len(payload):
+        raise ValueError("unexpected trailing bytes in PACKET payload")
+    return pts, dts, dur, flags, bytes(payload[side_start:off])
 
 
 def make_dummy_frame_body(pts: int, duration: int) -> bytes:
@@ -294,18 +382,7 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
             _ = requested_codec, client_name, client_build
 
             def hello_ack(status: int) -> bytes:
-                capabilities = [
-                    "h264",
-                    "hevc",
-                    "pixfmt.nv12",
-                    "pixfmt.p010",
-                    "pixfmt.bgra",
-                    "pixfmt.ayuv",
-                    "pixfmt.p210",
-                    "hwframes.videotoolbox.input",
-                    "hwframes.videotoolbox.output",
-                    "side_data.v2",
-                ]
+                capabilities = args.capabilities
                 body = struct.pack(">B", status)
                 body += write_str("mock-vtremoted")
                 body += write_str("test")
@@ -345,6 +422,14 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                     _ = width, height
 
                     config_options, off = parse_config_options(payload, off)
+                    required_cap = PIX_FMT_CAPABILITY.get(pix_fmt)
+                    if required_cap and required_cap not in args.capabilities:
+                        write_msg(
+                            conn,
+                            MSG_ERROR,
+                            b"\x00\x00\x00\x03" + f"missing capability {required_cap}".encode("utf-8"),
+                        )
+                        return
 
                     if off + 4 > len(payload):
                         raise ValueError("missing extradata length")
@@ -447,19 +532,20 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                     continue
 
                 if msg_type == MSG_PACKET:
-                    off = 0
-                    pts, off = read_u64(payload, off)
-                    dts, off = read_u64(payload, off)
-                    dur, off = read_u64(payload, off)
-                    flags, off = read_u32(payload, off)
-                    data_len, off = read_u32(payload, off)
-                    off += data_len
+                    pts, dts, dur, flags, side_data_blob = parse_packet_body(payload)
                     _ = dts
 
                     if getattr(args, "packet_reply", "frame") == "packet":
                         out_dts = pts + int(getattr(args, "packet_dts_offset", 0))
                         write_msg(conn, MSG_PACKET,
-                                  make_packet_body(args.packet_data, pts, out_dts, dur, flags))
+                                  make_packet_body_with_side_data(
+                                      args.packet_data,
+                                      pts,
+                                      out_dts,
+                                      dur,
+                                      flags,
+                                      side_data_blob,
+                                  ))
                         continue
 
                     write_msg(conn, MSG_FRAME, make_dummy_frame_body(pts, dur))
@@ -596,9 +682,15 @@ def main() -> int:
         default="",
         help="Path to a file containing hex-encoded packet payload for PACKET replies",
     )
+    parser.add_argument(
+        "--capabilities",
+        default=",".join(DEFAULT_CAPABILITIES),
+        help="Comma-separated HELLO_ACK capabilities advertised by the mock",
+    )
     parser.add_argument("--once", action="store_true", help="handle a single connection then exit")
     args = parser.parse_args()
     try:
+        args.capabilities = [cap for cap in args.capabilities.split(",") if cap]
         args.configure_extradata = validate_payload_size(
             load_hex_payload(
                 args.configure_extradata_hex,

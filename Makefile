@@ -41,6 +41,7 @@ FFMPEG_OBJC := $(FFMPEG_CC)
 FFMPEG_OBJCC := $(FFMPEG_CC)
 
 FFMPEG_CONFIGURE_FLAGS_BASE ?= --enable-gpl --enable-liblz4 --enable-libzstd --enable-libvmaf --enable-libaom --enable-libdav1d --enable-libsvtav1 --enable-libopus --enable-libvorbis --enable-libmp3lame --enable-libx264 --enable-libx265 --enable-libvpx --enable-videotoolbox-remote --disable-debug --disable-response-files
+FFMPEG_DISABLE_X86ASM ?=
 
 ifeq ($(IS_DARWIN),Darwin)
 FFMPEG_CONFIGURE_FLAGS ?= --enable-videotoolbox $(FFMPEG_CONFIGURE_FLAGS_BASE)
@@ -53,13 +54,14 @@ VTREMOTED_LISTEN ?= 127.0.0.1:5555
 VTREMOTED_LOG_LEVEL ?= 1
 VTREMOTED_TOKEN ?=
 VTREMOTED_SYSTEM ?=
+VTREMOTED_LABEL ?= com.davelindon.vtremoted
 GITHUB_REPO ?= davelindo/videotoolbox_remote
 
 # SwiftPM uses macOS sandboxing by default (sandbox-exec). In sandboxed environments (e.g. some CI runners
 # and Codex), sandbox-exec can fail with "Operation not permitted". Allow overriding to re-enable.
 SWIFT_BUILD_SANDBOX_FLAGS ?= --disable-sandbox
 
-.PHONY: build build-ffmpeg build-vtremoted install install-ffmpeg install-vtremoted clean clean-ffmpeg clean-vtremoted test-obs-plugin test-obs-plugin-integration sync-github-metadata release-notes release-notes-all
+.PHONY: build build-ffmpeg build-vtremoted install install-ffmpeg install-vtremoted install-vtremoted-restart verify-vtremoted-install clean clean-ffmpeg clean-vtremoted test-obs-plugin test-obs-plugin-integration sync-github-metadata release-notes release-notes-all
 .SILENT: build-ffmpeg
 
 build: build-ffmpeg build-vtremoted
@@ -67,6 +69,9 @@ build: build-ffmpeg build-vtremoted
 build-ffmpeg:
 	cd $(FFMPEG_DIR) && \
 	config_flags="$(FFMPEG_CONFIGURE_FLAGS)"; \
+	if [ "$(FFMPEG_DISABLE_X86ASM)" = "1" ] && ! printf "%s" "$$config_flags" | grep -qE '(^|[[:space:]])--disable-x86asm([[:space:]]|$$)'; then \
+		config_flags="$$config_flags --disable-x86asm"; \
+	fi; \
 	sdkroot="$(SDKROOT)"; \
 	cc="$(FFMPEG_CC)"; \
 	cxx="$(FFMPEG_CXX)"; \
@@ -219,12 +224,32 @@ install-vtremoted:
 ifeq ($(IS_DARWIN),Darwin)
 	@install -d "$(BINDIR)"
 	@install -m 0755 "$(VTREMOTED_DIR)/.build/release/vtremoted" "$(BINDIR)/vtremoted"
-	@args="--bin $(BINDIR)/vtremoted --listen $(VTREMOTED_LISTEN) --log-level $(VTREMOTED_LOG_LEVEL)"; \
+	@args="--label $(VTREMOTED_LABEL) --bin $(BINDIR)/vtremoted --listen $(VTREMOTED_LISTEN) --log-level $(VTREMOTED_LOG_LEVEL)"; \
 	if [ -n "$(VTREMOTED_TOKEN)" ]; then args="$$args --token $(VTREMOTED_TOKEN)"; fi; \
 	if [ -n "$(VTREMOTED_SYSTEM)" ]; then args="$$args --system"; fi; \
 	"$(VTREMOTED_DIR)/install_launchd.sh" $$args
 else
 	@echo "Skipping vtremoted install (not macOS)"
+endif
+
+install-vtremoted-restart: build-vtremoted install-vtremoted verify-vtremoted-install
+
+verify-vtremoted-install:
+ifeq ($(IS_DARWIN),Darwin)
+	@domain="gui/$$(id -u)"; \
+	if [ -n "$(VTREMOTED_SYSTEM)" ]; then domain="system"; fi; \
+	port="$(VTREMOTED_LISTEN)"; port="$${port##*:}"; \
+	echo "launchd service: $$domain/$(VTREMOTED_LABEL)"; \
+	launchctl print "$$domain/$(VTREMOTED_LABEL)" 2>/dev/null | sed -n '/program =/p;/arguments =/,/}/p;/pid =/p;/last exit/p' || true; \
+	echo "listening sockets:"; \
+	lsof -nP -iTCP:$$port -sTCP:LISTEN 2>/dev/null || true; \
+	echo "processes:"; \
+	pgrep -fl vtremoted || true; \
+	if [ -x "$(BINDIR)/vtremoted" ]; then \
+		shasum -a 256 "$(VTREMOTED_DIR)/.build/release/vtremoted" "$(BINDIR)/vtremoted"; \
+	fi
+else
+	@echo "Skipping vtremoted verification (not macOS)"
 endif
 
 clean: clean-ffmpeg clean-vtremoted

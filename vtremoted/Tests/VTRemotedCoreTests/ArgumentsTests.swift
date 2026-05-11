@@ -16,4 +16,12 @@ final class ArgumentsTests: XCTestCase {
         XCTAssertEqual(args.logLevel, .debug)
         XCTAssertTrue(args.once)
     }
+
+    func testParseHelpAndVersion() {
+        XCTAssertTrue(Arguments.parse(["vtremoted", "--help"]).showHelp)
+        XCTAssertTrue(Arguments.parse(["vtremoted", "-h"]).showHelp)
+        XCTAssertTrue(Arguments.parse(["vtremoted", "--version"]).showVersion)
+        XCTAssertTrue(Arguments.usage.contains("--listen HOST:PORT"))
+        XCTAssertEqual(Arguments.version, "0.4.1")
+    }
 }

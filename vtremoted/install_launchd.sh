@@ -63,6 +63,7 @@ if [[ "$SYSTEM" -eq 1 ]]; then
     SUDO=""
   else
     SUDO="sudo"
+    echo "Installing system LaunchDaemon; sudo may prompt for permission." >&2
   fi
 else
   PLIST_DIR="${HOME}/Library/LaunchAgents"
@@ -141,5 +142,12 @@ $SUDO launchctl bootstrap "$DOMAIN" "$PLIST"
 $SUDO launchctl kickstart -k "$DOMAIN/$LABEL"
 
 echo "Installed launchd service: $LABEL"
+echo "  domain: $DOMAIN"
+echo "  binary: $BIN"
 echo "  plist: $PLIST"
 echo "  logs:  $STDOUT_LOG / $STDERR_LOG"
+echo
+echo "Verify with:"
+echo "  launchctl print \"$DOMAIN/$LABEL\""
+echo "  pgrep -fl vtremoted"
+echo "  lsof -nP -iTCP:${LISTEN##*:} -sTCP:LISTEN"

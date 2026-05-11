@@ -4,6 +4,10 @@ This tree holds VideoToolbox Remote integration tests and benchmarks.
 
 - `mock_vtremoted/`: portable Python mock server to exercise protocol framing and message flow. It responds to HELLO/CONFIGURE/FRAME/FLUSH, can return caller-supplied HEVC fixtures, and exits after FLUSH (see its README for usage).
 - `run_mock_roundtrip.sh`: spins up the Python mock and runs `h264_videotoolbox_remote` against it using a built ffmpeg binary (defaults to `ffmpeg/ffmpeg` in the repo root).
+- `run_mock_wire_compression.sh`: runs dedicated LZ4 and Zstd mock cases so compressed frame-payload validation is explicit instead of coupled to framing smoke tests.
+- `run_mock_protocol_capabilities.sh`: verifies successful capability negotiation and clear configure-time failure when a required 0.4.1 capability is missing.
+- `run_mock_side_data_roundtrip.sh`: validates optional PACKET side-data records round-trip through the protocol mock.
+- `run_mock_hevc_pixfmt_negotiation.sh`: verifies mock negotiation for HEVC `bgra`, `ayuv`, and `p210le` input formats.
 - `run_mock_decode.sh`: spins up the Python mock and runs the `h264_videotoolbox_remote` *decoder* against it (forces `-vt_remote_wire_compression none` since the mock does not compress).
 - `run_mock_transcode_hvc1_hdr_signaling.sh`: spins up the Python mock with HEVC Main10 HDR fixtures and asserts both the explicit-override and source-preservation `vtremote_transcode` paths keep `hvc1`, HDR color signaling, and MP4 `nclx` container metadata on HLS/fMP4 output.
 - `run_obs_plugin_client_mock.sh`: compiles the OBS plugin client (`obs-plugin/src/vtremoted-client.cpp`) with a local OBS logging stub and runs protocol smoke cases against the Python mock server for `none`, `lz4`, `zstd`, and oversized inbound responses.
@@ -16,7 +20,9 @@ This tree holds VideoToolbox Remote integration tests and benchmarks.
 - `run_vtremoted_roundtrip.sh`: launches `vtremoted` on loopback, runs short H.264 + HEVC `*_videotoolbox_remote` encodes, validates PTS/DTS via `check_pts_dts.sh`, and decodes the result with `ffmpeg -xerror` to catch bad bytestream/packet formatting.
 - `run_vtremoted_hevc_pixfmt_parity.sh`: launches `vtremoted` on loopback and verifies remote HEVC accepts `bgra`, `ayuv`, and `p210le` inputs, then decodes each output with `ffmpeg -xerror`.
 - `run_vtremoted_hwframe_ingest.sh`: launches `vtremoted` on loopback and verifies H.264/HEVC remote encoders accept `AV_PIX_FMT_VIDEOTOOLBOX` frames from FFmpeg's VideoToolbox `hwupload` path.
+- `run_vtremoted_transcode_hardware_ingest.sh`: launches `vtremoted` on loopback and verifies a local VideoToolbox hardware-decode pipeline can feed hardware frames into a remote HEVC encode.
 - `run_vtremoted_hwframe_decode.sh`: launches `vtremoted` on loopback and verifies H.264/HEVC remote decoders can return local `AV_PIX_FMT_VIDEOTOOLBOX` frames that survive `hwdownload`.
+- `run_vtremoted_hdr_side_data.sh`: launches `vtremoted` on loopback and verifies remote HEVC Main10 output keeps HDR color signaling (`hvc1`, BT.2020, PQ, limited range) and decodes cleanly.
 - `run_vtremoted_decode.sh`: generates short local H.264/HEVC inputs and validates remote decode with `h264_videotoolbox_remote` / `hevc_videotoolbox_remote`.
 - `run_transcode_test.sh`: simultaneous remote decode + encode pipeline (sanity + stability).
 - `run_option_surface_parity.sh`: compares local (`*_videotoolbox`) vs remote (`*_videotoolbox_remote`) encoder option surfaces for H.264/HEVC and fails on drift (ignoring `vt_remote_*` transport-only options).
@@ -59,3 +65,8 @@ Run-all toggles:
 FFmpeg build note: enable the local + remote codecs during configure on macOS, e.g.
 `./configure --enable-videotoolbox --enable-videotoolbox-remote`
 and keep `--enable-network` on.
+
+Shell compatibility note: integration scripts should remain compatible with the
+system Bash 3.2 shipped on macOS. Under `set -u`, optional arrays must use
+guarded expansion such as `${TOKEN_ARGS[@]+"${TOKEN_ARGS[@]}"}`
+instead of unguarded `"${TOKEN_ARGS[@]}"`.

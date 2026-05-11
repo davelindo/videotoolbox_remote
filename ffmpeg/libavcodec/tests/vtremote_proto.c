@@ -211,6 +211,21 @@ static int test_frame_and_packet_parse(void)
     av_assert0(vtremote_parse_packet(pkt_payload.data, pkt_payload.size, &view) == 0);
     av_assert0(view.pts == 10 && view.dts == 9 && view.duration == 2);
     av_assert0(view.flags == 1 && view.data_len == 3 && !memcmp(view.data, data_bytes, 3));
+    av_assert0(view.side_data_count == 0);
+
+    vtremote_wbuf_reset(&pkt_payload);
+    av_assert0(vtremote_payload_packet_ex(&pkt_payload, 11, 10, 3, 1,
+                                          data_bytes, sizeof(data_bytes),
+                                          side_data, 2) == 0);
+    av_assert0(vtremote_parse_packet(pkt_payload.data, pkt_payload.size, &view) == 0);
+    av_assert0(view.pts == 11 && view.dts == 10 && view.duration == 3);
+    av_assert0(view.side_data_count == 2);
+    av_assert0(view.side_data[0].type == AV_FRAME_DATA_MASTERING_DISPLAY_METADATA);
+    av_assert0(view.side_data[0].size == sizeof(hdr_data));
+    av_assert0(!memcmp(view.side_data[0].data, hdr_data, sizeof(hdr_data)));
+    av_assert0(view.side_data[1].type == AV_FRAME_DATA_A53_CC);
+    av_assert0(view.side_data[1].size == sizeof(cc_data));
+    av_assert0(!memcmp(view.side_data[1].data, cc_data, sizeof(cc_data)));
 
     vtremote_wbuf_free(&b);
     vtremote_wbuf_free(&pkt_payload);

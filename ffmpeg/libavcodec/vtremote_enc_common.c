@@ -2040,6 +2040,18 @@ static int enqueue_packet(AVCodecContext *avctx, const uint8_t *payload,
   dst->dts = view.dts;
   dst->duration = view.duration;
   dst->flags = (view.flags & 1) ? AV_PKT_FLAG_KEY : 0;
+  for (int i = 0; i < view.side_data_count; i++) {
+    uint8_t *sd = av_packet_new_side_data(
+        dst, (enum AVPacketSideDataType)view.side_data[i].type,
+        view.side_data[i].size);
+    if (!sd) {
+      av_log(avctx, AV_LOG_WARNING,
+             "Could not attach packet side data type=%u size=%u\n",
+             view.side_data[i].type, view.side_data[i].size);
+      continue;
+    }
+    memcpy(sd, view.side_data[i].data, view.side_data[i].size);
+  }
   if (dst->dts == AV_NOPTS_VALUE)
     dst->dts = dst->pts;
   if (dst->dts != AV_NOPTS_VALUE) {

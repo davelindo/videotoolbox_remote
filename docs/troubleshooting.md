@@ -44,6 +44,32 @@ Common issues and their solutions.
 - Ensure you are running the `ffmpeg` binary from `ffmpeg/`.
 - Reconfigure with `--enable-videotoolbox-remote`.
 
+### Linux build fails in FFmpeg x86 assembly
+**Symptom**: The build fails in an FFmpeg x86 assembly file, or the error mentions `nasm`, `yasm`, or an unsupported x86 instruction.
+**Checks**:
+1. Confirm you are building on 64-bit Linux:
+   ```bash
+   uname -m
+   ```
+   Supported Linux release artifacts target `x86_64`, not 32-bit `i686`.
+2. Install current assemblers:
+   ```bash
+   nasm -v
+   yasm --version
+   ```
+3. Clean and rebuild after installing them:
+   ```bash
+   make clean-ffmpeg
+   make build-ffmpeg
+   ```
+4. If the failure persists, confirm it is isolated to x86 assembly with the compatibility fallback:
+   ```bash
+   make clean-ffmpeg
+   make build-ffmpeg FFMPEG_DISABLE_X86ASM=1
+   ```
+
+`FFMPEG_DISABLE_X86ASM=1` appends `--disable-x86asm`. It can reduce FFmpeg performance, so use it as a diagnostic or compatibility fallback rather than the default build.
+
 ### macOS Build Fails
 **Error**: `videotoolbox requested, but not all dependencies are satisfied`.
 **Solution**:
@@ -52,6 +78,31 @@ Common issues and their solutions.
   ```bash
   SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" make build-ffmpeg
   ```
+
+### Verify a running macOS server after upgrade
+**Symptom**: Multiple `vtremoted` processes are running, or a LaunchAgent and LaunchDaemon point at different binaries.
+**Solution**:
+1. Check the packaged binary:
+   ```bash
+   vtremoted --version
+   ```
+2. Check launchd state:
+   ```bash
+   launchctl print "gui/$(id -u)/com.davelindon.vtremoted"
+   ```
+   For a system LaunchDaemon, use:
+   ```bash
+   sudo launchctl print system/com.davelindon.vtremoted
+   ```
+3. Check listeners and process paths:
+   ```bash
+   pgrep -fl vtremoted
+   lsof -nP -iTCP:5555 -sTCP:LISTEN
+   ```
+4. If using the Makefile install path, rebuild, reinstall, restart, and verify with:
+   ```bash
+   make install-vtremoted-restart VTREMOTED_LISTEN=0.0.0.0:5555
+   ```
 
 ## Encoding/Decoding
 

@@ -486,6 +486,16 @@ int vtremote_payload_packet(VTRemoteWBuf *b,
                            int64_t pts, int64_t dts, int64_t duration, uint32_t flags,
                            const uint8_t *data, uint32_t data_len)
 {
+    return vtremote_payload_packet_ex(b, pts, dts, duration, flags,
+                                      data, data_len, NULL, 0);
+}
+
+int vtremote_payload_packet_ex(VTRemoteWBuf *b,
+                              int64_t pts, int64_t dts, int64_t duration, uint32_t flags,
+                              const uint8_t *data, uint32_t data_len,
+                              const VTRemoteSideData *side_data,
+                              uint8_t side_data_count)
+{
     vtremote_wbuf_reset(b);
     int ret = 0;
     ret |= vtremote_wbuf_put_u64(b, (uint64_t)pts);
@@ -499,6 +509,21 @@ int vtremote_payload_packet(VTRemoteWBuf *b,
         ret |= vtremote_wbuf_put_bytes(b, data, data_len);
         if (ret < 0)
             return ret;
+    }
+    if (side_data_count > 0 && side_data) {
+        ret |= vtremote_wbuf_put_u8(b, side_data_count);
+        if (ret < 0)
+            return ret;
+        for (int i = 0; i < side_data_count; i++) {
+            ret |= vtremote_wbuf_put_u32(b, side_data[i].type);
+            ret |= vtremote_wbuf_put_u32(b, side_data[i].size);
+            if (ret < 0)
+                return ret;
+            ret |= vtremote_wbuf_put_bytes(b, side_data[i].data,
+                                           (int)side_data[i].size);
+            if (ret < 0)
+                return ret;
+        }
     }
     return ret;
 }
@@ -527,6 +552,31 @@ int vtremote_parse_packet(const uint8_t *payload, int payload_size, VTRemotePack
     out->flags = flags;
     out->data_len = data_len;
     out->data = r.data + r.pos;
+    r.pos += data_len;
+    if (r.pos < r.size) {
+        uint8_t sd_count = 0;
+        ret = vtremote_rbuf_read_u8(&r, &sd_count);
+        if (ret < 0)
+            return ret;
+        out->side_data_count = sd_count > 16 ? 16 : sd_count;
+        for (int i = 0; i < sd_count; i++) {
+            uint32_t type, size;
+            ret |= vtremote_rbuf_read_u32(&r, &type);
+            ret |= vtremote_rbuf_read_u32(&r, &size);
+            if (ret < 0)
+                return ret;
+            if (size > (uint32_t)(r.size - r.pos))
+                return AVERROR_INVALIDDATA;
+            if (i < 16) {
+                out->side_data[i].type = type;
+                out->side_data[i].size = size;
+                out->side_data[i].data = r.data + r.pos;
+            }
+            r.pos += size;
+        }
+    } else {
+        out->side_data_count = 0;
+    }
     return 0;
 }
 

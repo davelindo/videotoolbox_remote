@@ -491,6 +491,25 @@ static int vtremote_decompress_plane_payload(VTRemoteDecContext *s,
     return AVERROR_INVALIDDATA;
 }
 
+static int packet_side_data_from_avpacket(const AVPacket *pkt,
+                                          VTRemoteSideData *side_data,
+                                          int max_side_data)
+{
+    int count = 0;
+
+    if (!pkt || !side_data || max_side_data <= 0)
+        return 0;
+    for (int i = 0; i < pkt->side_data_elems && count < max_side_data; i++) {
+        if (!pkt->side_data[i].data || pkt->side_data[i].size <= 0)
+            continue;
+        side_data[count].type = (uint32_t)pkt->side_data[i].type;
+        side_data[count].size = (uint32_t)pkt->side_data[i].size;
+        side_data[count].data = pkt->side_data[i].data;
+        count++;
+    }
+    return count;
+}
+
 static int vtremote_handle_configure_ack(AVCodecContext *avctx, const uint8_t *payload, int len)
 {
     VTRemoteRBuf r;
@@ -1144,10 +1163,15 @@ int ff_vtremote_decode(AVCodecContext *avctx, AVFrame *frame, int *got_frame, AV
         int64_t pts = pkt->pts;
         int64_t dts = pkt->dts;
         int64_t dur = pkt->duration > 0 ? pkt->duration : 0;
-        int ret = vtremote_payload_packet(payload,
-                                          pts, dts, dur,
-                                          (pkt->flags & AV_PKT_FLAG_KEY) ? 1 : 0,
-                                          pkt->data, pkt->size);
+        VTRemoteSideData side_data[16];
+        int side_data_count = packet_side_data_from_avpacket(
+            pkt, side_data, FF_ARRAY_ELEMS(side_data));
+        int ret = vtremote_payload_packet_ex(payload,
+                                             pts, dts, dur,
+                                             (pkt->flags & AV_PKT_FLAG_KEY) ? 1 : 0,
+                                             pkt->data, pkt->size,
+                                             side_data,
+                                             (uint8_t)side_data_count);
         if (ret < 0)
             return ret;
         ret = vtremote_send_msg(s, VTREMOTE_MSG_PACKET, payload);

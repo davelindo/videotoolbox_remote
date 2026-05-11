@@ -62,9 +62,16 @@ swift build -c release
 
 The standard build enables **VMAF**, **SSIM/PSNR**, and common codec libraries (including AV1).
 You will need the corresponding development headers installed (see `docs/development.md` for platform notes).
+Linux release artifacts and CI builds target `x86_64`; 32-bit `i686` builds are not part of the supported matrix.
 
 ```bash
 make build-ffmpeg
+```
+
+If a Linux source build fails in FFmpeg x86 assembly after installing current `nasm` and `yasm`, use the compatibility fallback:
+
+```bash
+make build-ffmpeg FFMPEG_DISABLE_X86ASM=1
 ```
 
 *(On macOS, you can use `make build` in the root directory to build both server and client.)*
@@ -106,7 +113,10 @@ Current coverage:
   - HEVC: `nv12`, `yuv420p`, `p010le`, `yuv420p10le`, `yuv420p10be`, `bgra`, `ayuv`, `p210le`
 - Remote encoder hardware-frame ingest for local `AV_PIX_FMT_VIDEOTOOLBOX` inputs.
 - Optional remote decoder hardware-frame output with `-vt_remote_output_hw_frames 1`.
-- Expanded frame side-data forwarding for common HDR, ICC, display, timecode, Dolby Vision, SEI, and caption metadata.
+- Expanded frame and packet side-data forwarding for common HDR, ICC, display, timecode, Dolby Vision, SEI, caption, and mux-facing metadata.
+- `vtremote_transcode` preserves HEVC `hvc1`/HDR signaling and carries packet side data across packet-in/packet-out paths.
+
+The expanded 0.4.1 media surface requires a 0.4.1-capable `vtremoted` for hardware-frame paths, HEVC `bgra`/`ayuv`/`p210le`, and PACKET side-data forwarding. Older servers continue to support pre-existing software-frame paths and fail unsupported 0.4.1 requests during configure.
 
 ## Why the project is useful
 
