@@ -44,6 +44,14 @@ final class MessageCodecTests: XCTestCase {
         )
     }
 
+    func testRuntimeServerCapabilitiesMatchBackend() {
+        #if canImport(VideoToolbox)
+            XCTAssertEqual(VTRCapability.runtimeServer, VTRCapability.defaultServer)
+        #else
+            XCTAssertEqual(VTRCapability.runtimeServer, VTRCapability.baseline)
+        #endif
+    }
+
     func testHelloDecode() throws {
         var writer = ByteWriter()
         writer.writeLengthPrefixedUTF8("tkn")

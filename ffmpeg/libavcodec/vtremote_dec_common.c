@@ -438,6 +438,21 @@ static int wire_pix_fmt_from_av_pix_fmt(enum AVPixelFormat pix_fmt)
     }
 }
 
+static int vtremote_require_server_cap(AVCodecContext *avctx,
+                                       uint64_t required_cap,
+                                       const char *what)
+{
+    VTRemoteDecContext *s = avctx->priv_data;
+
+    if (!required_cap || (s->server_caps & required_cap))
+        return 0;
+
+    av_log(avctx, AV_LOG_ERROR,
+           "vtremote server does not advertise required capability for %s.\n",
+           what);
+    return AVERROR(ENOSYS);
+}
+
 static void vtremote_copy_plane_rows(uint8_t *dst, int dst_stride,
                                      const uint8_t *src, int src_stride,
                                      int row_bytes, int rows)
@@ -497,6 +512,11 @@ static int vtremote_handle_configure_ack(AVCodecContext *avctx, const uint8_t *p
     uint8_t reported_pix = 0;
     vtremote_rbuf_read_u8(&r, &reported_pix);
     enum AVPixelFormat pf = pix_fmt_from_wire(reported_pix);
+    if (reported_pix && pf == AV_PIX_FMT_NONE) {
+        av_log(avctx, AV_LOG_WARNING,
+               "vtremote server reported unexpected CONFIGURE_ACK pix_fmt=%u (%s)\n",
+               reported_pix, vtremote_pix_fmt_name(reported_pix));
+    }
     if (pf != AV_PIX_FMT_NONE && avctx->pix_fmt == AV_PIX_FMT_VIDEOTOOLBOX) {
         avctx->sw_pix_fmt = pf;
     } else if (pf != AV_PIX_FMT_NONE) {
@@ -634,6 +654,18 @@ static int vtremote_handshake(AVCodecContext *avctx)
         ret = AVERROR(EINVAL);
         goto cfg_fail;
     }
+    ret = vtremote_require_server_cap(avctx,
+                                      vtremote_cap_flag_for_pix_fmt(wire_pix_fmt),
+                                      vtremote_pix_fmt_name((uint8_t)wire_pix_fmt));
+    if (ret < 0)
+        goto cfg_fail;
+    if (s->output_hw_frames) {
+        ret = vtremote_require_server_cap(avctx,
+                                          VTREMOTE_CAP_HWFRAMES_VIDEOTOOLBOX_OUT,
+                                          "VideoToolbox hardware-frame decode output");
+        if (ret < 0)
+            goto cfg_fail;
+    }
 
     AVRational tb = avctx->time_base;
     if (tb.num <= 0 || tb.den <= 0 || (tb.num == 1 && tb.den == 1)) {
@@ -734,6 +766,13 @@ static int vtremote_setup_hw_frames(AVCodecContext *avctx)
     }
 
     if (avctx->hw_device_ctx) {
+        AVHWDeviceContext *device_ctx =
+            (AVHWDeviceContext *)avctx->hw_device_ctx->data;
+        if (!device_ctx || device_ctx->type != AV_HWDEVICE_TYPE_VIDEOTOOLBOX) {
+            av_log(avctx, AV_LOG_ERROR,
+                   "vt_remote_output_hw_frames requires a VideoToolbox hw_device_ctx.\n");
+            return AVERROR(EINVAL);
+        }
         device_ref = av_buffer_ref(avctx->hw_device_ctx);
         if (!device_ref)
             return AVERROR(ENOMEM);

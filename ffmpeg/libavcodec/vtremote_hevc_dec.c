@@ -34,6 +34,10 @@ static av_cold int vtremote_hevc_dec_init(AVCodecContext *avctx)
     enum AVPixelFormat sw_fmt = (avctx->bits_per_raw_sample > 8) ? AV_PIX_FMT_P010LE : AV_PIX_FMT_NV12;
 #if CONFIG_VIDEOTOOLBOX && defined(__APPLE__)
     if (s->output_hw_frames) {
+        /*
+         * CONFIGURE_ACK runs before hw_frames_ctx allocation and corrects
+         * sw_pix_fmt once the server reports the stream's actual output depth.
+         */
         avctx->pix_fmt = AV_PIX_FMT_VIDEOTOOLBOX;
         avctx->sw_pix_fmt = sw_fmt;
         return ff_vtremote_dec_init(avctx);
@@ -86,7 +90,7 @@ static av_cold int vtremote_hevc_dec_close(AVCodecContext *avctx)
 
 #if CONFIG_VIDEOTOOLBOX && defined(__APPLE__)
 static const AVCodecHWConfigInternal *const vtremote_hevc_dec_hw_configs[] = {
-    HW_CONFIG_ENCODER_FRAMES(VIDEOTOOLBOX, VIDEOTOOLBOX),
+    VTREMOTE_HW_CONFIG_DECODER_FRAMES(VIDEOTOOLBOX, VIDEOTOOLBOX),
     NULL
 };
 #endif

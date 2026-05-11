@@ -108,6 +108,7 @@ static inline int vtremote_read_header(const uint8_t *src, size_t src_size,
 /* Return a short string for logging; returns "UNKNOWN" if out of range. */
 const char *vtremote_msg_type_name(int type);
 const char *vtremote_pix_fmt_name(uint8_t pix_fmt);
+uint64_t vtremote_cap_flag_for_pix_fmt(uint8_t pix_fmt);
 int vtremote_cap_flag_from_name(const uint8_t *name, int name_len, uint64_t *flag);
 int vtremote_caps_parse_hello_ack(const uint8_t *payload, int len,
                                   uint8_t *status,

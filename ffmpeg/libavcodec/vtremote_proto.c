@@ -43,6 +43,18 @@ const char *vtremote_pix_fmt_name(uint8_t pix_fmt)
     }
 }
 
+uint64_t vtremote_cap_flag_for_pix_fmt(uint8_t pix_fmt)
+{
+    switch (pix_fmt) {
+    case VTREMOTE_PIX_FMT_NV12: return VTREMOTE_CAP_PIXFMT_NV12;
+    case VTREMOTE_PIX_FMT_P010: return VTREMOTE_CAP_PIXFMT_P010;
+    case VTREMOTE_PIX_FMT_BGRA: return VTREMOTE_CAP_PIXFMT_BGRA;
+    case VTREMOTE_PIX_FMT_AYUV: return VTREMOTE_CAP_PIXFMT_AYUV;
+    case VTREMOTE_PIX_FMT_P210: return VTREMOTE_CAP_PIXFMT_P210;
+    default: return 0;
+    }
+}
+
 static int cap_name_equals(const uint8_t *name, int name_len, const char *expected)
 {
     size_t expected_len;
@@ -564,6 +576,8 @@ int vtremote_parse_frame(const uint8_t *payload, int payload_size, VTRemoteFrame
         
         out->side_data_count = sd_count > 16 ? 16 : sd_count;
         
+        /* Iterate over the full wire count to consume all records even when
+         * retaining only the bounded local prefix. */
         for (int i = 0; i < sd_count; i++) {
             uint32_t type, size;
             ret |= vtremote_rbuf_read_u32(&r, &type);

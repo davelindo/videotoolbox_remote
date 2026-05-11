@@ -228,6 +228,9 @@ static int test_pix_fmt_and_cap_helpers(void)
     av_assert0(!strcmp(vtremote_pix_fmt_name(VTREMOTE_PIX_FMT_P210), "p210"));
     av_assert0(!strcmp(vtremote_pix_fmt_name(VTREMOTE_PIX_FMT_VIDEOTOOLBOX), "videotoolbox"));
     av_assert0(!strcmp(vtremote_pix_fmt_name(0xff), "unknown"));
+    av_assert0(vtremote_cap_flag_for_pix_fmt(VTREMOTE_PIX_FMT_NV12) == VTREMOTE_CAP_PIXFMT_NV12);
+    av_assert0(vtremote_cap_flag_for_pix_fmt(VTREMOTE_PIX_FMT_P210) == VTREMOTE_CAP_PIXFMT_P210);
+    av_assert0(vtremote_cap_flag_for_pix_fmt(VTREMOTE_PIX_FMT_VIDEOTOOLBOX) == 0);
 
     av_assert0(vtremote_cap_flag_from_name((const uint8_t *)"pixfmt.bgra", 11, &flag) == 0);
     av_assert0(flag == VTREMOTE_CAP_PIXFMT_BGRA);

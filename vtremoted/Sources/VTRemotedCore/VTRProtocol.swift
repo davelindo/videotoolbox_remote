@@ -55,6 +55,14 @@ public enum VTRCapability {
         hwFramesVideoToolboxOutput,
         sideDataV2
     ]
+
+    public static var runtimeServer: [String] {
+        #if canImport(VideoToolbox)
+            return defaultServer
+        #else
+            return baseline
+        #endif
+    }
 }
 
 public enum VTRMessageType: UInt16, Sendable {

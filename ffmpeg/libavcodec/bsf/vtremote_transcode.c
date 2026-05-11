@@ -919,6 +919,20 @@ static int vtremote_handle_configure_ack(AVBSFContext *ctx, const uint8_t *paylo
     return 0;
 }
 
+static int vtremote_require_server_cap(AVBSFContext *ctx, uint64_t required_cap,
+                                       const char *what)
+{
+    VTRemoteTranscodeContext *s = ctx->priv_data;
+
+    if (!required_cap || (s->server_caps & required_cap))
+        return 0;
+
+    av_log(ctx, AV_LOG_ERROR,
+           "vtremote server does not advertise required capability for %s.\n",
+           what);
+    return AVERROR(ENOSYS);
+}
+
 static int vtremote_build_hostport(const VTRemoteTranscodeContext *s,
                                    char *hostport, size_t hostport_size)
 {
@@ -1110,6 +1124,13 @@ static int vtremote_send_configure(AVBSFContext *ctx, VTRemoteKV *opts, int opt_
     AVRational tb = ctx->time_base_in.num && ctx->time_base_in.den ?
                     ctx->time_base_in : (AVRational){1, 90000};
     int ret;
+
+    ret = vtremote_require_server_cap(
+        ctx,
+        vtremote_cap_flag_for_pix_fmt((uint8_t)s->pixel_format),
+        vtremote_pix_fmt_name((uint8_t)s->pixel_format));
+    if (ret < 0)
+        return ret;
 
     vtremote_wbuf_init(&cfg);
     ret = vtremote_payload_configure(&cfg,

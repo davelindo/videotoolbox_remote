@@ -101,7 +101,7 @@ public final class VTRServer {
         let limiter = VTRSessionLimiter(maxSessions: maxSessions)
         let serverName = "vtremoted"
         let serverVersion = ProcessInfo.processInfo.environment["VTREMOTED_VERSION"] ?? "unknown"
-        let serverCapabilities = VTRCapability.defaultServer
+        let serverCapabilities = VTRCapability.runtimeServer
 
         #if os(Linux)
             let socketType = Int32(SOCK_STREAM.rawValue)

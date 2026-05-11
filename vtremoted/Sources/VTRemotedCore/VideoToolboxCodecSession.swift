@@ -64,19 +64,12 @@
         private var nominalFrameDurTicks: Int64 = 0
         private var encodeDtsOffsetTicks: Int64 = 0
 
-        private struct FrameSideData {
-            let type: UInt32
-            let data: Data
-        }
-
         private class FrameContext {
             let seq: UInt64
-            let sideData: [FrameSideData]
             let pixelBuffer: CVPixelBuffer?
             let isWarmup: Bool
-            init(seq: UInt64, sideData: [FrameSideData], pixelBuffer: CVPixelBuffer? = nil, isWarmup: Bool = false) {
+            init(seq: UInt64, pixelBuffer: CVPixelBuffer? = nil, isWarmup: Bool = false) {
                 self.seq = seq
-                self.sideData = sideData
                 self.pixelBuffer = pixelBuffer
                 self.isWarmup = isWarmup
             }
@@ -169,15 +162,13 @@
             }
         }
 
-        // `flags` and `sideData` mirror FRAME wire fields passed to VideoToolbox.
-        // swiftlint:disable:next function_parameter_count
+        // `flags` mirrors the FRAME wire keyframe request passed to VideoToolbox.
         private func encodePreparedFrame(
             session: VTCompressionSession,
             pixelBuffer: CVPixelBuffer,
             ptsTicks: Int64,
             durTicks: Int64,
-            flags: UInt32,
-            sideData: [FrameSideData]
+            flags: UInt32
         ) throws {
             guard let config else { throw VTRemotedError.protocolViolation("FRAME before CONFIGURE") }
 
@@ -189,7 +180,7 @@
             let seq = nextEncodeSeq()
             // Retain the pixel buffer until the encoder callback fires. VideoToolbox may consume frames
             // asynchronously, and the pool can otherwise recycle the buffer while it is still in use.
-            let frameContext = FrameContext(seq: seq, sideData: sideData, pixelBuffer: pixelBuffer)
+            let frameContext = FrameContext(seq: seq, pixelBuffer: pixelBuffer)
             let ctxPtr = Unmanaged.passRetained(frameContext).toOpaque()
 
             var infoFlags = VTEncodeInfoFlags()
@@ -491,15 +482,14 @@
             if let err = errorSlots[0] { throw err }
             if planeIterations > 1, let err = errorSlots[1] { throw err }
 
-            // Parse side data (V1 extension)
-            var sideData: [FrameSideData] = []
+            // Consume side-data records for wire compatibility. Encoder output
+            // packet side-data propagation is not implemented yet.
             if reader.remaining > 0 {
                 let sideDataCount = try reader.readUInt8()
                 for _ in 0 ..< sideDataCount {
-                    let type = try reader.readBEUInt32()
+                    _ = try reader.readBEUInt32()
                     let size = try reader.readBEUInt32()
-                    let data = try reader.readBytes(count: Int(size))
-                    sideData.append(FrameSideData(type: type, data: data))
+                    _ = try reader.sliceRange(count: Int(size))
                 }
             }
 
@@ -508,8 +498,7 @@
                 pixelBuffer: pBuffer,
                 ptsTicks: ptsTicks,
                 durTicks: durTicks,
-                flags: flags,
-                sideData: sideData
+                flags: flags
             )
         }
 
@@ -715,18 +704,14 @@
                 )
             }
 
-            // Parse side data (V1 extension)
-            var sideData: [FrameSideData] = []
+            // Consume side-data records for wire compatibility. Encoder output
+            // packet side-data propagation is not implemented yet.
             if remaining > 0 {
                 let sideDataCount = Int(try readUInt8())
                 for _ in 0 ..< sideDataCount {
-                    let type = try readBEUInt32()
+                    _ = try readBEUInt32()
                     let size = Int(try readBEUInt32())
-                    try require(size)
-                    var data = Data(count: size)
-                    try streamIO.readExact(into: &data, count: size)
-                    remaining -= size
-                    sideData.append(FrameSideData(type: type, data: data))
+                    try skipBytes(size)
                 }
             }
 
@@ -741,8 +726,7 @@
                 pixelBuffer: pBuffer,
                 ptsTicks: ptsTicks,
                 durTicks: durTicks,
-                flags: flags,
-                sideData: sideData
+                flags: flags
             )
         }
 
@@ -752,7 +736,7 @@
             let props: CFDictionary? = forceKey ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
 
             let seq = nextEncodeSeq()
-            let frameContext = FrameContext(seq: seq, sideData: [], pixelBuffer: pixelBuffer)
+            let frameContext = FrameContext(seq: seq, pixelBuffer: pixelBuffer)
             let ctxPtr = Unmanaged.passRetained(frameContext).toOpaque()
 
             let status = VTCompressionSessionEncodeFrame(
@@ -1911,7 +1895,7 @@
             var warmupSubmitted = false
 
             for (idx, pts) in presentationCandidates.enumerated() {
-                let warmupContext = FrameContext(seq: UInt64.max, sideData: [], isWarmup: true)
+                let warmupContext = FrameContext(seq: UInt64.max, isWarmup: true)
                 let ctxPtr = Unmanaged.passRetained(warmupContext).toOpaque()
 
                 var infoFlags = VTEncodeInfoFlags()

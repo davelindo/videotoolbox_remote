@@ -283,6 +283,18 @@ static int vtremote_wire_pix_fmt_for_context(const AVCodecContext *avctx,
   return vtremote_wire_pix_fmt_from_av_pix_fmt(pix_fmt, codec_id);
 }
 
+static int vtremote_require_server_cap(AVCodecContext *avctx, uint64_t caps,
+                                       uint64_t required_cap,
+                                       const char *what) {
+  if (!required_cap || (caps & required_cap))
+    return 0;
+
+  av_log(avctx, AV_LOG_ERROR,
+         "vtremote server does not advertise required capability for %s.\n",
+         what);
+  return AVERROR(ENOSYS);
+}
+
 static int vtremote_upload_plane_count(enum AVPixelFormat pix_fmt) {
   switch (pix_fmt) {
   case AV_PIX_FMT_BGRA:
@@ -1926,6 +1938,18 @@ static int vtremote_handshake(AVCodecContext *avctx) {
     ret = AVERROR(EINVAL);
     goto cfg_fail;
   }
+  ret = vtremote_require_server_cap(
+      avctx, s->server_caps, vtremote_cap_flag_for_pix_fmt(wire_pix_fmt),
+      vtremote_pix_fmt_name((uint8_t)wire_pix_fmt));
+  if (ret < 0)
+    goto cfg_fail;
+  if (avctx->pix_fmt == AV_PIX_FMT_VIDEOTOOLBOX) {
+    ret = vtremote_require_server_cap(
+        avctx, s->server_caps, VTREMOTE_CAP_HWFRAMES_VIDEOTOOLBOX_IN,
+        "VideoToolbox hardware-frame encoder input");
+    if (ret < 0)
+      goto cfg_fail;
+  }
   VTRemoteWBuf cfg;
   vtremote_wbuf_init(&cfg);
   AVRational tb = avctx->time_base;
@@ -2211,6 +2235,11 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame) {
            vtremote_pix_fmt_name((uint8_t)configured_wire_pix_fmt));
     return AVERROR(EINVAL);
   }
+  ret = vtremote_require_server_cap(
+      avctx, s->server_caps, vtremote_cap_flag_for_pix_fmt(frame_wire_pix_fmt),
+      vtremote_pix_fmt_name((uint8_t)frame_wire_pix_fmt));
+  if (ret < 0)
+    return ret;
 
   int plane_count = 2;
   const uint8_t *planes[2] = {upload_frame->data[0], upload_frame->data[1]};
@@ -2242,6 +2271,8 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame) {
       AVFrameSideData *frame_sd = frame->side_data[i];
       if (frame_sd->size > 0 &&
           vtremote_should_forward_frame_side_data(frame_sd->type)) {
+        /* Check the per-entry limit before the aggregate limit; the subtraction
+         * below relies on size staying within the bounded byte budget. */
         if (frame_sd->size > VTREMOTE_MAX_FRAME_SIDE_DATA_BYTES ||
             side_data_bytes > VTREMOTE_MAX_FRAME_SIDE_DATA_BYTES - frame_sd->size) {
           av_log(avctx, AV_LOG_WARNING,

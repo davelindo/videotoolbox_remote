@@ -9,6 +9,17 @@
 #include "libavutil/opt.h"
 #include "vtremote_proto.h"
 
+#define VTREMOTE_HW_CONFIG_DECODER_FRAMES(format, device_type_) \
+    &(const AVCodecHWConfigInternal) { \
+        .public          = { \
+            .pix_fmt     = AV_PIX_FMT_ ## format, \
+            .methods     = AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX | \
+                           AV_CODEC_HW_CONFIG_METHOD_HW_FRAMES_CTX, \
+            .device_type = AV_HWDEVICE_TYPE_ ## device_type_, \
+        }, \
+        .hwaccel         = NULL, \
+    }
+
 typedef struct VTRemoteDecContext {
     const AVClass *class;
     char *host;

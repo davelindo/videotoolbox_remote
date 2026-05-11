@@ -71,7 +71,7 @@ static av_cold int vtremote_h264_dec_close(AVCodecContext *avctx)
 
 #if CONFIG_VIDEOTOOLBOX && defined(__APPLE__)
 static const AVCodecHWConfigInternal *const vtremote_h264_dec_hw_configs[] = {
-    HW_CONFIG_ENCODER_FRAMES(VIDEOTOOLBOX, VIDEOTOOLBOX),
+    VTREMOTE_HW_CONFIG_DECODER_FRAMES(VIDEOTOOLBOX, VIDEOTOOLBOX),
     NULL
 };
 #endif

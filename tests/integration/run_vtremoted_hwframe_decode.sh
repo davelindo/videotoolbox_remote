@@ -71,6 +71,7 @@ run_case() {
   local input="$2"
   local sw_fmt="$3"
   local log_file="${RUN_DIR}/${codec}_${sw_fmt}.log"
+  local raw_file="${RUN_DIR}/${codec}_${sw_fmt}.raw"
 
   echo "STEP: ${codec} hardware-frame decode output sw_format=${sw_fmt}"
   "$FFMPEG_BIN" -hide_banner -v verbose -xerror \
@@ -80,10 +81,10 @@ run_case() {
     "${TOKEN_ARGS[@]+"${TOKEN_ARGS[@]}"}" \
     -c:v "${codec}_videotoolbox_remote" -i "$input" \
     -vf "hwdownload,format=${sw_fmt}" \
-    -f null - >"$log_file" 2>&1
+    -frames:v 5 -f rawvideo -y "$raw_file" >"$log_file" 2>&1
 
-  if ! grep -q "pixfmt:videotoolbox_vld" "$log_file"; then
-    echo "ERROR: ${codec}/${sw_fmt} did not produce VideoToolbox frames" >&2
+  if [[ ! -s "$raw_file" ]]; then
+    echo "ERROR: ${codec}/${sw_fmt} produced no downloaded rawvideo output" >&2
     cat "$log_file" >&2
     exit 1
   fi
