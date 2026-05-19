@@ -149,20 +149,19 @@ bool compress_plane_payload(const uint8_t *src, uint32_t src_size,
 } // namespace
 
 /* Big-endian helpers */
-static inline uint16_t be16(uint16_t v) {
-  uint8_t *p = (uint8_t *)&v;
-  return (uint16_t)p[0] << 8 | p[1];
+static inline uint16_t read_be16(const uint8_t *p) {
+  return (uint16_t)((uint16_t)p[0] << 8 | p[1]);
 }
-static inline uint32_t be32(uint32_t v) {
-  uint8_t *p = (uint8_t *)&v;
-  return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 |
-         p[3];
+static inline uint32_t read_be32(const uint8_t *p) {
+  return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 |
+         (uint32_t)p[2] << 8 | p[3];
 }
-static inline int64_t be64(int64_t v) {
-  uint8_t *p = (uint8_t *)&v;
-  return (int64_t)p[0] << 56 | (int64_t)p[1] << 48 | (int64_t)p[2] << 40 |
-         (int64_t)p[3] << 32 | (int64_t)p[4] << 24 | (int64_t)p[5] << 16 |
-         (int64_t)p[6] << 8 | p[7];
+static inline int64_t read_be64(const uint8_t *p) {
+  uint64_t v = (uint64_t)p[0] << 56 | (uint64_t)p[1] << 48 |
+               (uint64_t)p[2] << 40 | (uint64_t)p[3] << 32 |
+               (uint64_t)p[4] << 24 | (uint64_t)p[5] << 16 |
+               (uint64_t)p[6] << 8 | p[7];
+  return (int64_t)v;
 }
 
 static inline void write_be16(uint8_t *p, uint16_t v) {
@@ -176,8 +175,9 @@ static inline void write_be32(uint8_t *p, uint32_t v) {
   p[3] = v & 0xFF;
 }
 static inline void write_be64(uint8_t *p, int64_t v) {
+  uint64_t uv = (uint64_t)v;
   for (int i = 0; i < 8; i++)
-    p[i] = (v >> (56 - i * 8)) & 0xFF;
+    p[i] = (uv >> (56 - i * 8)) & 0xFF;
 }
 
 struct VTRemotedClient {
@@ -284,10 +284,10 @@ static bool recv_header(socket_t sock, struct vtr_header *hdr) {
   uint8_t buf[12];
   if (read_exact(sock, buf, 12))
     return false;
-  hdr->magic = be32(*(uint32_t *)buf);
-  hdr->version = be16(*(uint16_t *)(buf + 4));
-  hdr->type = be16(*(uint16_t *)(buf + 6));
-  hdr->length = be32(*(uint32_t *)(buf + 8));
+  hdr->magic = read_be32(buf);
+  hdr->version = read_be16(buf + 4);
+  hdr->type = read_be16(buf + 6);
+  hdr->length = read_be32(buf + 8);
   return hdr->magic == VTR_MAGIC;
 }
 
@@ -632,11 +632,11 @@ bool vtremoted_client_receive_packet(VTRemotedClient *client,
   if (buf.size() < 32)
     return false;
 
-  int64_t pts = be64(*(int64_t *)buf.data());
-  int64_t dts = be64(*(int64_t *)(buf.data() + 8));
-  /* int64_t duration = be64(*(int64_t *)(buf.data() + 16)); */
-  uint32_t flags = be32(*(uint32_t *)(buf.data() + 24));
-  uint32_t data_len = be32(*(uint32_t *)(buf.data() + 28));
+  int64_t pts = read_be64(buf.data());
+  int64_t dts = read_be64(buf.data() + 8);
+  /* int64_t duration = read_be64(buf.data() + 16); */
+  uint32_t flags = read_be32(buf.data() + 24);
+  uint32_t data_len = read_be32(buf.data() + 28);
 
   size_t data_offset = 32;
   if (buf.size() < data_offset + data_len)

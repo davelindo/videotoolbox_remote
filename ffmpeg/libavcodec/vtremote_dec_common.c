@@ -29,6 +29,7 @@
 #include "libavutil/opt.h"
 #include "libavutil/mem.h"
 #include "libavutil/common.h"
+#include "libavutil/error.h"
 #include "libavutil/pixfmt.h"
 #include "libavutil/pixdesc.h"
 #include "libavutil/time.h"
@@ -218,6 +219,54 @@ static int wait_readable(int fd, int timeout_ms)
 #endif
 }
 
+static int finish_interrupted_connect(int fd, int timeout_ms)
+{
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+    return AVERROR(WSAEINTR);
+#else
+    for (;;) {
+        struct pollfd pfd;
+        int ready;
+        int so_error = 0;
+        socklen_t so_error_len = sizeof(so_error);
+
+        pfd.fd = fd;
+        pfd.events = POLLOUT;
+        pfd.revents = 0;
+        ready = poll(&pfd, 1, timeout_ms);
+        if (ready < 0) {
+            if (errno == EINTR)
+                continue;
+            return AVERROR(errno);
+        }
+        if (ready == 0)
+            return AVERROR(ETIMEDOUT);
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR,
+                       VTR_SOCKOPT_ARG &so_error, &so_error_len) < 0)
+            return AVERROR(errno);
+        if (so_error)
+            return AVERROR(so_error);
+        return 0;
+    }
+#endif
+}
+
+static int connect_or_finish(int fd, const struct sockaddr *addr,
+                             socklen_t addrlen, int timeout_ms)
+{
+    if (connect(fd, addr, addrlen) == 0)
+        return 0;
+
+    int err = vtremote_sock_errno();
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+    if (err == WSAEINTR)
+        return finish_interrupted_connect(fd, timeout_ms);
+#endif
+    if (err == EINTR)
+        return finish_interrupted_connect(fd, timeout_ms);
+    return AVERROR(err);
+}
+
 static int connect_hostport(const char *hostport, int timeout_ms)
 {
     if (!hostport)
@@ -243,20 +292,25 @@ static int connect_hostport(const char *hostport, int timeout_ms)
         return AVERROR(EIO);
 
     int fd = -1;
+    int last_err = EIO;
     for (rp = res; rp; rp = rp->ai_next) {
         fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-        if (fd < 0)
+        if (fd < 0) {
+            last_err = vtremote_sock_errno() ? vtremote_sock_errno() : EIO;
             continue;
+        }
         set_socket_timeout(fd, timeout_ms);
         configure_socket_buffers(fd);
-        if (connect(fd, rp->ai_addr, rp->ai_addrlen) == 0)
+        int ret = connect_or_finish(fd, rp->ai_addr, rp->ai_addrlen, timeout_ms);
+        if (ret == 0)
             break;
+        last_err = AVUNERROR(ret);
         VTR_CLOSE_SOCKET(fd);
         fd = -1;
     }
     freeaddrinfo(res);
     if (fd < 0)
-        return AVERROR(vtremote_sock_errno() ? vtremote_sock_errno() : EIO);
+        return AVERROR(last_err);
     return fd;
 }
 
@@ -1012,26 +1066,33 @@ static int fill_hw_frame_from_view(AVCodecContext *avctx,
         return ret;
 
     pixbuf = (CVPixelBufferRef)frame->data[3];
-    if (!pixbuf)
-        return AVERROR_INVALIDDATA;
+    if (!pixbuf) {
+        ret = AVERROR_INVALIDDATA;
+        goto fail;
+    }
     if (av_map_videotoolbox_format_to_pixfmt(
             CVPixelBufferGetPixelFormatType(pixbuf)) != sw_fmt) {
         av_log(avctx, AV_LOG_ERROR,
                "Allocated VideoToolbox decode output has format %s, expected %s.\n",
                av_fourcc2str(CVPixelBufferGetPixelFormatType(pixbuf)),
                av_get_pix_fmt_name(sw_fmt));
-        return AVERROR_INVALIDDATA;
+        ret = AVERROR_INVALIDDATA;
+        goto fail;
     }
 
     cv_planes = CVPixelBufferIsPlanar(pixbuf)
                     ? (int)CVPixelBufferGetPlaneCount(pixbuf)
                     : 1;
-    if (cv_planes < view->plane_count)
-        return AVERROR_INVALIDDATA;
+    if (cv_planes < view->plane_count) {
+        ret = AVERROR_INVALIDDATA;
+        goto fail;
+    }
 
     cvret = CVPixelBufferLockBaseAddress(pixbuf, 0);
-    if (cvret != kCVReturnSuccess)
-        return AVERROR_EXTERNAL;
+    if (cvret != kCVReturnSuccess) {
+        ret = AVERROR_EXTERNAL;
+        goto fail;
+    }
 
     for (int i = 0; i < view->plane_count; i++) {
         uint8_t *dst;
@@ -1064,6 +1125,9 @@ static int fill_hw_frame_from_view(AVCodecContext *avctx,
 
 unlock:
     CVPixelBufferUnlockBaseAddress(pixbuf, 0);
+fail:
+    if (ret < 0)
+        av_frame_unref(frame);
     return ret;
 #else
     (void)s;
@@ -1151,8 +1215,10 @@ static int fill_frame_from_compressed_view(AVCodecContext *avctx, VTRemoteDecCon
         int dst_stride = frame->linesize[i];
         ret = vtremote_copy_or_decompress_plane(s, dst, dst_stride,
                                                 &view->planes[i], i);
-        if (ret < 0)
+        if (ret < 0) {
+            av_frame_unref(frame);
             return ret;
+        }
     }
 
     add_side_data_to_frame(frame, view);

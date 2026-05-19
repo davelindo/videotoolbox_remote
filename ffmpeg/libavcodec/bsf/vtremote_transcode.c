@@ -260,6 +260,52 @@ static int check_readable(int fd, int timeout_ms) {
 #endif
 }
 
+static int finish_interrupted_connect(int fd, int timeout_ms) {
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+    return AVERROR(WSAEINTR);
+#else
+    for (;;) {
+        struct pollfd pfd;
+        int ready;
+        int so_error = 0;
+        socklen_t so_error_len = sizeof(so_error);
+
+        pfd.fd = fd;
+        pfd.events = POLLOUT;
+        pfd.revents = 0;
+        ready = poll(&pfd, 1, timeout_ms);
+        if (ready < 0) {
+            if (errno == EINTR)
+                continue;
+            return AVERROR(errno);
+        }
+        if (ready == 0)
+            return AVERROR(ETIMEDOUT);
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR,
+                       VTR_SOCKOPT_ARG &so_error, &so_error_len) < 0)
+            return AVERROR(errno);
+        if (so_error)
+            return AVERROR(so_error);
+        return 0;
+    }
+#endif
+}
+
+static int connect_or_finish(int fd, const struct sockaddr *addr,
+                             socklen_t addrlen, int timeout_ms) {
+    if (connect(fd, addr, addrlen) == 0)
+        return 0;
+
+    int err = vtremote_sock_errno();
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+    if (err == WSAEINTR)
+        return finish_interrupted_connect(fd, timeout_ms);
+#endif
+    if (err == EINTR)
+        return finish_interrupted_connect(fd, timeout_ms);
+    return AVERROR(err);
+}
+
 static int connect_hostport(const char *hostport, int timeout_ms) {
     if (!hostport)
         return AVERROR(EINVAL);
@@ -284,20 +330,25 @@ static int connect_hostport(const char *hostport, int timeout_ms) {
         return AVERROR(EIO);
 
     int fd = -1;
+    int last_err = EIO;
     for (rp = res; rp; rp = rp->ai_next) {
         fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-        if (fd < 0)
+        if (fd < 0) {
+            last_err = vtremote_sock_errno() ? vtremote_sock_errno() : EIO;
             continue;
+        }
         configure_socket_buffers(fd);
         set_socket_timeout(fd, timeout_ms);
-        if (connect(fd, rp->ai_addr, rp->ai_addrlen) == 0)
+        int ret = connect_or_finish(fd, rp->ai_addr, rp->ai_addrlen, timeout_ms);
+        if (ret == 0)
             break;
+        last_err = AVUNERROR(ret);
         VTR_CLOSE_SOCKET(fd);
         fd = -1;
     }
     freeaddrinfo(res);
     if (fd < 0)
-        return AVERROR(vtremote_sock_errno() ? vtremote_sock_errno() : EIO);
+        return AVERROR(last_err);
 
     return fd;
 }

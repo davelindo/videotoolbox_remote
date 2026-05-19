@@ -152,11 +152,20 @@ public enum POSIXIO {
 
     public static func pollReadable(fd fileDescriptor: Int32, timeoutSeconds: Int) throws {
         var pollFd = pollfd(fd: fileDescriptor, events: Int16(POLLIN), revents: 0)
-        let result = withUnsafeMutablePointer(to: &pollFd) { ptr in
-            poll(ptr, 1, Int32(timeoutSeconds * 1000))
-        }
-        if result <= 0 {
-            throw VTRemotedError.ioError(code: Int32(result), message: "poll timed out")
+        while true {
+            let result = withUnsafeMutablePointer(to: &pollFd) { ptr in
+                poll(ptr, 1, Int32(timeoutSeconds * 1000))
+            }
+            if result > 0 {
+                return
+            }
+            if result == 0 {
+                throw VTRemotedError.ioError(code: 0, message: "poll timed out")
+            }
+
+            let code = errno
+            if code == EINTR { continue }
+            throw VTRemotedError.ioError(code: code, message: String(cString: strerror(code)))
         }
     }
 }

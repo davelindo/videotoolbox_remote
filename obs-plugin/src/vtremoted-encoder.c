@@ -228,11 +228,11 @@ static bool vtremoted_encode(void *data, struct encoder_frame *frame,
     return false;
   }
 
-  /* Build frame data (NV12: Y plane + UV plane) */
+  /* Build semiplanar 4:2:0 frame data (NV12/P010: Y plane + UV plane). */
   uint32_t width = obs_encoder_get_width(enc->encoder);
   uint32_t height = obs_encoder_get_height(enc->encoder);
 
-  /* For NV12: plane 0 = Y, plane 1 = UV interleaved */
+  /* Plane 0 = Y, plane 1 = UV interleaved. */
   size_t y_size = (size_t)frame->linesize[0] * height;
   size_t uv_size = (size_t)frame->linesize[1] * (height / 2);
 
@@ -276,8 +276,19 @@ static bool vtremoted_encode(void *data, struct encoder_frame *frame,
 }
 
 static void vtremoted_video_info(void *data, struct video_scale_info *info) {
-  UNUSED_PARAMETER(data);
-  /* Request NV12 format */
+  struct vtremoted_encoder *enc = data;
+
+  if (enc) {
+    video_t *video = obs_encoder_video(enc->encoder);
+    if (video) {
+      const struct video_output_info *voi = video_output_get_info(video);
+      if (voi && voi->format == VIDEO_FORMAT_P010) {
+        info->format = VIDEO_FORMAT_P010;
+        return;
+      }
+    }
+  }
+
   info->format = VIDEO_FORMAT_NV12;
 }
 

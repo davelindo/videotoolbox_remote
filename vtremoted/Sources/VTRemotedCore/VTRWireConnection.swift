@@ -3,6 +3,7 @@ import Foundation
 public final class VTRWireConnection: @unchecked Sendable {
     public let fileDescriptor: Int32
     private let sendLock = NSLock()
+    private let readLock = NSLock()
     private var sendHeaderBuf = Data(count: VTRProtocol.headerSize)
     private var sendPartsBuf: [Data] = []
 
@@ -99,12 +100,24 @@ public final class VTRWireConnection: @unchecked Sendable {
     private var skipBuf = Data(count: 16 * 1024)
 
     public func readHeader(timeoutSeconds: Int = 10) throws -> VTRMessageHeader {
+        readLock.lock()
+        defer { readLock.unlock() }
+        return try readHeaderLocked(timeoutSeconds: timeoutSeconds)
+    }
+
+    private func readHeaderLocked(timeoutSeconds: Int) throws -> VTRMessageHeader {
         try POSIXIO.pollReadable(fd: fileDescriptor, timeoutSeconds: timeoutSeconds)
         try POSIXIO.readExact(fd: fileDescriptor, into: &headerBuf, count: VTRProtocol.headerSize)
         return try VTRMessageHeader.decode(headerBuf)
     }
 
     public func readBody(length: Int, pool: BufferPool? = nil) throws -> Data {
+        readLock.lock()
+        defer { readLock.unlock() }
+        return try readBodyLocked(length: length, pool: pool)
+    }
+
+    private func readBodyLocked(length: Int, pool: BufferPool? = nil) throws -> Data {
         if length <= 0 { return Data() }
         let len = length
 
@@ -123,14 +136,24 @@ public final class VTRWireConnection: @unchecked Sendable {
     }
 
     public func readExact(into buffer: inout Data, count: Int) throws {
+        readLock.lock()
+        defer { readLock.unlock() }
         try POSIXIO.readExact(fd: fileDescriptor, into: &buffer, count: count)
     }
 
     public func readExact(into buffer: UnsafeMutableRawPointer, count: Int) throws {
+        readLock.lock()
+        defer { readLock.unlock() }
         try POSIXIO.readExact(fd: fileDescriptor, into: buffer, count: count)
     }
 
     public func skip(length: Int) throws {
+        readLock.lock()
+        defer { readLock.unlock() }
+        try skipLocked(length: length)
+    }
+
+    private func skipLocked(length: Int) throws {
         var remaining = length
         while remaining > 0 {
             let chunk = min(remaining, skipBuf.count)
@@ -143,8 +166,11 @@ public final class VTRWireConnection: @unchecked Sendable {
         pool: BufferPool? = nil,
         timeoutSeconds: Int = 10
     ) throws -> (header: VTRMessageHeader, body: Data) {
-        let header = try readHeader(timeoutSeconds: timeoutSeconds)
-        let body = try readBody(length: Int(header.length), pool: pool)
+        readLock.lock()
+        defer { readLock.unlock() }
+
+        let header = try readHeaderLocked(timeoutSeconds: timeoutSeconds)
+        let body = try readBodyLocked(length: Int(header.length), pool: pool)
         return (header, body)
     }
 }

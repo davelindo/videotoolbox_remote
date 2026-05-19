@@ -174,14 +174,8 @@ restart_vtremoted() {
 }
 
 local_decoder="h264"
-if command -v rg >/dev/null 2>&1; then
-  if "$FFMPEG_REMOTE" -decoders 2>/dev/null | rg -q "h264_videotoolbox"; then
-    local_decoder="h264_videotoolbox"
-  fi
-else
-  if "$FFMPEG_REMOTE" -decoders 2>/dev/null | grep -q "h264_videotoolbox"; then
-    local_decoder="h264_videotoolbox"
-  fi
+if vtremote_ffmpeg_has_decoder "$FFMPEG_REMOTE" "h264_videotoolbox"; then
+  local_decoder="h264_videotoolbox"
 fi
 
 run_timed() {
