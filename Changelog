@@ -11,6 +11,9 @@ version <next>:
 - Add AMF Frame Rate Converter (vf_frc_amf) filter
 - SMPTE 2094-50 metadata support and passthrough
 - ProRes RAW VideoToolbox hwaccel
+- APV Vulkan hwaccel
+- Animated WebP decoder
+- Animated WebP demuxer
 
 
 version 8.1:
