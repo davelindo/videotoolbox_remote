@@ -124,10 +124,13 @@ public final class VTRClientHandler: @unchecked Sendable {
         let cap = min(max(1, maxBodyBytes), maxMessageBytes)
 
         if let streamIO = messageIO as? VTRStreamIO {
-            let header = try streamIO.readHeader(timeoutSeconds: timeoutSeconds)
-            try validateMessageLength(Int(header.length), type: header.type, cap: cap)
-            let body = try streamIO.readBody(length: Int(header.length), pool: inputBufferPool)
-            return (header, body)
+            return try streamIO.readMessageAtomically(
+                pool: inputBufferPool,
+                timeoutSeconds: timeoutSeconds,
+                validateHeader: { header in
+                    try validateMessageLength(Int(header.length), type: header.type, cap: cap)
+                }
+            )
         }
 
         let (header, body) = try messageIO.readMessage(pool: inputBufferPool, timeoutSeconds: timeoutSeconds)

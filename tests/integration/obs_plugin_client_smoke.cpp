@@ -1,9 +1,11 @@
 #include "vtremoted-client.h"
+#include "vtremoted-byteorder.h"
 #include "vtremoted-protocol.h"
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -45,9 +47,33 @@ bool parse_args(int argc, char **argv, Args &args) {
   return args.port > 0;
 }
 
+bool test_byte_order_helpers() {
+  const uint8_t be16[] = {0x12, 0x34};
+  const uint8_t be32[] = {0x89, 0xAB, 0xCD, 0xEF};
+  const uint8_t be64_min[] = {0x80, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00};
+  const uint8_t be64_neg1[] = {0xFF, 0xFF, 0xFF, 0xFF,
+                               0xFF, 0xFF, 0xFF, 0xFF};
+
+  if (vtr_read_be16(be16) != 0x1234)
+    return false;
+  if (vtr_read_be32(be32) != 0x89ABCDEFu)
+    return false;
+  if (vtr_read_be64(be64_min) != std::numeric_limits<int64_t>::min())
+    return false;
+  if (vtr_read_be64(be64_neg1) != -1)
+    return false;
+  return true;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
+  if (!test_byte_order_helpers()) {
+    std::fprintf(stderr, "byte-order helper self-test failed\n");
+    return 1;
+  }
+
   Args args;
   if (!parse_args(argc, argv, args)) {
     std::fprintf(stderr,

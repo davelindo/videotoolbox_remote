@@ -81,6 +81,8 @@ static int vtremote_sock_errno(void)
 }
 #endif
 
+#include "vtremote_sock.h"
+
 static int set_socket_timeout(int fd, int timeout_ms)
 {
     struct timeval tv;
@@ -219,55 +221,8 @@ static int wait_readable(int fd, int timeout_ms)
 #endif
 }
 
-static int finish_interrupted_connect(int fd, int timeout_ms)
-{
-#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
-    return AVERROR(WSAEINTR);
-#else
-    for (;;) {
-        struct pollfd pfd;
-        int ready;
-        int so_error = 0;
-        socklen_t so_error_len = sizeof(so_error);
-
-        pfd.fd = fd;
-        pfd.events = POLLOUT;
-        pfd.revents = 0;
-        ready = poll(&pfd, 1, timeout_ms);
-        if (ready < 0) {
-            if (errno == EINTR)
-                continue;
-            return AVERROR(errno);
-        }
-        if (ready == 0)
-            return AVERROR(ETIMEDOUT);
-        if (getsockopt(fd, SOL_SOCKET, SO_ERROR,
-                       VTR_SOCKOPT_ARG &so_error, &so_error_len) < 0)
-            return AVERROR(errno);
-        if (so_error)
-            return AVERROR(so_error);
-        return 0;
-    }
-#endif
-}
-
-static int connect_or_finish(int fd, const struct sockaddr *addr,
-                             socklen_t addrlen, int timeout_ms)
-{
-    if (connect(fd, addr, addrlen) == 0)
-        return 0;
-
-    int err = vtremote_sock_errno();
-#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
-    if (err == WSAEINTR)
-        return finish_interrupted_connect(fd, timeout_ms);
-#endif
-    if (err == EINTR)
-        return finish_interrupted_connect(fd, timeout_ms);
-    return AVERROR(err);
-}
-
-static int connect_hostport(const char *hostport, int timeout_ms)
+static int connect_hostport(AVCodecContext *avctx, const char *hostport,
+                            int timeout_ms)
 {
     if (!hostport)
         return AVERROR(EINVAL);
@@ -294,17 +249,21 @@ static int connect_hostport(const char *hostport, int timeout_ms)
     int fd = -1;
     int last_err = EIO;
     for (rp = res; rp; rp = rp->ai_next) {
+        int sock_err;
         fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
         if (fd < 0) {
-            last_err = vtremote_sock_errno() ? vtremote_sock_errno() : EIO;
+            sock_err = vtremote_sock_errno();
+            last_err = sock_err ? sock_err : EIO;
             continue;
         }
         set_socket_timeout(fd, timeout_ms);
         configure_socket_buffers(fd);
-        int ret = connect_or_finish(fd, rp->ai_addr, rp->ai_addrlen, timeout_ms);
+        int ret = vtremote_connect_or_finish(fd, rp->ai_addr, rp->ai_addrlen, timeout_ms);
         if (ret == 0)
             break;
         last_err = AVUNERROR(ret);
+        av_log(avctx, AV_LOG_VERBOSE, "vtremote decode connect attempt failed: %s\n",
+               av_err2str(ret));
         VTR_CLOSE_SOCKET(fd);
         fd = -1;
     }
@@ -632,7 +591,7 @@ static void vtremote_log_error_msg(AVCodecContext *avctx, const uint8_t *payload
 static int vtremote_handshake(AVCodecContext *avctx)
 {
     VTRemoteDecContext *s = avctx->priv_data;
-    int fd = connect_hostport(s->host, s->timeout_ms);
+    int fd = connect_hostport(avctx, s->host, s->timeout_ms);
     if (fd < 0) {
         av_log(avctx, AV_LOG_ERROR, "Failed to connect to %s\n", s->host);
         return fd;
@@ -1067,6 +1026,8 @@ static int fill_hw_frame_from_view(AVCodecContext *avctx,
 
     pixbuf = (CVPixelBufferRef)frame->data[3];
     if (!pixbuf) {
+        av_log(avctx, AV_LOG_ERROR,
+               "Allocated VideoToolbox decode output has no CVPixelBuffer.\n");
         ret = AVERROR_INVALIDDATA;
         goto fail;
     }
@@ -1084,12 +1045,18 @@ static int fill_hw_frame_from_view(AVCodecContext *avctx,
                     ? (int)CVPixelBufferGetPlaneCount(pixbuf)
                     : 1;
     if (cv_planes < view->plane_count) {
+        av_log(avctx, AV_LOG_ERROR,
+               "Allocated VideoToolbox decode output has %d planes, frame has %d planes.\n",
+               cv_planes, view->plane_count);
         ret = AVERROR_INVALIDDATA;
         goto fail;
     }
 
     cvret = CVPixelBufferLockBaseAddress(pixbuf, 0);
     if (cvret != kCVReturnSuccess) {
+        av_log(avctx, AV_LOG_ERROR,
+               "Failed to lock VideoToolbox decode output pixel buffer: %d.\n",
+               cvret);
         ret = AVERROR_EXTERNAL;
         goto fail;
     }
@@ -1162,8 +1129,13 @@ static int fill_frame_from_view(AVCodecContext *avctx, AVFrame *frame, const VTR
         int rows = view->planes[i].height;
         uint8_t *dst = frame->data[i];
         int dst_stride = frame->linesize[i];
-        if (!dst)
-            break;
+        if (!dst || !src || src_stride <= 0 || dst_stride <= 0 || rows < 0) {
+            av_log(avctx, AV_LOG_ERROR,
+                   "Invalid uncompressed remote decode plane %d: dst=%p src=%p src_stride=%d dst_stride=%d rows=%d.\n",
+                   i, dst, src, src_stride, dst_stride, rows);
+            av_frame_unref(frame);
+            return AVERROR_INVALIDDATA;
+        }
         vtremote_copy_plane_rows(dst, dst_stride, src, src_stride,
                                  FFMIN(src_stride, dst_stride), rows);
     }
@@ -1216,6 +1188,9 @@ static int fill_frame_from_compressed_view(AVCodecContext *avctx, VTRemoteDecCon
         ret = vtremote_copy_or_decompress_plane(s, dst, dst_stride,
                                                 &view->planes[i], i);
         if (ret < 0) {
+            av_log(avctx, AV_LOG_ERROR,
+                   "Failed to populate compressed remote decode plane %d: %s.\n",
+                   i, av_err2str(ret));
             av_frame_unref(frame);
             return ret;
         }

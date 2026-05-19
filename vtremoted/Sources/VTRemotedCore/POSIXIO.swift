@@ -152,9 +152,22 @@ public enum POSIXIO {
 
     public static func pollReadable(fd fileDescriptor: Int32, timeoutSeconds: Int) throws {
         var pollFd = pollfd(fd: fileDescriptor, events: Int16(POLLIN), revents: 0)
+        let clampedSeconds = max(0, min(timeoutSeconds, Int(Int32.max / 1000)))
+        let timeoutMilliseconds = clampedSeconds * 1000
+        let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(timeoutMilliseconds) * 1_000_000
         while true {
+            let now = DispatchTime.now().uptimeNanoseconds
+            let remainingMilliseconds: Int32
+            if now >= deadline {
+                remainingMilliseconds = 0
+            } else {
+                let remainingNanoseconds = deadline - now
+                let roundedMilliseconds = (remainingNanoseconds + 999_999) / 1_000_000
+                remainingMilliseconds = Int32(min(roundedMilliseconds, UInt64(Int32.max)))
+            }
+
             let result = withUnsafeMutablePointer(to: &pollFd) { ptr in
-                poll(ptr, 1, Int32(timeoutSeconds * 1000))
+                poll(ptr, 1, remainingMilliseconds)
             }
             if result > 0 {
                 return
