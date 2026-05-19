@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format follows Keep a Changelog principles, using repository release tags (`v*`) in reverse chronological order.
 The non-version `nightly` tag is intentionally excluded.
 
+## [v0.4.10] - 2026-05-19
+
+### Changed
+- Bumped the packaged `vtremoted --version` output to `0.4.10`.
+- Shared the SIGPIPE-safe FFmpeg decoder probe used by speed decode integration scripts.
+
+### Fixed
+- Released partially populated FFmpeg decode frames when VideoToolbox hardware-frame output or compressed software-frame population fails after buffer allocation.
+- Treated interrupted POSIX `poll()` and blocking `connect()` calls as recoverable where the underlying socket operation can continue.
+- Avoided unaligned big-endian integer reads in the OBS plugin wire client.
+- Preserved P010 OBS encoder input when the active OBS video output is P010.
+
 ## [v0.4.9] - 2026-05-19
 
 ### Changed
