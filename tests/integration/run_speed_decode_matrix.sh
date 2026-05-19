@@ -87,13 +87,13 @@ PORT="$VTREMOTE_PORT"
 trap 'kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true' EXIT
 
 local_decoder="h264"
-if command -v rg >/dev/null 2>&1; then
-  if "$FFMPEG_REMOTE" -decoders 2>/dev/null | rg -q "h264_videotoolbox"; then
-    local_decoder="h264_videotoolbox"
-  fi
+if vtremote_ffmpeg_has_decoder "$FFMPEG_REMOTE" "h264_videotoolbox"; then
+  local_decoder="h264_videotoolbox"
 else
-  if "$FFMPEG_REMOTE" -decoders 2>/dev/null | grep -q "h264_videotoolbox"; then
-    local_decoder="h264_videotoolbox"
+  decoder_probe_rc=$?
+  if [[ "$decoder_probe_rc" -eq 2 ]]; then
+    echo "Failed to query decoders from $FFMPEG_REMOTE" >&2
+    exit 1
   fi
 fi
 

@@ -11,6 +11,18 @@ s.close()
 PY
 }
 
+vtremote_ffmpeg_has_decoder() {
+  local bin="$1"
+  local decoder="$2"
+  local decoders
+  # Do not use grep -q here: it can exit early, causing ffmpeg to hit SIGPIPE.
+  # With `set -o pipefail`, that would make the probe look like a failure.
+  if ! decoders="$("$bin" -decoders 2>/dev/null)"; then
+    return 2
+  fi
+  grep -w "$decoder" <<<"$decoders" >/dev/null
+}
+
 vtremote_start_server() {
   local log_file="${1:-/tmp/vtremoted.log}"
   local retries="${VTREMOTE_BIND_RETRIES:-3}"

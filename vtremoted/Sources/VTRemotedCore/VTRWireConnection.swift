@@ -3,6 +3,7 @@ import Foundation
 public final class VTRWireConnection: @unchecked Sendable {
     public let fileDescriptor: Int32
     private let sendLock = NSLock()
+    private let readLock = NSLock()
     private var sendHeaderBuf = Data(count: VTRProtocol.headerSize)
     private var sendPartsBuf: [Data] = []
 
@@ -99,12 +100,24 @@ public final class VTRWireConnection: @unchecked Sendable {
     private var skipBuf = Data(count: 16 * 1024)
 
     public func readHeader(timeoutSeconds: Int = 10) throws -> VTRMessageHeader {
+        readLock.lock()
+        defer { readLock.unlock() }
+        return try readHeaderLocked(timeoutSeconds: timeoutSeconds)
+    }
+
+    private func readHeaderLocked(timeoutSeconds: Int) throws -> VTRMessageHeader {
         try POSIXIO.pollReadable(fd: fileDescriptor, timeoutSeconds: timeoutSeconds)
         try POSIXIO.readExact(fd: fileDescriptor, into: &headerBuf, count: VTRProtocol.headerSize)
         return try VTRMessageHeader.decode(headerBuf)
     }
 
     public func readBody(length: Int, pool: BufferPool? = nil) throws -> Data {
+        readLock.lock()
+        defer { readLock.unlock() }
+        return try readBodyLocked(length: length, pool: pool)
+    }
+
+    private func readBodyLocked(length: Int, pool: BufferPool? = nil) throws -> Data {
         if length <= 0 { return Data() }
         let len = length
 
@@ -119,18 +132,44 @@ public final class VTRWireConnection: @unchecked Sendable {
         // Avoid triggering Data's copy-on-write by mutating `bodyBuf` directly.
         if bodyBuf.count != len { bodyBuf.count = len }
         try POSIXIO.readExact(fd: fileDescriptor, into: &bodyBuf, count: len)
+        // Data is a value type; returning it here keeps the shared scratch buffer private
+        // to the next locked read unless the caller mutates its returned copy.
         return bodyBuf
     }
 
+    public func readMessageAtomically(
+        pool: BufferPool? = nil,
+        timeoutSeconds: Int = 10,
+        validateHeader: (VTRMessageHeader) throws -> Void
+    ) throws -> (header: VTRMessageHeader, body: Data) {
+        readLock.lock()
+        defer { readLock.unlock() }
+
+        let header = try readHeaderLocked(timeoutSeconds: timeoutSeconds)
+        try validateHeader(header)
+        let body = try readBodyLocked(length: Int(header.length), pool: pool)
+        return (header, body)
+    }
+
     public func readExact(into buffer: inout Data, count: Int) throws {
+        readLock.lock()
+        defer { readLock.unlock() }
         try POSIXIO.readExact(fd: fileDescriptor, into: &buffer, count: count)
     }
 
     public func readExact(into buffer: UnsafeMutableRawPointer, count: Int) throws {
+        readLock.lock()
+        defer { readLock.unlock() }
         try POSIXIO.readExact(fd: fileDescriptor, into: buffer, count: count)
     }
 
     public func skip(length: Int) throws {
+        readLock.lock()
+        defer { readLock.unlock() }
+        try skipLocked(length: length)
+    }
+
+    private func skipLocked(length: Int) throws {
         var remaining = length
         while remaining > 0 {
             let chunk = min(remaining, skipBuf.count)
@@ -143,9 +182,11 @@ public final class VTRWireConnection: @unchecked Sendable {
         pool: BufferPool? = nil,
         timeoutSeconds: Int = 10
     ) throws -> (header: VTRMessageHeader, body: Data) {
-        let header = try readHeader(timeoutSeconds: timeoutSeconds)
-        let body = try readBody(length: Int(header.length), pool: pool)
-        return (header, body)
+        try readMessageAtomically(
+            pool: pool,
+            timeoutSeconds: timeoutSeconds,
+            validateHeader: { _ in }
+        )
     }
 }
 

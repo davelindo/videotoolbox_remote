@@ -14,6 +14,11 @@ public protocol VTRMessageIO: AnyObject, Sendable {
 public protocol VTRStreamIO: VTRMessageIO {
     func readHeader(timeoutSeconds: Int) throws -> VTRMessageHeader
     func readBody(length: Int, pool: BufferPool?) throws -> Data
+    func readMessageAtomically(
+        pool: BufferPool?,
+        timeoutSeconds: Int,
+        validateHeader: (VTRMessageHeader) throws -> Void
+    ) throws -> (header: VTRMessageHeader, body: Data)
     func readExact(into buffer: inout Data, count: Int) throws
     func readExact(into buffer: UnsafeMutableRawPointer, count: Int) throws
     func skip(length: Int) throws

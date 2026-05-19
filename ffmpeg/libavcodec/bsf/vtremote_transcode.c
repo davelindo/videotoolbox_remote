@@ -60,6 +60,8 @@ static void vtremote_net_close(void) {}
 static int vtremote_sock_errno(void) { return errno; }
 #endif
 
+#include "vtremote_sock.h"
+
 #ifndef MSG_DONTWAIT
 #define MSG_DONTWAIT 0
 #endif
@@ -260,7 +262,8 @@ static int check_readable(int fd, int timeout_ms) {
 #endif
 }
 
-static int connect_hostport(const char *hostport, int timeout_ms) {
+static int connect_hostport(AVBSFContext *ctx, const char *hostport,
+                            int timeout_ms) {
     if (!hostport)
         return AVERROR(EINVAL);
 
@@ -284,20 +287,29 @@ static int connect_hostport(const char *hostport, int timeout_ms) {
         return AVERROR(EIO);
 
     int fd = -1;
+    int last_err = EIO;
     for (rp = res; rp; rp = rp->ai_next) {
+        int sock_err;
         fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-        if (fd < 0)
+        if (fd < 0) {
+            sock_err = vtremote_sock_errno();
+            last_err = sock_err ? sock_err : EIO;
             continue;
+        }
         configure_socket_buffers(fd);
         set_socket_timeout(fd, timeout_ms);
-        if (connect(fd, rp->ai_addr, rp->ai_addrlen) == 0)
+        int ret = vtremote_connect_or_finish(fd, rp->ai_addr, rp->ai_addrlen, timeout_ms);
+        if (ret == 0)
             break;
+        last_err = AVUNERROR(ret);
+        av_log(ctx, AV_LOG_VERBOSE, "vtremote transcode connect attempt failed: %s\n",
+               av_err2str(ret));
         VTR_CLOSE_SOCKET(fd);
         fd = -1;
     }
     freeaddrinfo(res);
     if (fd < 0)
-        return AVERROR(vtremote_sock_errno() ? vtremote_sock_errno() : EIO);
+        return AVERROR(last_err);
 
     return fd;
 }
@@ -1168,7 +1180,7 @@ static int vtremote_handshake(AVBSFContext *ctx) {
     if (ret < 0)
         return ret;
 
-    s->fd = connect_hostport(hostport, s->timeout_ms);
+    s->fd = connect_hostport(ctx, hostport, s->timeout_ms);
     if (s->fd < 0) {
         av_log(ctx, AV_LOG_ERROR, "Failed to connect to %s\n", hostport);
         return s->fd;
