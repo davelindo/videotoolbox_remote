@@ -45,7 +45,7 @@ typedef struct SwsOpPass {
     int idx_in[4];
     int idx_out[4];
     int *offsets_y;
-    int filter_size;
+    int filter_size_h;
     bool memcpy_first;
     bool memcpy_last;
     bool memcpy_out;
@@ -182,6 +182,7 @@ static int op_pass_setup(const SwsFrame *out, const SwsFrame *in,
 {
     const AVPixFmtDescriptor *indesc  = av_pix_fmt_desc_get(in->format);
     const AVPixFmtDescriptor *outdesc = av_pix_fmt_desc_get(out->format);
+    const bool float_in = indesc->flags & AV_PIX_FMT_FLAG_FLOAT;
 
     SwsOpPass *p = pass->priv;
     SwsOpExec *exec = &p->exec_base;
@@ -204,10 +205,18 @@ static int op_pass_setup(const SwsFrame *out, const SwsFrame *in,
         int chroma = idx == 1 || idx == 2;
         int sub_x  = chroma ? indesc->log2_chroma_w : 0;
         int sub_y  = chroma ? indesc->log2_chroma_h : 0;
-        size_t safe_bytes = safe_bytes_pad(in->linesize[idx], comp->over_read);
+
+        size_t input_bytes = in->linesize[idx];
+        if (p->filter_size_h && float_in) {
+            /* Floating point inputs may contain NaN / Infinity in the padding */
+            const int plane_w = AV_CEIL_RSHIFT(in->width, sub_x);
+            input_bytes = pixel_bytes(plane_w, p->pixel_bits_in, AV_ROUND_UP);
+        }
+
+        size_t safe_bytes = safe_bytes_pad(input_bytes, comp->over_read);
         size_t safe_blocks_in;
         if (exec->in_offset_x) {
-            size_t filter_size = pixel_bytes(p->filter_size, p->pixel_bits_in,
+            size_t filter_size = pixel_bytes(p->filter_size_h, p->pixel_bits_in,
                                              AV_ROUND_UP);
             safe_blocks_in = safe_blocks_offset(num_blocks, block_size,
                                                 safe_bytes - filter_size,
@@ -271,7 +280,7 @@ static int op_pass_setup(const SwsFrame *out, const SwsFrame *in,
     if (exec->in_offset_x) {
         p->tail_off_in  = exec->in_offset_x[safe_width];
         p->tail_size_in = exec->in_offset_x[pass->width - 1] - p->tail_off_in;
-        p->tail_size_in += pixel_bytes(p->filter_size, p->pixel_bits_in, AV_ROUND_UP);
+        p->tail_size_in += pixel_bytes(p->filter_size_h, p->pixel_bits_in, AV_ROUND_UP);
     } else {
         p->tail_off_in  = pixel_bytes(safe_width, p->pixel_bits_in, AV_ROUND_DOWN);
         p->tail_size_in = pixel_bytes(tail_size,  p->pixel_bits_in, AV_ROUND_UP);
@@ -564,7 +573,7 @@ static int compile(SwsGraph *graph, const SwsOpBackend *backend,
         for (int x = filter->dst_size; x < pixels; x++)
             offset[x] = offset[filter->dst_size - 1];
         p->exec_base.block_size_in = 0; /* ptr does not advance */
-        p->filter_size = filter->filter_size;
+        p->filter_size_h = filter->filter_size;
     }
 
     ret = ff_sws_graph_add_pass(graph, dst->format, dst->width, dst->height,
