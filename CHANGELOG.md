@@ -7,6 +7,11 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
+## [v0.5.0] - 2026-05-22
+
+### Changed
+- Bumped the packaged `vtremoted --version` output to `0.5.0`.
+
 ### Fixed
 - Prevented `vtremote_transcode` from wedging with ACK-capable servers when corrupt compressed input packets are consumed by the remote decoder without producing output frames.
 
