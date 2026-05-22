@@ -118,6 +118,7 @@ typedef struct VTRemoteTranscodeContext {
     int codec_id_in;
     int codec_id_out;
     int64_t packets_sent;
+    int64_t packets_acked;
     int64_t packets_recv;
     int64_t last_dts;
     VTRemoteWBuf pkt_buf;
@@ -1052,6 +1053,12 @@ static int vtremote_append_transcode_opts(AVBSFContext *ctx, VTRemoteKV **opts,
     if (ret < 0)
         return ret;
 
+    if (s->server_caps & VTREMOTE_CAP_PACKET_ACK_V1) {
+        ret = vtremote_add_opt_string(opts, opt_count, opt_cap, "packet_ack.v1", "1");
+        if (ret < 0)
+            return ret;
+    }
+
     ret = vtremote_add_int_opt_specs(opts, opt_count, opt_cap, pre_codec_int_opts,
                                      FF_ARRAY_ELEMS(pre_codec_int_opts));
     if (ret < 0)
@@ -1340,6 +1347,34 @@ static int vtremote_send_packet(AVBSFContext *ctx, VTRemoteTranscodeContext *s, 
     return 0;
 }
 
+static int64_t vtremote_transcode_inflight_count(const VTRemoteTranscodeContext *s)
+{
+    int64_t in_flight;
+
+    if (!s)
+        return 0;
+    if (s->server_caps & VTREMOTE_CAP_PACKET_ACK_V1)
+        in_flight = s->packets_sent - s->packets_acked;
+    else
+        in_flight = s->packets_sent - s->packets_recv;
+    return FFMAX(INT64_C(0), in_flight);
+}
+
+static void vtremote_note_packet_ack(VTRemoteTranscodeContext *s)
+{
+    if (s && s->packets_acked < s->packets_sent)
+        s->packets_acked++;
+}
+
+static int vtremote_handle_packet_ack(VTRemoteTranscodeContext *s,
+                                      const VTRemoteMsgHeader *hdr)
+{
+    if (!hdr || hdr->length != 0)
+        return AVERROR_INVALIDDATA;
+    vtremote_note_packet_ack(s);
+    return 0;
+}
+
 static int vtremote_drain_available_packets(AVBSFContext *ctx) {
     VTRemoteTranscodeContext *s = ctx->priv_data;
     int packets_read = 0;
@@ -1359,6 +1394,11 @@ static int vtremote_drain_available_packets(AVBSFContext *ctx) {
             if (ret < 0)
                 return ret;
             packets_read++;
+            break;
+        case VTREMOTE_MSG_PACKET_ACK:
+            ret = vtremote_handle_packet_ack(s, &hdr);
+            if (ret < 0)
+                return ret;
             break;
         case VTREMOTE_MSG_DONE:
             s->done = 1;
@@ -1393,6 +1433,8 @@ static int vtremote_receive_packet_blocking(AVBSFContext *ctx) {
         case VTREMOTE_MSG_PACKET:
             ret = enqueue_packet(ctx, payload, hdr.length);
             return ret;
+        case VTREMOTE_MSG_PACKET_ACK:
+            return vtremote_handle_packet_ack(s, &hdr);
         case VTREMOTE_MSG_DONE:
             s->done = 1;
             return 0;
@@ -1409,6 +1451,38 @@ static int vtremote_receive_packet_blocking(AVBSFContext *ctx) {
             break;
         }
     }
+}
+
+static int vtremote_wait_for_inflight_slot(AVBSFContext *ctx)
+{
+    VTRemoteTranscodeContext *s = ctx->priv_data;
+
+    if (s->inflight <= 0 || vtremote_transcode_inflight_count(s) < s->inflight)
+        return 0;
+
+    if (!(s->server_caps & VTREMOTE_CAP_PACKET_ACK_V1)) {
+        int ret = vtremote_drain_available_packets(ctx);
+        if (ret < 0 && ret != AVERROR(EAGAIN))
+            return ret;
+        return 0;
+    }
+
+    while (vtremote_transcode_inflight_count(s) >= s->inflight) {
+        int ret = vtremote_receive_packet_blocking(ctx);
+        if (ret == AVERROR(EAGAIN)) {
+            av_log(ctx, AV_LOG_ERROR,
+                   "Timed out waiting for vtremote_transcode input credit "
+                   "(sent=%" PRId64 " acked=%" PRId64 " recv=%" PRId64 ")\n",
+                   s->packets_sent, s->packets_acked, s->packets_recv);
+            return AVERROR(ETIMEDOUT);
+        }
+        if (ret < 0)
+            return ret;
+        if (s->done)
+            return AVERROR_EOF;
+    }
+
+    return 0;
 }
 
 static int vtremote_send_flush(VTRemoteTranscodeContext *s) {
@@ -1438,6 +1512,7 @@ static int vtremote_transcode_init(AVBSFContext *ctx) {
     s->flushing = 0;
     s->done = 0;
     s->packets_sent = 0;
+    s->packets_acked = 0;
     s->packets_recv = 0;
     s->last_dts = AV_NOPTS_VALUE;
     s->rx_buf_size = 0;
@@ -1560,6 +1635,14 @@ static int vtremote_transcode_filter(AVBSFContext *ctx, AVPacket *pkt) {
     if (s->done)
         return AVERROR_EOF;
 
+    ret = vtremote_wait_for_inflight_slot(ctx);
+    if (ret < 0)
+        return ret;
+    if (s->pkt_q_count > 0)
+        return pop_packet(s, pkt);
+    if (s->done)
+        return AVERROR_EOF;
+
     AVPacket in_pkt = { 0 };
     ret = ff_bsf_get_packet_ref(ctx, &in_pkt);
     if (ret == AVERROR_EOF) {
@@ -1589,14 +1672,6 @@ static int vtremote_transcode_filter(AVBSFContext *ctx, AVPacket *pkt) {
         return ret;
     }
 
-    if (s->inflight > 0 && (s->packets_sent - s->packets_recv) >= s->inflight) {
-        ret = vtremote_receive_packet_blocking(ctx);
-        if (ret < 0 && ret != AVERROR(EAGAIN)) {
-            av_packet_unref(&in_pkt);
-            return ret;
-        }
-    }
-
     ret = vtremote_send_packet(ctx, s, &in_pkt);
     av_packet_unref(&in_pkt);
     if (ret < 0)
@@ -1616,6 +1691,7 @@ static void vtremote_transcode_flush(AVBSFContext *ctx) {
     s->flushing = 0;
     s->done = 0;
     s->packets_sent = 0;
+    s->packets_acked = 0;
     s->packets_recv = 0;
     s->last_dts = AV_NOPTS_VALUE;
     vtremote_reset_rx_state(s);

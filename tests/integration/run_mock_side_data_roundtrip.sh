@@ -25,6 +25,7 @@ MSG_CONFIGURE_ACK = 4
 MSG_PACKET = 6
 MSG_FLUSH = 7
 MSG_DONE = 8
+MSG_PACKET_ACK = 12
 
 
 def write_str(value: str) -> bytes:
@@ -52,6 +53,16 @@ def read_msg(sock: socket.socket):
     if got_magic != magic or got_version != version:
         raise RuntimeError("bad header")
     return typ, read_exact(sock, length)
+
+
+def read_packet(sock: socket.socket):
+    while True:
+        typ, payload = read_msg(sock)
+        if typ == MSG_PACKET_ACK:
+            continue
+        if typ != MSG_PACKET:
+            raise RuntimeError(f"expected PACKET, got {typ}")
+        return payload
 
 
 listener = socket.socket()
@@ -111,9 +122,7 @@ try:
             + side
         )
         write_msg(sock, MSG_PACKET, pkt)
-        typ, payload = read_msg(sock)
-        if typ != MSG_PACKET:
-            raise RuntimeError(f"expected PACKET, got {typ}")
+        payload = read_packet(sock)
         off = 8 + 8 + 8 + 4
         data_len = struct.unpack_from(">I", payload, off)[0]
         off += 4 + data_len

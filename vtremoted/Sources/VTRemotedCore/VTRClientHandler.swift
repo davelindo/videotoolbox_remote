@@ -26,6 +26,30 @@ public final class VTRClientHandler: @unchecked Sendable {
     private var codecSession: (any CodecSession)?
     private let inputBufferPool = BufferPool()
 
+    private var sendsPacketAck: Bool {
+        serverCapabilities.contains(VTRCapability.packetAckV1)
+    }
+
+    private func shouldSendPacketAck(for configuration: SessionConfiguration) -> Bool {
+        configuration.mode == .transcode && sendsPacketAck && configuration.options.packetAckV1
+    }
+
+    private func sendTranscodePacketAckIfNeeded(for configuration: SessionConfiguration) throws {
+        guard shouldSendPacketAck(for: configuration) else { return }
+        stats.bytesOut += Int64(VTRProtocol.headerSize)
+        try messageIO.send(type: .packetAck, body: Data())
+    }
+
+    private func rejectUnexpectedKnownClientMessage(_ type: VTRMessageType) throws {
+        switch type {
+        case .helloAck, .configureAck, .done, .packetAck:
+            sendError(code: 4, message: "unexpected client message type=\(type.rawValue)")
+            throw VTRemotedError.protocolViolation("unexpected client message type=\(type.rawValue)")
+        default:
+            return
+        }
+    }
+
     public init(
         io messageIO: VTRMessageIO,
         expectedToken: String,
@@ -253,14 +277,13 @@ public final class VTRClientHandler: @unchecked Sendable {
 
         func sendDoneAndLog() throws {
             try messageIO.send(type: .done, body: Data())
-            let msg: String
-            switch configuration.mode {
+            let msg = switch configuration.mode {
             case .encode:
-                msg = "DONE client=\(clientName) frames=\(stats.framesIn) packets=\(stats.packetsOut)"
+                "DONE client=\(clientName) frames=\(stats.framesIn) packets=\(stats.packetsOut)"
             case .decode:
-                msg = "DONE client=\(clientName) packets=\(stats.packetsIn) frames=\(stats.framesOut)"
+                "DONE client=\(clientName) packets=\(stats.packetsIn) frames=\(stats.framesOut)"
             case .transcode:
-                msg = "DONE client=\(clientName) packets=\(stats.packetsIn) packets_out=\(stats.packetsOut)"
+                "DONE client=\(clientName) packets=\(stats.packetsIn) packets_out=\(stats.packetsOut)"
             }
             logger.info(msg)
         }
@@ -295,6 +318,7 @@ public final class VTRClientHandler: @unchecked Sendable {
                     let payload = try streamIO.readBody(length: messageLength, pool: inputBufferPool)
                     defer { inputBufferPool.return(payload) }
                     try codecSession.handlePacketMessage(payload)
+                    try sendTranscodePacketAckIfNeeded(for: configuration)
                 case .flush:
                     try streamIO.skip(length: messageLength)
                     try codecSession.flush()
@@ -305,6 +329,7 @@ public final class VTRClientHandler: @unchecked Sendable {
                     try messageIO.send(type: .pong, body: Data())
                 default:
                     try streamIO.skip(length: messageLength)
+                    try rejectUnexpectedKnownClientMessage(type)
                 }
             }
         }
@@ -327,6 +352,7 @@ public final class VTRClientHandler: @unchecked Sendable {
             case .packet:
                 stats.packetsIn += 1
                 try codecSession.handlePacketMessage(payload)
+                try sendTranscodePacketAckIfNeeded(for: configuration)
             case .flush:
                 try codecSession.flush()
                 try sendDoneAndLog()
@@ -334,7 +360,7 @@ public final class VTRClientHandler: @unchecked Sendable {
             case .ping:
                 try messageIO.send(type: .pong, body: Data())
             default:
-                break
+                try rejectUnexpectedKnownClientMessage(type)
             }
         }
     }

@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 The format follows Keep a Changelog principles, using repository release tags (`v*`) in reverse chronological order.
 The non-version `nightly` tag is intentionally excluded.
 
+## [Unreleased]
+
+### Fixed
+- Prevented `vtremote_transcode` from wedging with ACK-capable servers when corrupt compressed input packets are consumed by the remote decoder without producing output frames.
+
 ## [v0.4.12] - 2026-05-22
 
 ### Changed

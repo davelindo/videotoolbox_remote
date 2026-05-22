@@ -39,6 +39,7 @@ static int test_roundtrip(void)
     av_assert0(out.length  == in.length);
 
     av_assert0(!strcmp(vtremote_msg_type_name(VTREMOTE_MSG_FRAME), "FRAME"));
+    av_assert0(!strcmp(vtremote_msg_type_name(VTREMOTE_MSG_PACKET_ACK), "PACKET_ACK"));
     av_assert0(!strcmp(vtremote_msg_type_name(0), "UNKNOWN"));
 
     return 0;
@@ -258,6 +259,8 @@ static int test_pix_fmt_and_cap_helpers(void)
     av_assert0(flag == VTREMOTE_CAP_PIXFMT_BGRA);
     av_assert0(vtremote_cap_flag_from_name((const uint8_t *)"side_data.v2", 12, &flag) == 0);
     av_assert0(flag == VTREMOTE_CAP_SIDE_DATA_V2);
+    av_assert0(vtremote_cap_flag_from_name((const uint8_t *)"packet_ack.v1", 13, &flag) == 0);
+    av_assert0(flag == VTREMOTE_CAP_PACKET_ACK_V1);
     av_assert0(vtremote_cap_flag_from_name((const uint8_t *)"unknown", 7, &flag) == 0);
     av_assert0(flag == 0);
 
@@ -271,11 +274,12 @@ static int test_parse_hello_ack_caps(void)
     av_assert0(vtremote_wbuf_put_u8(&b, 0) == 0);
     av_assert0(vtremote_wbuf_put_str(&b, "vtremoted") == 0);
     av_assert0(vtremote_wbuf_put_str(&b, "test") == 0);
-    av_assert0(vtremote_wbuf_put_u8(&b, 4) == 0);
+    av_assert0(vtremote_wbuf_put_u8(&b, 5) == 0);
     av_assert0(vtremote_wbuf_put_str(&b, "h264") == 0);
     av_assert0(vtremote_wbuf_put_str(&b, "hevc") == 0);
     av_assert0(vtremote_wbuf_put_str(&b, "pixfmt.p210") == 0);
     av_assert0(vtremote_wbuf_put_str(&b, "hwframes.videotoolbox.output") == 0);
+    av_assert0(vtremote_wbuf_put_str(&b, "packet_ack.v1") == 0);
     av_assert0(vtremote_wbuf_put_u16(&b, 8) == 0);
     av_assert0(vtremote_wbuf_put_u16(&b, 3) == 0);
 
@@ -295,6 +299,7 @@ static int test_parse_hello_ack_caps(void)
     av_assert0((caps & VTREMOTE_CAP_HEVC) != 0);
     av_assert0((caps & VTREMOTE_CAP_PIXFMT_P210) != 0);
     av_assert0((caps & VTREMOTE_CAP_HWFRAMES_VIDEOTOOLBOX_OUT) != 0);
+    av_assert0((caps & VTREMOTE_CAP_PACKET_ACK_V1) != 0);
     av_assert0((caps & VTREMOTE_CAP_PIXFMT_BGRA) == 0);
     av_assert0(max_sessions == 8);
     av_assert0(active_sessions == 3);

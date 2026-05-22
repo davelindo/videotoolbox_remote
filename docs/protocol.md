@@ -81,6 +81,7 @@ sequenceDiagram
 | `9` | **ERROR** | Bidirectional | Fatal error info. |
 | `10` | **PING** | Bidirectional | Keepalive. |
 | `11` | **PONG** | Bidirectional | Keepalive response. |
+| `12` | **PACKET_ACK** | S → C | Transcode-mode input packet credit. |
 
 ## 4. Message Payloads
 
@@ -99,7 +100,7 @@ sequenceDiagram
 - `caps` (string[]): Capability strings (may be empty).
   - Common values: `h264`, `hevc`, `pixfmt.nv12`, `pixfmt.p010`, `pixfmt.bgra`,
     `pixfmt.ayuv`, `pixfmt.p210`, `hwframes.videotoolbox.input`,
-    `hwframes.videotoolbox.output`, `side_data.v2`.
+    `hwframes.videotoolbox.output`, `side_data.v2`, `packet_ack.v1`.
 - `max_sessions` (uint16): Concurrency limit.
 - `active_sessions` (uint16): Current active sessions.
 
@@ -113,7 +114,7 @@ sequenceDiagram
 
 > [!NOTE]
 > `options` is a map of codec settings. Unknown keys are ignored.
-> For `mode=transcode`, `out_codec`, `out_width`, `out_height`, and `scale_mode` are passed here.
+> For `mode=transcode`, `out_codec`, `out_width`, `out_height`, `scale_mode`, and optional client feature requests such as `packet_ack.v1=1` are passed here.
 
 ### Streaming
 
@@ -145,6 +146,13 @@ Encoded Annex B NAL units.
   preserve packet records so mux-facing metadata such as HDR signaling, display
   behavior, dependency metadata, and caption payloads can survive packet-in /
   packet-out workflows when the destination codec/container can represent them.
+
+**PACKET_ACK (Type 12)**
+Empty payload. Servers that advertise `packet_ack.v1` may send this only after
+a transcode-mode client also requests `packet_ack.v1=1` in `CONFIGURE`. The ACK
+is emitted after the server accepts an input `PACKET`; clients use it for
+in-flight input credit instead of assuming every input packet produces one output
+packet.
 
 ## 5. Security & Error Handling
 

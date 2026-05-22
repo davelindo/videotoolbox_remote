@@ -16,16 +16,16 @@ final class ClientHandlerTests: XCTestCase {
                 throw VTRemotedError.protocolViolation("no more messages")
             }
             let (type, body) = incoming.removeFirst()
-            
+
             // If internal implementation wants to verify pool usage, we could.
             // For now, just return data.
             // If pool is provided, we *could* copy body into it, but FakeIO is for logic testing.
-            if let pool = pool {
+            if let pool {
                 var buf = pool.get(capacity: body.count)
                 buf.append(body)
                 return (VTRMessageHeader(type: type.rawValue, length: UInt32(body.count)), buf)
             }
-            
+
             return (VTRMessageHeader(type: type.rawValue, length: UInt32(body.count)), body)
         }
 
@@ -35,7 +35,9 @@ final class ClientHandlerTests: XCTestCase {
 
         func sendMessage(type: VTRMessageType, bodyParts: [Data]) throws {
             var body = Data()
-            for part in bodyParts { body.append(part) }
+            for part in bodyParts {
+                body.append(part)
+            }
             try send(type: type, body: body)
         }
     }
@@ -51,7 +53,7 @@ final class ClientHandlerTests: XCTestCase {
 
         Logger.shared.level = .error
         let handler = VTRClientHandler(
-            io: fakeIO, 
+            io: fakeIO,
             expectedToken: "",
             sessionFactory: { sender in StubCodecSession(sender: sender) }
         )
@@ -78,6 +80,62 @@ final class ClientHandlerTests: XCTestCase {
         XCTAssertEqual(fakeIO.sent[0].0, .helloAck)
         XCTAssertEqual(fakeIO.sent[0].1.first, 2)
     }
+
+    func testTranscodePacketSendsPacketAckWhenNegotiated() {
+        let fakeIO = FakeIO(incoming: [
+            (.hello, makeHello(token: "", codec: "h264")),
+            (.configure, makeConfigure(mode: "transcode", wireCompression: "0", packetAck: true)),
+            (.packet, makePacket()),
+            (.flush, Data())
+        ])
+
+        Logger.shared.level = .error
+        let handler = VTRClientHandler(
+            io: fakeIO,
+            expectedToken: "",
+            serverCapabilities: VTRCapability.defaultServer,
+            sessionFactory: { sender in StubCodecSession(sender: sender) }
+        )
+        handler.run()
+
+        XCTAssertEqual(fakeIO.sent.map(\.0), [.helloAck, .configureAck, .packet, .packetAck, .done])
+        XCTAssertEqual(fakeIO.sent[3].1.count, 0)
+    }
+
+    func testPacketAckRequiresCapabilityModeAndClientRequest() {
+        struct Case {
+            let mode: String
+            let caps: [String]
+            let packetAck: Bool
+        }
+
+        let cases: [Case] = [
+            Case(mode: "transcode", caps: VTRCapability.baseline, packetAck: true),
+            Case(mode: "transcode", caps: VTRCapability.defaultServer, packetAck: false),
+            Case(mode: "encode", caps: VTRCapability.defaultServer, packetAck: true),
+            Case(mode: "decode", caps: VTRCapability.defaultServer, packetAck: true)
+        ]
+
+        for testCase in cases {
+            let fakeIO = FakeIO(incoming: [
+                (.hello, makeHello(token: "", codec: "h264")),
+                (.configure, makeConfigure(mode: testCase.mode, wireCompression: "0", packetAck: testCase.packetAck)),
+                (.packet, makePacket()),
+                (.flush, Data())
+            ])
+
+            Logger.shared.level = .error
+            let handler = VTRClientHandler(
+                io: fakeIO,
+                expectedToken: "",
+                serverCapabilities: testCase.caps,
+                sessionFactory: { sender in StubCodecSession(sender: sender) }
+            )
+            handler.run()
+
+            XCTAssertFalse(fakeIO.sent.map(\.0).contains(.packetAck), "unexpected PACKET_ACK for \(testCase)")
+        }
+    }
 }
 
 private func makeHello(token: String, codec: String) -> Data {
@@ -89,7 +147,7 @@ private func makeHello(token: String, codec: String) -> Data {
     return writer.data
 }
 
-private func makeConfigure(mode: String, wireCompression: String) -> Data {
+private func makeConfigure(mode: String, wireCompression: String, packetAck: Bool = false) -> Data {
     var writer = ByteWriter()
     writer.writeBE(UInt32(64))
     writer.writeBE(UInt32(64))
@@ -99,12 +157,32 @@ private func makeConfigure(mode: String, wireCompression: String) -> Data {
     writer.writeBE(UInt32(30))
     writer.writeBE(UInt32(1))
 
-    writer.writeBE(UInt16(2))
-    writer.writeLengthPrefixedUTF8("mode")
-    writer.writeLengthPrefixedUTF8(mode)
-    writer.writeLengthPrefixedUTF8("wire_compression")
-    writer.writeLengthPrefixedUTF8(wireCompression)
+    var options = [
+        ("mode", mode),
+        ("wire_compression", wireCompression)
+    ]
+    if packetAck {
+        options.append(("packet_ack.v1", "1"))
+    }
+
+    writer.writeBE(UInt16(options.count))
+    for (key, value) in options {
+        writer.writeLengthPrefixedUTF8(key)
+        writer.writeLengthPrefixedUTF8(value)
+    }
 
     writer.writeBE(UInt32(0))
+    return writer.data
+}
+
+private func makePacket() -> Data {
+    let annexB = Data([0x00, 0x00, 0x00, 0x01])
+    var writer = ByteWriter()
+    writer.writeBE(UInt64(1))
+    writer.writeBE(UInt64(1))
+    writer.writeBE(UInt64(1))
+    writer.writeBE(UInt32(1))
+    writer.writeBE(UInt32(annexB.count))
+    writer.write(annexB)
     return writer.data
 }

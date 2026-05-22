@@ -21,6 +21,7 @@ static const char *msg_names[] = {
     [VTREMOTE_MSG_ERROR]         = "ERROR",
     [VTREMOTE_MSG_PING]          = "PING",
     [VTREMOTE_MSG_PONG]          = "PONG",
+    [VTREMOTE_MSG_PACKET_ACK]    = "PACKET_ACK",
 };
 
 const char *vtremote_msg_type_name(int type)
@@ -92,6 +93,8 @@ int vtremote_cap_flag_from_name(const uint8_t *name, int name_len, uint64_t *fla
         value = VTREMOTE_CAP_HWFRAMES_VIDEOTOOLBOX_OUT;
     } else if (cap_name_equals(name, name_len, "side_data.v2")) {
         value = VTREMOTE_CAP_SIDE_DATA_V2;
+    } else if (cap_name_equals(name, name_len, "packet_ack.v1")) {
+        value = VTREMOTE_CAP_PACKET_ACK_V1;
     }
 
     *flag = value;

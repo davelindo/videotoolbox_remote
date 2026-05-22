@@ -33,6 +33,7 @@ MSG_DONE = 8
 MSG_ERROR = 9
 MSG_PING = 10
 MSG_PONG = 11
+MSG_PACKET_ACK = 12
 
 HEADER_STRUCT = struct.Struct(">IHHI")  # magic, version, type, length
 STREAM_CHUNK_BYTES = 64 * 1024
@@ -47,6 +48,7 @@ DEFAULT_CAPABILITIES = [
     "hwframes.videotoolbox.input",
     "hwframes.videotoolbox.output",
     "side_data.v2",
+    "packet_ack.v1",
 ]
 PIX_FMT_CAPABILITY = {
     1: "pixfmt.nv12",
@@ -271,6 +273,14 @@ def validate_frame_plane(wire_compression: int, plane_data: bytes, expected_size
         zstd_decompress(plane_data, expected_size)
         return
     raise ValueError(f"unsupported wire_compression={wire_compression}")
+
+
+def packet_ack_enabled(config_options: Dict[str, str], capabilities: List[str]) -> bool:
+    return (
+        config_options.get("mode") == "transcode"
+        and config_options.get("packet_ack.v1") == "1"
+        and "packet_ack.v1" in capabilities
+    )
 
 
 def validate_required_config_options(config_options: Dict[str, str]) -> None:
@@ -534,6 +544,11 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                 if msg_type == MSG_PACKET:
                     pts, dts, dur, flags, side_data_blob = parse_packet_body(payload)
                     _ = dts
+                    if packet_ack_enabled(config_options, args.capabilities):
+                        write_msg(conn, MSG_PACKET_ACK)
+
+                    if getattr(args, "packet_reply", "frame") == "none":
+                        continue
 
                     if getattr(args, "packet_reply", "frame") == "packet":
                         out_dts = pts + int(getattr(args, "packet_dts_offset", 0))
@@ -592,9 +607,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--packet-reply",
-        choices=["frame", "packet"],
+        choices=["frame", "packet", "none"],
         default="frame",
-        help="Reply to PACKET with FRAME (decode) or PACKET (transcode-style) (default: frame)",
+        help="Reply to PACKET with FRAME, PACKET, or no output (default: frame)",
     )
     parser.add_argument(
         "--strict-config-options",

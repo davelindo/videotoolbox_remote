@@ -46,6 +46,7 @@ run_step "mock_roundtrip"      bash "${ROOT}/tests/integration/run_mock_roundtri
 run_step "mock_wire_compression" bash "${ROOT}/tests/integration/run_mock_wire_compression.sh"
 run_step "mock_pts_dts"        bash "${ROOT}/tests/integration/run_mock_pts_dts_semantics.sh"
 run_step "mock_transcode_pts_dts" bash "${ROOT}/tests/integration/run_mock_transcode_pts_dts_semantics.sh"
+run_step "mock_transcode_no_output_ack" bash "${ROOT}/tests/integration/run_mock_transcode_no_output_ack.sh"
 run_step "mock_transcode_hvc1_hdr" bash "${ROOT}/tests/integration/run_mock_transcode_hvc1_hdr_signaling.sh"
 run_step "mock_decode"         bash "${ROOT}/tests/integration/run_mock_decode.sh"
 run_step "mock_protocol_capabilities" bash "${ROOT}/tests/integration/run_mock_protocol_capabilities.sh"

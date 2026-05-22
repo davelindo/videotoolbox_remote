@@ -39,6 +39,7 @@
 #define VTREMOTE_CAP_HWFRAMES_VIDEOTOOLBOX_IN  (UINT64_C(1) << 7)
 #define VTREMOTE_CAP_HWFRAMES_VIDEOTOOLBOX_OUT (UINT64_C(1) << 8)
 #define VTREMOTE_CAP_SIDE_DATA_V2              (UINT64_C(1) << 9)
+#define VTREMOTE_CAP_PACKET_ACK_V1             (UINT64_C(1) << 10)
 
 enum VTRemoteMsgType {
     VTREMOTE_MSG_HELLO = 1,
@@ -52,6 +53,7 @@ enum VTRemoteMsgType {
     VTREMOTE_MSG_ERROR,
     VTREMOTE_MSG_PING,
     VTREMOTE_MSG_PONG,
+    VTREMOTE_MSG_PACKET_ACK = 12,
 };
 
 typedef struct VTRemoteMsgHeader {
