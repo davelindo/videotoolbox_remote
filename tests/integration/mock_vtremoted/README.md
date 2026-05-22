@@ -13,10 +13,10 @@ python3 tests/integration/mock_vtremoted/mock_vtremoted.py \
 
 Connect with your client/encoder under test using the same token (or omit `--token` to disable auth). The server:
 - Validates HELLO token if configured (authfail if mismatched)
-- Reports caps: h264, hevc, pixfmt.nv12, pixfmt.p010, pixfmt.bgra, pixfmt.ayuv, pixfmt.p210, hwframes.videotoolbox.input, hwframes.videotoolbox.output, side_data.v2; max_sessions from flag (default 4)
+- Reports caps: h264, hevc, pixfmt.nv12, pixfmt.p010, pixfmt.bgra, pixfmt.ayuv, pixfmt.p210, hwframes.videotoolbox.input, hwframes.videotoolbox.output, side_data.v2, packet_ack.v1; max_sessions from flag (default 4)
 - Returns empty extradata in CONFIGURE_ACK by default, or caller-supplied hex fixtures via `--configure-extradata-hex[-file]`
 - Emits one PACKET per FRAME with pts/dts/duration copied from the frame and keyframe flag set if the frame requested a keyframe; packet data defaults to a tiny dummy NAL but can be overridden via `--packet-data-hex[-file]`
-- Replies PONG to PING; sends DONE on FLUSH; sends ERROR for unknown messages
+- Replies PONG to PING; sends PACKET_ACK only for transcode PACKET input when `packet_ack.v1` is advertised and requested; sends DONE on FLUSH; sends ERROR for unknown messages
 
 ## Notes
 - Annex B payload is a small dummy NAL and not decodable video.

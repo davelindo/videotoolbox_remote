@@ -12,6 +12,7 @@ final class MessageCodecTests: XCTestCase {
         XCTAssertEqual(VTRPixelFormat.name(VTRPixelFormat.nv12), "nv12")
         XCTAssertEqual(VTRPixelFormat.name(VTRPixelFormat.videoToolbox), "videotoolbox")
         XCTAssertEqual(VTRPixelFormat.name(255), "unknown")
+        XCTAssertEqual(VTRMessageType.packetAck.rawValue, 12)
     }
 
     func testBaselineCapabilities() {
@@ -39,7 +40,8 @@ final class MessageCodecTests: XCTestCase {
                 VTRCapability.pixfmtP210,
                 VTRCapability.hwFramesVideoToolboxInput,
                 VTRCapability.hwFramesVideoToolboxOutput,
-                VTRCapability.sideDataV2
+                VTRCapability.sideDataV2,
+                VTRCapability.packetAckV1
             ]
         )
     }

@@ -35,7 +35,8 @@ public struct SessionConfiguration: Sendable {
     private static func parsePositiveDimensionPair(width: String?, height: String?) throws -> (Int, Int)? {
         guard width != nil || height != nil else { return nil }
         guard let widthValue = Int(width ?? ""), widthValue > 0,
-              let heightValue = Int(height ?? ""), heightValue > 0 else {
+              let heightValue = Int(height ?? ""), heightValue > 0
+        else {
             throw VTRemotedError.unsupported("out_width/out_height must be positive")
         }
         return (widthValue, heightValue)
@@ -131,12 +132,21 @@ public struct SessionOptions: Equatable, Sendable {
     public var wireCompression: Int
     public var decodeAsync: Int
     public var decodeReorderDepth: Int
+    public var packetAckV1: Bool
 
     public init(options: [String: String]) {
-        func int(_ key: String, _ def: Int) -> Int { Int(options[key] ?? "") ?? def }
-        func int64(_ key: String, _ def: Int64) -> Int64 { Int64(options[key] ?? "") ?? def }
-        func bool(_ key: String) -> Bool { (options[key] ?? "0") != "0" }
-        func double(_ key: String, _ def: Double) -> Double { Double(options[key] ?? "") ?? def }
+        func int(_ key: String, _ def: Int) -> Int {
+            Int(options[key] ?? "") ?? def
+        }
+        func int64(_ key: String, _ def: Int64) -> Int64 {
+            Int64(options[key] ?? "") ?? def
+        }
+        func bool(_ key: String) -> Bool {
+            (options[key] ?? "0") != "0"
+        }
+        func double(_ key: String, _ def: Double) -> Double {
+            Double(options[key] ?? "") ?? def
+        }
 
         bitrate = int("bitrate", 0)
         maxRate = int("maxrate", 0)
@@ -171,5 +181,6 @@ public struct SessionOptions: Equatable, Sendable {
         wireCompression = int("wire_compression", 0)
         decodeAsync = int("decode_async", 1)
         decodeReorderDepth = int("decode_reorder_depth", 2)
+        packetAckV1 = bool("packet_ack.v1")
     }
 }

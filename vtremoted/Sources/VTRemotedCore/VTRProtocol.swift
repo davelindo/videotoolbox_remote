@@ -39,6 +39,7 @@ public enum VTRCapability {
     public static let hwFramesVideoToolboxInput = "hwframes.videotoolbox.input"
     public static let hwFramesVideoToolboxOutput = "hwframes.videotoolbox.output"
     public static let sideDataV2 = "side_data.v2"
+    public static let packetAckV1 = "packet_ack.v1"
 
     public static let baseline: [String] = [
         h264,
@@ -53,7 +54,8 @@ public enum VTRCapability {
         pixfmtP210,
         hwFramesVideoToolboxInput,
         hwFramesVideoToolboxOutput,
-        sideDataV2
+        sideDataV2,
+        packetAckV1
     ]
 
     public static var runtimeServer: [String] {
@@ -77,6 +79,7 @@ public enum VTRMessageType: UInt16, Sendable {
     case error
     case ping
     case pong
+    case packetAck = 12
 }
 
 public struct VTRMessageHeader: Equatable, Sendable {
