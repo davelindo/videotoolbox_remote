@@ -17,7 +17,7 @@ import socket
 import struct
 import sys
 import threading
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 MAGIC = 0x56545231  # 'VTR1'
 VERSION = 1
