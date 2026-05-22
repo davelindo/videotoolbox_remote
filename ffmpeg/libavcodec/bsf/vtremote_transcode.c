@@ -1461,7 +1461,7 @@ static int vtremote_wait_for_inflight_slot(AVBSFContext *ctx)
         return 0;
 
     if (!(s->server_caps & VTREMOTE_CAP_PACKET_ACK_V1)) {
-        int ret = vtremote_drain_available_packets(ctx);
+        int ret = vtremote_receive_packet_blocking(ctx);
         if (ret < 0 && ret != AVERROR(EAGAIN))
             return ret;
         return 0;
