@@ -386,6 +386,7 @@ struct AVFrame;
  creation_time-- date when the file was created, preferably in ISO 8601.
  date         -- date when the work was created, preferably in ISO 8601.
  disc         -- number of a subset, e.g. disc in a multi-disc collection.
+ disc_subtitle-- title of a subset, e.g. disc subtitle in a multi-disc collection.
  encoder      -- name/settings of the software/hardware that produced the file.
  encoded_by   -- person/group who created the file.
  filename     -- original name of the file.
@@ -1558,8 +1559,12 @@ typedef struct AVFormatContext {
      * Flags to enable debugging.
      */
     int debug;
-#define FF_FDEBUG_TS        0x0001
-#define FF_FDEBUG_ID3V2     0x0002
+#define AV_FDEBUG_TS        0x0001
+#define AV_FDEBUG_ID3V2     0x0002
+
+#if FF_API_FDEBUG_TS
+#define FF_FDEBUG_TS AV_FDEBUG_TS
+#endif
 
     /**
      * The maximum number of streams.
