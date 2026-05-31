@@ -32,6 +32,7 @@
 #include "libavutil/attributes.h"
 #include "libavutil/bprint.h"
 #include "libavutil/channel_layout.h"
+#include "libavutil/dovi_meta.h"
 #include "libavutil/internal.h"
 #include "libavutil/intreadwrite.h"
 #include "libavutil/intfloat.h"
@@ -2614,6 +2615,33 @@ static int mov_read_sbas(MOVContext* c, AVIOContext* pb, MOVAtom atom)
         av_log(c->fc, AV_LOG_ERROR, "Only a single tref of type sbas is supported\n");
         return AVERROR_PATCHWELCOME;
     }
+    if (atom.size < 4)
+        return AVERROR_INVALIDDATA;
+
+    st = c->fc->streams[c->fc->nb_streams - 1];
+    sc = st->priv_data;
+
+    MovTref *tag = mov_add_tref_tag(sc, atom.type);
+    if (!tag)
+        return AVERROR(ENOMEM);
+
+    int ret = mov_add_tref_id(tag, avio_rb32(pb));
+    if (ret < 0)
+        return ret;
+
+    return 0;
+}
+
+static int mov_read_vdep(MOVContext* c, AVIOContext* pb, MOVAtom atom)
+{
+    AVStream* st;
+    MOVStreamContext* sc;
+
+    if (c->fc->nb_streams < 1)
+        return 0;
+
+    if (atom.size > 4)
+        av_log(c->fc, AV_LOG_WARNING, "More than one vdep reference is not supported.\n");
     if (atom.size < 4)
         return AVERROR_INVALIDDATA;
 
@@ -8750,6 +8778,33 @@ static int mov_read_dvcc_dvvc(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     return ff_isom_parse_dvcc_dvvc(c->fc, st, buf, read_size);
 }
 
+static int mov_read_hvce(MOVContext *c, AVIOContext *pb, MOVAtom atom)
+{
+    AVStream *st;
+    AVPacketSideData *sd;
+    int ret;
+
+    if (c->fc->nb_streams < 1)
+        return 0;
+    st = c->fc->streams[c->fc->nb_streams - 1];
+
+    if (atom.size < 23 || atom.size > INT_MAX - AV_INPUT_BUFFER_PADDING_SIZE)
+        return AVERROR_INVALIDDATA;
+
+    sd = av_packet_side_data_new(&st->codecpar->coded_side_data,
+                                 &st->codecpar->nb_coded_side_data,
+                                 AV_PKT_DATA_HEVC_CONF,
+                                 atom.size, 0);
+    if (!sd)
+        return AVERROR(ENOMEM);
+
+    ret = ffio_read_size(pb, sd->data, atom.size);
+    if (ret < 0)
+        return ret;
+
+    return 0;
+}
+
 static int mov_read_lhvc(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 {
     AVStream *st;
@@ -9641,6 +9696,7 @@ static const MOVParseTableEntry mov_default_parse_table[] = {
 { MKTAG('p','a','s','p'), mov_read_pasp },
 { MKTAG('c','l','a','p'), mov_read_clap },
 { MKTAG('s','b','a','s'), mov_read_sbas },
+{ MKTAG('v','d','e','p'), mov_read_vdep },
 { MKTAG('s','i','d','x'), mov_read_sidx },
 { MKTAG('s','t','b','l'), mov_read_default },
 { MKTAG('s','t','c','o'), mov_read_stco },
@@ -9707,6 +9763,7 @@ static const MOVParseTableEntry mov_default_parse_table[] = {
 { MKTAG('d','v','c','C'), mov_read_dvcc_dvvc },
 { MKTAG('d','v','v','C'), mov_read_dvcc_dvvc },
 { MKTAG('d','v','w','C'), mov_read_dvcc_dvvc },
+{ MKTAG('h','v','c','E'), mov_read_hvce },
 { MKTAG('k','i','n','d'), mov_read_kind },
 { MKTAG('S','A','3','D'), mov_read_SA3D }, /* ambisonic audio box */
 { MKTAG('S','A','N','D'), mov_read_SAND }, /* non diegetic audio box */
@@ -10980,8 +11037,8 @@ static int mov_parse_lcevc_streams(AVFormatContext *s)
             return AVERROR(ENOMEM);
 
         stg->id = st->id;
-        stg->params.lcevc->width  = st->codecpar->width;
-        stg->params.lcevc->height = st->codecpar->height;
+        stg->params.layered_video->width  = st->codecpar->width;
+        stg->params.layered_video->height = st->codecpar->height;
 
         while (st_base = mov_find_reference_track(s, st, tag->id, tag->nb_id, j)) {
             err = avformat_stream_group_add_stream(stg, st_base);
@@ -11003,7 +11060,80 @@ static int mov_parse_lcevc_streams(AVFormatContext *s)
         if (err < 0)
             return err;
 
-        stg->params.lcevc->lcevc_index = stg->nb_streams - 1;
+        stg->params.layered_video->el_index = stg->nb_streams - 1;
+    }
+
+    return 0;
+}
+
+static int mov_parse_dovi_streams(AVFormatContext *s)
+{
+    int err;
+
+    if (s->nb_streams <= 1)
+        return 0;
+
+    /* Identify legacy dual-track Dolby Vision profile 7 carriage per Annex
+     * C of "Dolby Vision Streams Within the ISO Base Media File Format",
+     * v2.7.1. The 'vdep' track reference type is shared with depth video
+     * and multi-view dependencies. The spec-mandated DV-specific sample
+     * entry combined with the dvcC configuration record disambiguates
+     * those uses. */
+    for (int i = 0; i < s->nb_streams; i++) {
+        AVStreamGroup *stg;
+        AVStream *st = s->streams[i];
+        AVStream *st_base;
+        MOVStreamContext *sc = st->priv_data;
+        MovTref *tag = mov_find_tref_tag(sc, MKTAG('v','d','e','p'));
+        const AVPacketSideData *sd;
+        const AVDOVIDecoderConfigurationRecord *dovi;
+
+        if (st->codecpar->codec_id != AV_CODEC_ID_HEVC || !tag)
+            continue;
+
+        if (st->codecpar->codec_tag != MKTAG('d','v','h','e') &&
+            st->codecpar->codec_tag != MKTAG('d','v','h','1'))
+            continue;
+
+        sd = av_packet_side_data_get(st->codecpar->coded_side_data,
+                                     st->codecpar->nb_coded_side_data,
+                                     AV_PKT_DATA_DOVI_CONF);
+        if (!sd)
+            continue;
+        dovi = (const AVDOVIDecoderConfigurationRecord *)sd->data;
+
+        /* EL track of a dual-track stream: rpu_present_flag = 1,
+         * el_present_flag = 1, bl_present_flag = 0, dv_profile = 7. */
+        if (dovi->dv_profile != 7 || !dovi->rpu_present_flag ||
+            !dovi->el_present_flag || dovi->bl_present_flag)
+            continue;
+
+        st_base = mov_find_reference_track(s, st, tag->id, tag->nb_id, 0);
+        if (!st_base) {
+            int loglevel = (s->error_recognition & AV_EF_EXPLODE) ? AV_LOG_ERROR : AV_LOG_WARNING;
+            av_log(s, loglevel, "Failed to find base layer for Dolby Vision EL stream\n");
+            if (s->error_recognition & AV_EF_EXPLODE)
+                return AVERROR_INVALIDDATA;
+            continue;
+        }
+
+        stg = avformat_stream_group_create(s, AV_STREAM_GROUP_PARAMS_DOLBY_VISION, NULL);
+        if (!stg)
+            return AVERROR(ENOMEM);
+
+        stg->id = st->id;
+
+        err = avformat_stream_group_add_stream(stg, st_base);
+        if (err < 0)
+            return err;
+
+        err = avformat_stream_group_add_stream(stg, st);
+        if (err < 0)
+            return err;
+
+        stg->params.layered_video->el_index = stg->nb_streams - 1;
+        stg->params.layered_video->width = st_base->codecpar->width;
+        stg->params.layered_video->height = st_base->codecpar->height;
     }
 
     return 0;
@@ -11109,6 +11239,11 @@ static int mov_read_header(AVFormatContext *s)
 
     /* Create LCEVC stream groups. */
     err = mov_parse_lcevc_streams(s);
+    if (err < 0)
+        return err;
+
+    /* Create Dolby Vision Profile 7 stream groups. */
+    err = mov_parse_dovi_streams(s);
     if (err < 0)
         return err;
 
