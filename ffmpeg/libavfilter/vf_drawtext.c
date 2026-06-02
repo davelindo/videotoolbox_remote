@@ -1368,22 +1368,43 @@ static int draw_glyphs(AVFilterContext *ctx, AVFrame *frame,
 }
 
 // Shapes a line of text using libharfbuzz
-static int shape_text_hb(DrawTextContext *s, HarfbuzzData* hb, const char* text, int textLen)
+static int shape_text_hb(AVFilterContext *ctx, DrawTextContext *s,
+                         HarfbuzzData *hb, const char *text, int textLen)
 {
+    unsigned codepoints;
+
     hb->buf = hb_buffer_create();
-    if(!hb_buffer_allocation_successful(hb->buf))
-        goto fail;
-    hb_buffer_set_direction(hb->buf, HB_DIRECTION_LTR);
-    hb_buffer_set_script(hb->buf, HB_SCRIPT_LATIN);
-    hb_buffer_set_language(hb->buf, hb_language_from_string("en", -1));
-    hb_buffer_guess_segment_properties(hb->buf);
-    hb->font = hb_ft_font_create_referenced(s->face);
-    if(hb->font == NULL)
+    if (!hb_buffer_allocation_successful(hb->buf))
         goto fail;
     hb_buffer_add_utf8(hb->buf, text, textLen, 0, -1);
+    /* Preserve the existing FriBidi visual-order pipeline and the explicit
+     * language while letting HarfBuzz infer only the script, so complex
+     * scripts (Bengali / Indic / USE) are dispatched to the correct shaper.
+     * Setting the language explicitly keeps shaping deterministic and avoids
+     * the locale-dependent, non-threadsafe first hb_language_get_default(). */
+    hb_buffer_set_direction(hb->buf, HB_DIRECTION_LTR);
+    hb_buffer_set_language(hb->buf, hb_language_from_string("en", -1));
+    hb_buffer_guess_segment_properties(hb->buf);
+    /* Sample the buffer length here, before hb_shape() flips the buffer's
+     * content type from UNICODE to GLYPHS. */
+    codepoints = hb_buffer_get_length(hb->buf);
+    hb->font = hb_ft_font_create_referenced(s->face);
+    if (hb->font == NULL)
+        goto fail;
     hb_shape(hb->font, hb->buf, NULL, 0);
     hb->glyph_info = hb_buffer_get_glyph_infos(hb->buf, &hb->glyph_count);
     hb->glyph_pos = hb_buffer_get_glyph_positions(hb->buf, &hb->glyph_count);
+
+    if (av_log_get_level() >= AV_LOG_VERBOSE) {
+        char script_tag[5] = { 0 };
+        hb_script_t script = hb_buffer_get_script(hb->buf);
+        hb_direction_t dir = hb_buffer_get_direction(hb->buf);
+        hb_tag_to_string(hb_script_to_iso15924_tag(script), script_tag);
+        av_log(ctx, AV_LOG_VERBOSE,
+               "shape: script=%s direction=%s codepoints=%u glyphs=%u\n",
+               script_tag, hb_direction_to_string(dir),
+               codepoints, hb->glyph_count);
+    }
 
     return 0;
 fail:
@@ -1437,7 +1458,7 @@ continue_on_failed:
     // Evaluate the width of the space character if needed to replace tabs
     if (s->tab_count > 0 && !s->blank_advance64) {
         HarfbuzzData hb_data;
-        ret = shape_text_hb(s, &hb_data, " ", 1);
+        ret = shape_text_hb(ctx, s, &hb_data, " ", 1);
         if(ret != 0) {
             goto done;
         }
@@ -1475,7 +1496,7 @@ continue_on_failed2:
             TextLine *cur_line = &s->lines[line_count];
             HarfbuzzData *hb = &cur_line->hb_data;
             cur_line->cluster_offset = line_offset;
-            ret = shape_text_hb(s, hb, start, len);
+            ret = shape_text_hb(ctx, s, hb, start, len);
             if (ret != 0) {
                 goto done;
             }

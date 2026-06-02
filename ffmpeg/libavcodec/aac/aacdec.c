@@ -831,8 +831,8 @@ static int decode_pce(AVCodecContext *avctx, MPEG4AudioConfig *m4ac,
     sampling_index = get_bits(gb, 4);
     if (m4ac->sampling_index != sampling_index)
         av_log(avctx, AV_LOG_WARNING,
-               "Sample rate index in program config element does not "
-               "match the sample rate index configured by the container.\n");
+               "Sample rate index (%d) in program config element does not "
+               "match the sample rate index (%d) configured by the container.\n", sampling_index, m4ac->sampling_index);
 
     num_front       = get_bits(gb, 4);
     num_side        = get_bits(gb, 4);
@@ -2380,6 +2380,12 @@ static int decode_frame_ga(AVCodecContext *avctx, AACDecContext *ac,
         avctx->sample_rate = ac->oc[1].m4ac.sample_rate << multiplier;
         avctx->frame_size = samples;
         ac->oc[1].status = OC_LOCKED;
+    }
+
+    if (samples && avctx->sample_rate <= 0) {
+        av_log(avctx, AV_LOG_ERROR,
+               "Cannot output a frame without a valid sample rate\n");
+        return AVERROR_INVALIDDATA;
     }
 
     if (!ac->frame->data[0] && samples) {
