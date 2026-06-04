@@ -28,6 +28,7 @@
 #include "ops.h"
 #include "ops_internal.h"
 #include "ops_dispatch.h"
+#include "swscale_internal.h"
 
 typedef struct SwsOpPass {
     SwsCompiledOp comp;
@@ -76,6 +77,7 @@ static int compile_backend(SwsContext *ctx, const SwsOpBackend *backend,
         goto fail;
     }
 
+    compiled.backend = backend;
     *out = compiled;
 
     av_log(ctx, AV_LOG_VERBOSE, "Compiled using backend '%s': "
@@ -96,10 +98,12 @@ int ff_sws_ops_compile(SwsContext *ctx, const SwsOpBackend *backend,
     if (backend)
         return compile_backend(ctx, backend, ops, out);
 
+    const SwsBackend enabled = ff_sws_enabled_backends(ctx);
     for (int n = 0; ff_sws_op_backends[n]; n++) {
         const SwsOpBackend *backend = ff_sws_op_backends[n];
         if (ops->src.hw_format != backend->hw_format ||
-            ops->dst.hw_format != backend->hw_format)
+            ops->dst.hw_format != backend->hw_format ||
+            !(enabled & backend->flags))
             continue;
         if (compile_backend(ctx, backend, ops, out) < 0)
             continue;
@@ -512,9 +516,12 @@ static int compile(SwsGraph *graph, const SwsOpBackend *backend,
     if (p->comp.opaque) {
         SwsCompiledOp c = *comp;
         av_free(p);
-        return ff_sws_graph_add_pass(graph, dst->format, dst->width, dst->height,
-                                     input, c.slice_align, c.func_opaque,
-                                     NULL, c.priv, c.free, output);
+        ret = ff_sws_graph_add_pass(graph, dst->format, dst->width, dst->height,
+                                    input, c.slice_align, c.func_opaque,
+                                    NULL, c.priv, c.free, output);
+        if (ret >= 0)
+            (*output)->backend = comp->backend->flags;
+        return ret;
     }
 
     const SwsOp *read  = ff_sws_op_list_input(ops);
@@ -596,6 +603,7 @@ static int compile(SwsGraph *graph, const SwsOpBackend *backend,
     if (ret < 0)
         return ret;
 
+    (*output)->backend = comp->backend->flags;
     align_pass(input,   comp->block_size, comp->over_read,  p->pixel_bits_in);
     align_pass(*output, comp->block_size, comp->over_write, p->pixel_bits_out);
     return 0;
