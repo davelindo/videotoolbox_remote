@@ -5,9 +5,12 @@
 ## Build
 
 ```bash
-brew install lz4 zstd pkg-config
 swift build -c release
 ```
+
+The Swift package supports macOS 13 and newer. Building on macOS 27 or with a newer SDK keeps the binary's minimum OS at macOS 13 unless `MACOSX_DEPLOYMENT_TARGET` is explicitly overridden.
+
+LZ4 and Zstd are runtime dependencies for wire compression. Default FFmpeg/OBS clients request LZ4, so install `lz4` for normal compressed sessions and `zstd` if clients use `-vt_remote_wire_compression zstd`.
 
 ## Run (foreground)
 

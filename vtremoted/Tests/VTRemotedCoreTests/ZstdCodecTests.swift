@@ -2,7 +2,8 @@
 import XCTest
 
 final class ZstdCodecTests: XCTestCase {
-    func testZstdCompressDecompress() {
+    func testZstdCompressDecompress() throws {
+        try XCTSkipUnless(ZstdCodec.isAvailable, "Zstd runtime unavailable: \(ZstdCodec.loadDiagnostics)")
         let original = Data("Hello Zstd Compression World!".utf8)
         guard let compressed = ZstdCodec.compress(original) else {
             XCTFail("Compression failed")
@@ -26,19 +27,21 @@ final class ZstdCodecTests: XCTestCase {
         XCTAssertEqual(decompressed, Data())
     }
 
-    func testZstdMismatchSize() {
+    func testZstdMismatchSize() throws {
+        try XCTSkipUnless(ZstdCodec.isAvailable, "Zstd runtime unavailable: \(ZstdCodec.loadDiagnostics)")
         let original = Data("Testing mismatch".utf8)
-        let compressed = ZstdCodec.compress(original)!
+        let compressed = try XCTUnwrap(ZstdCodec.compress(original))
         let decompressed = ZstdCodec.decompress(compressed, expectedSize: original.count - 1)
         XCTAssertNil(decompressed)
     }
-    
-    func testZstdDecompressRaw() {
+
+    func testZstdDecompressRaw() throws {
+        try XCTSkipUnless(ZstdCodec.isAvailable, "Zstd runtime unavailable: \(ZstdCodec.loadDiagnostics)")
         let input = Data((0 ..< 10000).map { UInt8($0 % 251) })
         guard let compressed = ZstdCodec.compress(input) else {
             return XCTFail("compress returned nil")
         }
-        
+
         var output = Data(count: input.count)
         let success = compressed.withUnsafeBytes { srcPtr in
             output.withUnsafeMutableBytes { dstPtr in

@@ -15,13 +15,13 @@ final class IntegrationTests: XCTestCase {
                 throw VTRemotedError.protocolViolation("no more messages")
             }
             let (type, body) = incoming.removeFirst()
-            
-            if let pool = pool {
+
+            if let pool {
                 var buf = pool.get(capacity: body.count)
                 buf.append(body)
                 return (VTRMessageHeader(type: type.rawValue, length: UInt32(body.count)), buf)
             }
-            
+
             return (VTRMessageHeader(type: type.rawValue, length: UInt32(body.count)), body)
         }
 
@@ -31,12 +31,14 @@ final class IntegrationTests: XCTestCase {
 
         func sendMessage(type: VTRMessageType, bodyParts: [Data]) throws {
             var body = Data()
-            for part in bodyParts { body.append(part) }
+            for part in bodyParts {
+                body.append(part)
+            }
             try send(type: type, body: body)
         }
     }
 
-    func testFullSessionEncode() throws {
+    func testFullSessionEncode() {
         // 1. Prepare Messages
         let helloPayload = makeHello(token: "secret", codec: "h264")
 
@@ -97,7 +99,7 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(fakeIO.sent[3].0, .done)
     }
 
-    func testFullSessionDecode() throws {
+    func testFullSessionDecode() {
         // 1. Prepare Messages
         let helloPayload = makeHello(token: "secret", codec: "h264")
 
@@ -154,6 +156,7 @@ final class IntegrationTests: XCTestCase {
     }
 
     func testFullSessionEncodeZstd() throws {
+        try XCTSkipUnless(ZstdCodec.isAvailable, "Zstd runtime unavailable: \(ZstdCodec.loadDiagnostics)")
         // 1. Prepare Messages
         let helloPayload = makeHello(token: "secret", codec: "h264")
 
@@ -170,8 +173,8 @@ final class IntegrationTests: XCTestCase {
         // Planes (pre-compress them for Zstd)
         let plane0 = Data(repeating: 0xAA, count: 64 * 64)
         let plane1 = Data(repeating: 0xBB, count: 64 * 32)
-        let compPlane0 = ZstdCodec.compress(plane0)!
-        let compPlane1 = ZstdCodec.compress(plane1)!
+        let compPlane0 = try XCTUnwrap(ZstdCodec.compress(plane0))
+        let compPlane1 = try XCTUnwrap(ZstdCodec.compress(plane1))
 
         writer.writeBE(UInt32(64)) // stride
         writer.writeBE(UInt32(64)) // height
@@ -213,33 +216,33 @@ final class IntegrationTests: XCTestCase {
         // This test verifies:
         // 1. Duplicate PTS frames are skipped (VideoToolbox sometimes produces duplicate callbacks)
         // 2. DTS is strictly monotonically increasing for unique frames
-        
+
         let helloPayload = makeHello(token: "secret", codec: "h264")
         let configurePayload = makeConfigure(mode: "encode", wireCompression: "0", width: 64, height: 64)
-        
+
         func makeFrame(pts: UInt64) -> Data {
             var writer = ByteWriter()
             writer.writeBE(pts)
             writer.writeBE(UInt64(1)) // dur
             writer.writeBE(UInt32(0)) // flags
             writer.write(UInt8(2)) // planeCount
-            
+
             let plane0 = Data(repeating: 0xAA, count: 64 * 64)
             let plane1 = Data(repeating: 0xBB, count: 64 * 32)
-            
+
             writer.writeBE(UInt32(64)) // stride
             writer.writeBE(UInt32(64)) // height
             writer.writeBE(UInt32(plane0.count))
             writer.write(plane0)
-            
+
             writer.writeBE(UInt32(64)) // stride
             writer.writeBE(UInt32(32)) // height
             writer.writeBE(UInt32(plane1.count))
             writer.write(plane1)
-            
+
             return writer.data
         }
-        
+
         // Send frames with some duplicates to simulate VideoToolbox behavior.
         //
         // In the no-reorder case (max_b_frames=0), the TimestampTracker enforces monotonic DTS/PTS.
@@ -254,7 +257,7 @@ final class IntegrationTests: XCTestCase {
             (.frame, makeFrame(pts: 1002)),
             (.flush, Data())
         ])
-        
+
         Logger.shared.level = .error
         let handler = VTRClientHandler(
             io: fakeIO,
@@ -262,11 +265,11 @@ final class IntegrationTests: XCTestCase {
             sessionFactory: { sender in StubCodecSession(sender: sender) }
         )
         handler.run()
-        
+
         // Verify we emitted a PACKET for every FRAME message (duplicates are adjusted, not dropped).
         let packets = fakeIO.sent.filter { $0.0 == .packet }
         XCTAssertEqual(packets.count, 5, "Expected 5 PACKET messages (duplicates should be adjusted)")
-        
+
         // Extract DTS from each packet and verify monotonicity
         var dtsValues: [Int64] = []
         for (_, body) in packets {
@@ -275,16 +278,16 @@ final class IntegrationTests: XCTestCase {
             let dts = try Int64(bitPattern: reader.readBEUInt64()) // DTS
             dtsValues.append(dts)
         }
-        
+
         // Verify DTS is strictly monotonically increasing
         XCTAssertEqual(dtsValues.count, packets.count, "Should have one DTS value per packet")
         for idx in 1 ..< dtsValues.count {
             XCTAssertGreaterThan(dtsValues[idx], dtsValues[idx - 1],
-                "DTS must be strictly monotonically increasing. Got: \(dtsValues)")
+                                 "DTS must be strictly monotonically increasing. Got: \(dtsValues)")
         }
     }
 
-    // Helpers
+    /// Helpers
     private func makeHello(token: String, codec: String) -> Data {
         var writer = ByteWriter()
         writer.writeLengthPrefixedUTF8(token)

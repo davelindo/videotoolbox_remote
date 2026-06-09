@@ -18,7 +18,9 @@ OBJC ?= $(CC)
 OBJCC ?= $(CXX)
 SDKROOT ?= $(shell xcrun --sdk macosx --show-sdk-path 2>/dev/null)
 MACOSX_SDK_VERSION := $(shell xcrun --sdk macosx --show-sdk-version 2>/dev/null)
-MACOSX_DEPLOYMENT_TARGET ?= $(if $(MACOSX_SDK_VERSION),$(MACOSX_SDK_VERSION),$(shell sw_vers -productVersion 2>/dev/null | awk -F. '{print $$1"."$$2}'))
+# Keep release artifacts runnable on older supported macOS versions even when
+# building on macOS 27+ or with a future SDK.
+MACOSX_DEPLOYMENT_TARGET ?= 13.0
 ifneq ($(wildcard /opt/homebrew/bin/pkg-config),)
 PKG_CONFIG ?= /opt/homebrew/bin/pkg-config
 PKG_CONFIG_PATH ?= /opt/homebrew/lib/pkgconfig:/opt/homebrew/share/pkgconfig
@@ -207,6 +209,7 @@ ifeq ($(IS_DARWIN),Darwin)
 		case ":$$path:" in *":$$pkg_dir:"*) ;; *) path="$$pkg_dir:$$path";; esac; \
 	fi; \
 	if [ -n "$(SDKROOT)" ]; then export SDKROOT="$(SDKROOT)"; fi; \
+	export MACOSX_DEPLOYMENT_TARGET="$(MACOSX_DEPLOYMENT_TARGET)"; \
 	if [ -n "$(PKG_CONFIG)" ]; then export PKG_CONFIG="$(PKG_CONFIG)"; fi; \
 	if [ -n "$(PKG_CONFIG_PATH)" ]; then export PKG_CONFIG_PATH="$(PKG_CONFIG_PATH)"; fi; \
 	PATH="$$path" swift build -c release $(SWIFT_BUILD_SANDBOX_FLAGS)

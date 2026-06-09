@@ -24,9 +24,14 @@ The easiest way to build everything on a Mac:
 ```bash
 make build
 ```
+
+Release builds default to `MACOSX_DEPLOYMENT_TARGET=13.0`. Keep that default when building on macOS 27 or newer SDKs unless a release intentionally raises the minimum supported macOS version.
+
 This produces:
 - `vtremoted/.build/release/vtremoted`
 - `ffmpeg/ffmpeg` (with local and remote VideoToolbox codecs enabled)
+
+The `vtremoted` binary must not hard-link Homebrew `liblz4` or `libzstd`; those libraries are runtime-only optional dependencies for LZ4/Zstd wire compression. The release smoke test checks both the macOS 13.0 minimum OS and the absence of absolute Homebrew dylib load commands.
 
 ### Linux / Windows (Client Only)
 

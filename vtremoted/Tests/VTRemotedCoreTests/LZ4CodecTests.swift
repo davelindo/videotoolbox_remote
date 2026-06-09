@@ -2,7 +2,8 @@
 import XCTest
 
 final class LZ4CodecTests: XCTestCase {
-    func testLZ4CompressDecompress() {
+    func testLZ4CompressDecompress() throws {
+        try XCTSkipUnless(LZ4Codec.isAvailable, "LZ4 runtime unavailable: \(LZ4Codec.loadDiagnostics)")
         let input = Data((0 ..< 10000).map { UInt8($0 % 251) })
         guard let compressed = LZ4Codec.compress(input) else {
             return XCTFail("compress returned nil")
@@ -12,13 +13,14 @@ final class LZ4CodecTests: XCTestCase {
         }
         XCTAssertEqual(out, input)
     }
-    
-    func testLZ4DecompressRaw() {
+
+    func testLZ4DecompressRaw() throws {
+        try XCTSkipUnless(LZ4Codec.isAvailable, "LZ4 runtime unavailable: \(LZ4Codec.loadDiagnostics)")
         let input = Data((0 ..< 10000).map { UInt8($0 % 251) })
         guard let compressed = LZ4Codec.compress(input) else {
             return XCTFail("compress returned nil")
         }
-        
+
         var output = Data(count: input.count)
         let success = compressed.withUnsafeBytes { srcPtr in
             output.withUnsafeMutableBytes { dstPtr in

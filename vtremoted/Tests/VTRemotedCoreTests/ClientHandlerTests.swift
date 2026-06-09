@@ -136,6 +136,37 @@ final class ClientHandlerTests: XCTestCase {
             XCTAssertFalse(fakeIO.sent.map(\.0).contains(.packetAck), "unexpected PACKET_ACK for \(testCase)")
         }
     }
+
+    func testUnavailableLZ4ConfigureSendsErrorAndStops() throws {
+        let fakeIO = FakeIO(incoming: [
+            (.hello, makeHello(token: "", codec: "h264")),
+            (.configure, makeConfigure(mode: "encode", wireCompression: "1")),
+            (.flush, Data())
+        ])
+
+        Logger.shared.level = .error
+        let handler = VTRClientHandler(
+            io: fakeIO,
+            expectedToken: "",
+            codecAvailability: CodecAvailability(
+                lz4Available: false,
+                zstdAvailable: true,
+                lz4Diagnostics: "tried=[liblz4.dylib]; last dlerror=missing",
+                zstdDiagnostics: "loaded=libzstd.dylib"
+            ),
+            sessionFactory: { _ in
+                XCTFail("session should not be created when requested wire compression is unavailable")
+                return StubCodecSession(sender: { _, _ in })
+            }
+        )
+        handler.run()
+
+        XCTAssertEqual(fakeIO.sent.map(\.0), [.helloAck, .error])
+        let error = try decodeError(fakeIO.sent[1].1)
+        XCTAssertEqual(error.code, 1)
+        XCTAssertEqual(error.message, "wire_compression=lz4 unavailable")
+        XCTAssertEqual(fakeIO.incoming.map(\.0), [.flush])
+    }
 }
 
 private func makeHello(token: String, codec: String) -> Data {
@@ -185,4 +216,11 @@ private func makePacket() -> Data {
     writer.writeBE(UInt32(annexB.count))
     writer.write(annexB)
     return writer.data
+}
+
+private func decodeError(_ payload: Data) throws -> ErrorResponse {
+    var reader = ByteReader(payload)
+    let code = try reader.readBEUInt32()
+    let message = try reader.readLengthPrefixedUTF8()
+    return ErrorResponse(code: code, message: message)
 }

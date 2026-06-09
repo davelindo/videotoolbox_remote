@@ -4,12 +4,12 @@ permalink: /llms.txt
 ---
 # VideoToolbox Remote (`videotoolbox_remote`) Briefing
 
-**Version**: v0.3.0
+**Version**: v0.6.0
 **License**: LGPL v2.1+
-**Goal**: Offload FFmpeg H.264/HEVC encoding/decoding to a remote macOS machine (Apple Silicon/T2) over LAN.
+**Goal**: Offload FFmpeg H.264/HEVC encoding/decoding to a remote macOS 13+ machine, including macOS 27, over LAN.
 
 ## What It Does
-VideoToolbox Remote turns any Mac on a LAN into a hardware H.264/HEVC transcoding server. FFmpeg clients on Linux, Windows, or macOS connect over TCP using drop-in codec replacements (`h264_videotoolbox_remote`, `hevc_videotoolbox_remote`). No pipeline changes required — it appears as a standard `-c:v` option.
+VideoToolbox Remote turns an Apple Silicon or T2 Mac on a LAN into a hardware H.264/HEVC transcoding server. FFmpeg clients on Linux, Windows, or macOS connect over TCP using drop-in codec replacements (`h264_videotoolbox_remote`, `hevc_videotoolbox_remote`). No pipeline changes required; it appears as a standard `-c:v` option.
 
 ## Core Architecture
 - **Server (`vtremoted`)**: Swift daemon on macOS wrapping the VideoToolbox API. Listens on TCP (default 5555).
@@ -37,7 +37,7 @@ cd vtremoted && swift build -c release
 ```
 
 ### 2. Build Client (Linux/Mac/Windows)
-Requires `liblz4`, `libzstd`.
+The FFmpeg client build requires `liblz4` and `libzstd`.
 ```bash
 cd ffmpeg
 ./configure --enable-videotoolbox-remote --enable-liblz4 --enable-libzstd
@@ -60,9 +60,9 @@ make -j$(nproc)
 - **Streaming**: `FRAME` (pixel data) <-> `PACKET` (encoded bytes).
 - **Teardown**: `FLUSH` -> `DONE`.
 - **Framing**: 12-byte header (magic `VTR1`, version, type, length).
-- **Wire compression**: LZ4 (default), Zstd, or none.
+- **Wire compression**: LZ4, Zstd, or none. The FFmpeg/OBS default is LZ4; the macOS server loads LZ4/Zstd at runtime only when a client requests that compression mode.
 
-## Performance (Apple Silicon, loopback benchmark, v0.3.0)
+## Performance (Apple Silicon, loopback benchmark, v0.6.0)
 - 1080p H.264: ~230 fps (7.6x realtime at 30fps source).
 - 1080p HEVC: ~210 fps (7.0x realtime).
 - 4K H.264: ~62 fps (2.1x realtime).
