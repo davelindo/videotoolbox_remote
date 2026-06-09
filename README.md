@@ -44,7 +44,7 @@ The system consists of:
 
 ### Prerequisites
 
-- **Server**: A Mac with Apple Silicon (M1/M2/M3) or T2 Security Chip running macOS.
+- **Server**: A Mac with Apple Silicon or a T2 Security Chip running macOS 13 or newer, including macOS 27.
 - **Client**: Linux, Windows, or macOS.
 - **Network**: Wired LAN (1GbE minimum, 2.5GbE+ recommended for 4K).
 
@@ -57,6 +57,10 @@ cd vtremoted
 swift build -c release
 # Binary created at: .build/release/vtremoted
 ```
+
+The Swift package and top-level Makefile default to a macOS 13.0 deployment target. Building on macOS 27 or with a newer SDK should not raise the minimum OS unless you explicitly override `MACOSX_DEPLOYMENT_TARGET`.
+
+LZ4 and Zstd are loaded at runtime only when a client requests wire compression. Default FFmpeg/OBS clients request LZ4, so install `lz4` on the server for normal compressed sessions and `zstd` if you use `-vt_remote_wire_compression zstd`; the daemon can still start without them.
 
 #### 2. Build the Client (Linux/Windows/macOS)
 

@@ -7,6 +7,13 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
+## [v0.6.0] - 2026-06-09
+
+### Changed
+- Bumped the packaged `vtremoted --version` output to `0.6.0`.
+- Pinned the default `MACOSX_DEPLOYMENT_TARGET` to `13.0` (previously the active SDK version) so builds made on macOS 27 or newer SDKs remain compatible with earlier supported macOS releases.
+- Removed hard Homebrew `liblz4`/`libzstd` load commands from the macOS server binary; wire compression now loads those libraries at runtime and fails unsupported compression requests during configure when a library is unavailable.
+
 ## [v0.5.15] - 2026-06-08
 
 ### Changed

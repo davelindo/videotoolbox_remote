@@ -14,7 +14,7 @@ Follow these steps to set up the macOS server and build the FFmpeg client.
 
 ## Prerequisites
 
-- **Server**: A Mac with Apple Silicon (M1/M2/M3) or T2 Security Chip running macOS.
+- **Server**: A Mac with Apple Silicon or a T2 Security Chip running macOS 13 or newer, including macOS 27.
 - **Client**: Linux, Windows, or macOS. Prebuilt Linux artifacts target `x86_64`; 32-bit `i686` builds are not part of the supported release matrix.
 - **Network**: Wired LAN is strongly recommended (1GbE minimum, 2.5GbE+ for 4K).
 
@@ -31,10 +31,14 @@ Follow these steps to set up the macOS server and build the FFmpeg client.
     brew install lz4 zstd pkg-config
     ```
 
+    `vtremoted` loads `lz4` and `zstd` at runtime instead of requiring them to start. Default FFmpeg/OBS clients request LZ4 wire compression, so keep `lz4` installed for normal sessions and `zstd` installed if clients use Zstd.
+
 3.  **Build the server**:
     ```bash
     make build-vtremoted
     ```
+
+    The default macOS deployment target is `13.0`, even when building on macOS 27 or with a newer SDK. Override `MACOSX_DEPLOYMENT_TARGET` only when you intentionally want a newer minimum OS.
 
 4.  **Run the server**:
     ```bash
@@ -58,7 +62,7 @@ Follow these steps to set up the macOS server and build the FFmpeg client.
 On your Linux or Windows machine (or the same Mac if testing locally):
 
 1.  **Install build dependencies**:
-    - Ensure `liblz4`, `libzstd`, `libvmaf`, and `pkg-config` are installed.
+    - Ensure `liblz4`, `libzstd`, `libvmaf`, and `pkg-config` are installed. `liblz4` is needed for the default LZ4 wire-compression mode; `libzstd` is needed only when requesting Zstd wire compression.
     - For AV1 and common codecs, install `libaom`, `libdav1d`, `libsvtav1`, `x264`, `x265`, `libvpx`, `opus`, `vorbis`, and `lame` development packages as well.
 
 2.  **Clone and build**:

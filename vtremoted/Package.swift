@@ -11,27 +11,9 @@ let package = Package(
         .executable(name: "vtremoted", targets: ["vtremoted"])
     ],
     targets: [
-        .systemLibrary(
-            name: "CLZ4",
-            path: "Sources/CLZ4",
-            pkgConfig: "liblz4",
-            providers: [
-                .brew(["lz4"]),
-                .apt(["liblz4-dev"])
-            ]
-        ),
-        .systemLibrary(
-            name: "CZstd",
-            path: "Sources/CZstd",
-            pkgConfig: "libzstd",
-            providers: [
-                .brew(["zstd"]),
-                .apt(["libzstd-dev"])
-            ]
-        ),
         .target(
             name: "VTRemotedCore",
-            dependencies: ["CLZ4", "CZstd"],
+            dependencies: [],
             path: "Sources/VTRemotedCore",
             swiftSettings: [
                 .define("VTR_SWIFT_PACKAGE")

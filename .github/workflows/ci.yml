@@ -80,6 +80,8 @@ jobs:
         run: |
           bash tests/test_nightly_change_classifier.sh
           bash tests/test_is_semver_tag.sh
+          bash tests/test_macos_deployment_target.sh
+          bash tests/test_vtremoted_package_shape.sh
           bash tests/test_ffmpeg_sync_subtree_shape.sh
           bash tests/test_next_patch_release.sh
           bash tests/test_parse_ffmpeg_sync_commit.sh
@@ -169,7 +171,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-swiftpm-
       - name: Install dependencies
-        run: brew install lz4 pkg-config
+        run: brew install lz4 zstd pkg-config
       - name: Build vtremoted
         run: |
           make build-vtremoted
@@ -214,7 +216,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-swiftpm-macos-x86_64-
       - name: Install dependencies
-        run: brew install lz4 pkg-config
+        run: brew install lz4 zstd pkg-config
       - name: Build vtremoted
         run: |
           make build-vtremoted

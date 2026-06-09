@@ -185,12 +185,15 @@
 
         private static func compressWirePayload(mode: Int, data: Data) -> Data? {
             switch mode {
+            case 0:
+                return data
             case 1:
                 return LZ4Codec.compress(data)
             case 2:
                 return ZstdCodec.compress(data)
             default:
-                return data
+                assertionFailure("unsupported wire compression mode \(mode)")
+                return nil
             }
         }
 
@@ -466,7 +469,10 @@
                 stride: Int,
                 rowBytes: Int
             ) throws {
-                guard let destination = Self.baseAddressAndStride(pixelBuffer: pBuffer, planeIndex: planeIndex) else { return }
+                guard let destination = Self.baseAddressAndStride(
+                    pixelBuffer: pBuffer,
+                    planeIndex: planeIndex
+                ) else { return }
                 let destBase = destination.base
                 let destStride = destination.stride
 
@@ -502,7 +508,7 @@
                 }
 
                 // Zero-copy access to source data
-                guard expectedSize > 0, rawRange.count > 0 else {
+                guard expectedSize > 0, !rawRange.isEmpty else {
                     throw VTRemotedError.protocolViolation("empty compressed plane")
                 }
                 let success: Bool = payload.withUnsafeBytes { payloadPtr in
@@ -735,7 +741,7 @@
                 defer { inputBufferPool.return(temp) }
                 if temp.count != expectedSize { temp.count = expectedSize }
 
-                guard expectedSize > 0, compressed.count > 0 else {
+                guard expectedSize > 0, !compressed.isEmpty else {
                     throw VTRemotedError.protocolViolation("empty compressed plane")
                 }
                 let success: Bool = compressed.withUnsafeBytes { compressedPtr in

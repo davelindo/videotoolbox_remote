@@ -1,5 +1,61 @@
 import Foundation
 
+public struct CodecAvailability: Sendable {
+    private let lz4AvailableProbe: @Sendable () -> Bool
+    private let zstdAvailableProbe: @Sendable () -> Bool
+    private let lz4DiagnosticsProbe: @Sendable () -> String
+    private let zstdDiagnosticsProbe: @Sendable () -> String
+
+    public init(
+        lz4Available: Bool,
+        zstdAvailable: Bool,
+        lz4Diagnostics: String,
+        zstdDiagnostics: String
+    ) {
+        lz4AvailableProbe = { lz4Available }
+        zstdAvailableProbe = { zstdAvailable }
+        lz4DiagnosticsProbe = { lz4Diagnostics }
+        zstdDiagnosticsProbe = { zstdDiagnostics }
+    }
+
+    public static var runtime: CodecAvailability {
+        CodecAvailability(
+            lz4Available: { LZ4Codec.isAvailable },
+            zstdAvailable: { ZstdCodec.isAvailable },
+            lz4Diagnostics: { LZ4Codec.loadDiagnostics },
+            zstdDiagnostics: { ZstdCodec.loadDiagnostics }
+        )
+    }
+
+    public init(
+        lz4Available: @Sendable @escaping () -> Bool,
+        zstdAvailable: @Sendable @escaping () -> Bool,
+        lz4Diagnostics: @Sendable @escaping () -> String,
+        zstdDiagnostics: @Sendable @escaping () -> String
+    ) {
+        lz4AvailableProbe = lz4Available
+        zstdAvailableProbe = zstdAvailable
+        lz4DiagnosticsProbe = lz4Diagnostics
+        zstdDiagnosticsProbe = zstdDiagnostics
+    }
+
+    public var lz4Available: Bool {
+        lz4AvailableProbe()
+    }
+
+    public var zstdAvailable: Bool {
+        zstdAvailableProbe()
+    }
+
+    public var lz4Diagnostics: String {
+        lz4DiagnosticsProbe()
+    }
+
+    public var zstdDiagnostics: String {
+        zstdDiagnosticsProbe()
+    }
+}
+
 public final class VTRClientHandler: @unchecked Sendable {
     private let messageIO: VTRMessageIO
     private let expectedToken: String
@@ -11,6 +67,7 @@ public final class VTRClientHandler: @unchecked Sendable {
     private let serverVersion: String
     private let serverCapabilities: [String]
     private let serverSessionSnapshot: () -> (maxSessions: Int, activeSessions: Int)
+    private let codecAvailability: CodecAvailability
 
     private let handshakeTimeoutSeconds: Int
     private let idleTimeoutSeconds: Int
@@ -61,6 +118,7 @@ public final class VTRClientHandler: @unchecked Sendable {
         serverVersion: String = "unknown",
         serverCapabilities: [String] = VTRCapability.baseline,
         serverSessionSnapshot: @escaping () -> (maxSessions: Int, activeSessions: Int) = { (0, 0) },
+        codecAvailability: CodecAvailability = .runtime,
         sessionFactory: @escaping SessionFactory = CodecSessionFactory.make
     ) {
         self.messageIO = messageIO
@@ -73,6 +131,7 @@ public final class VTRClientHandler: @unchecked Sendable {
         self.serverVersion = serverVersion
         self.serverCapabilities = serverCapabilities
         self.serverSessionSnapshot = serverSessionSnapshot
+        self.codecAvailability = codecAvailability
         self.sessionFactory = sessionFactory
     }
 
@@ -213,11 +272,7 @@ public final class VTRClientHandler: @unchecked Sendable {
         let request = try ConfigureRequest.decode(payload)
         let config = try SessionConfiguration(codec: codec, request: request)
 
-        let wireComp = config.options.wireCompression
-        if wireComp != 0, wireComp != 1, wireComp != 2 {
-            try sendErrorThrowing(code: 1, message: "unsupported wire_compression=\(wireComp)")
-            throw VTRemotedError.unsupported("wire_compression")
-        }
+        try validateWireCompression(config.options.wireCompression)
 
         logger.info(
             "CONFIGURE req mode=\(config.mode.rawValue) codec=\(config.codec.rawValue) " +
@@ -267,6 +322,25 @@ public final class VTRClientHandler: @unchecked Sendable {
             logger.error("CONFIGURE failed mode=\(config.mode.rawValue) codec=\(config.codec.rawValue) error=\(error)")
             try sendErrorThrowing(code: 1, message: "configure failed: \(error)")
             throw error
+        }
+    }
+
+    private func validateWireCompression(_ wireCompression: Int) throws {
+        // Wire compression modes: 0=none, 1=LZ4, 2=Zstd.
+        if wireCompression != 0, wireCompression != 1, wireCompression != 2 {
+            logger.error("CONFIGURE rejected: unsupported wire_compression=\(wireCompression)")
+            try sendErrorThrowing(code: 1, message: "unsupported wire_compression=\(wireCompression)")
+            throw VTRemotedError.unsupported("wire_compression")
+        }
+        if wireCompression == 1, !codecAvailability.lz4Available {
+            logger.error("CONFIGURE rejected: lz4 codec unavailable; \(codecAvailability.lz4Diagnostics)")
+            try sendErrorThrowing(code: 1, message: "wire_compression=lz4 unavailable")
+            throw VTRemotedError.unsupported("wire_compression=lz4")
+        }
+        if wireCompression == 2, !codecAvailability.zstdAvailable {
+            logger.error("CONFIGURE rejected: zstd codec unavailable; \(codecAvailability.zstdDiagnostics)")
+            try sendErrorThrowing(code: 1, message: "wire_compression=zstd unavailable")
+            throw VTRemotedError.unsupported("wire_compression=zstd")
         }
     }
 

@@ -81,6 +81,27 @@ case "$kind" in
       exit 1
     fi
 
+    if ! command -v otool >/dev/null 2>&1; then
+      echo "otool is required to smoke-test vtremoted release artifacts" >&2
+      exit 1
+    fi
+    if otool -L "$vtremoted_bin" | grep -Eq '/(opt/homebrew|usr/local)/(Cellar|opt|lib)/'; then
+      echo "vtremoted artifact must not require absolute Homebrew dylibs" >&2
+      otool -L "$vtremoted_bin" >&2
+      exit 1
+    fi
+
+    if ! command -v vtool >/dev/null 2>&1; then
+      echo "vtool is required to smoke-test vtremoted release artifacts" >&2
+      exit 1
+    fi
+    minos="$(vtool -show-build "$vtremoted_bin" 2>/dev/null | awk '/minos / { print $2; exit }')"
+    if [[ "${minos}" != "13.0" ]]; then
+      echo "expected vtremoted minimum macOS 13.0, got ${minos:-<unknown>}" >&2
+      vtool -show-build "$vtremoted_bin" >&2 || true
+      exit 1
+    fi
+
     "$vtremoted_bin" --version | grep -Eq '^vtremoted [0-9]+\.[0-9]+\.[0-9]+'
     "$vtremoted_bin" --help | grep -q -- '--listen HOST:PORT'
     ;;

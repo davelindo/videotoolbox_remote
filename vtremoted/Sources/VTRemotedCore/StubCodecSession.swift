@@ -24,6 +24,8 @@ final class StubCodecSession: CodecSession {
 
     private func maybeDecompress(_ data: Data, expectedSize: Int, compressionMode: Int) throws -> Data {
         switch compressionMode {
+        case 0:
+            return data
         case 1:
             guard let decoded = LZ4Codec.decompress(data, expectedSize: expectedSize) else {
                 throw VTRemotedError.protocolViolation("LZ4 decode failed")
@@ -35,12 +37,14 @@ final class StubCodecSession: CodecSession {
             }
             return decoded
         default:
-            return data
+            throw VTRemotedError.protocolViolation("unsupported wire compression mode \(compressionMode)")
         }
     }
 
     private func maybeCompress(_ data: Data, compressionMode: Int) throws -> Data {
         switch compressionMode {
+        case 0:
+            return data
         case 1:
             guard let compressed = LZ4Codec.compress(data) else {
                 throw VTRemotedError.protocolViolation("LZ4 compress failed")
@@ -52,7 +56,7 @@ final class StubCodecSession: CodecSession {
             }
             return compressed
         default:
-            return data
+            throw VTRemotedError.protocolViolation("unsupported wire compression mode \(compressionMode)")
         }
     }
 
@@ -112,7 +116,7 @@ final class StubCodecSession: CodecSession {
         let adjustedPts: Int64
         let dts: Int64
         switch result {
-        case .emit(let ptsValue, let dtsValue, _):
+        case let .emit(ptsValue, dtsValue, _):
             adjustedPts = ptsValue
             dts = dtsValue
         }
