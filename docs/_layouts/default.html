@@ -1,27 +1,37 @@
 <!doctype html>
 <html lang="en">
 
+{% if page.title and page.title != site.title %}
+  {% assign full_title = page.title | append: " | " | append: site.title %}
+{% else %}
+  {% assign full_title = site.title %}
+{% endif %}
+{% assign license_url = site.repository_url | append: "/blob/main/LICENSE.md" %}
+
 <head>
   <meta charset="utf-8" />
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{{ page.title | default: site.title }}</title>
-  <meta name="description" content="{{ page.description | default: site.description }}" />
+  <title>{{ full_title | escape }}</title>
+  <meta name="description" content="{{ page.description | default: site.description | escape }}" />
+  <meta name="keywords" content="remote VideoToolbox FFmpeg, Mac hardware transcoding server, Apple Silicon FFmpeg encoder, H.264 HEVC LAN transcoding, VideoToolbox remote encoder" />
   <link rel="canonical" href="{{ page.url | absolute_url }}" />
 
   <!-- Open Graph -->
-  <meta property="og:title" content="{{ page.title | default: site.title }}" />
-  <meta property="og:description" content="{{ page.description | default: site.description }}" />
+  <meta property="og:title" content="{{ full_title | escape }}" />
+  <meta property="og:description" content="{{ page.description | default: site.description | escape }}" />
   <meta property="og:url" content="{{ page.url | absolute_url }}" />
   <meta property="og:site_name" content="{{ site.title }}" />
   <meta property="og:type" content="website" />
   <meta property="og:image" content="{{ '/assets/og-image.png' | absolute_url }}" />
+  <meta property="og:image:alt" content="VideoToolbox Remote diagram showing Linux and Windows FFmpeg clients using a macOS server for H.264 and HEVC encoding over LAN" />
 
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="{{ page.title | default: site.title }}" />
-  <meta name="twitter:description" content="{{ page.description | default: site.description }}" />
+  <meta name="twitter:title" content="{{ full_title | escape }}" />
+  <meta name="twitter:description" content="{{ page.description | default: site.description | escape }}" />
   <meta name="twitter:image" content="{{ '/assets/og-image.png' | absolute_url }}" />
+  <meta name="twitter:image:alt" content="VideoToolbox Remote diagram showing FFmpeg clients sending video work to a macOS VideoToolbox server" />
 
   <!-- JSON-LD Structured Data -->
   <script type="application/ld+json">
@@ -29,12 +39,19 @@
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
     "name": "VideoToolbox Remote",
-    "description": "{{ site.description | xml_escape }}",
-    "url": "{{ '/' | absolute_url }}",
+    "description": {{ site.description | jsonify }},
+    "url": {{ '/' | absolute_url | jsonify }},
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "macOS, Linux, Windows",
-    "license": "https://www.gnu.org/licenses/lgpl-2.1.html",
-    "codeRepository": "https://github.com/davelindo/videotoolbox_remote",
+    "softwareVersion": {{ site.current_release | jsonify }},
+    "license": {{ license_url | jsonify }},
+    "downloadUrl": {{ site.latest_release_url | jsonify }},
+    "releaseNotes": {{ site.repository_url | append: "/releases/tag/" | append: site.current_release | jsonify }},
+    "codeRepository": {{ site.repository_url | jsonify }},
+    "sameAs": [
+      {{ site.repository_url | jsonify }},
+      {{ site.latest_release_url | jsonify }}
+    ],
     "author": {
       "@type": "Person",
       "name": "Dave Lindon"
@@ -53,6 +70,7 @@
       <label class="nav-toggle-label" for="nav-toggle" aria-label="Toggle navigation">☰</label>
       <nav class="nav-links">
         <a href="{{ '/getting-started.html' | relative_url }}">Getting Started</a>
+        <a href="{{ '/benchmarks.html' | relative_url }}">Benchmarks</a>
         <a href="{{ '/architecture.html' | relative_url }}">Architecture</a>
         <a href="{{ '/protocol.html' | relative_url }}">Protocol</a>
         <a href="{{ '/troubleshooting.html' | relative_url }}">Troubleshooting</a>

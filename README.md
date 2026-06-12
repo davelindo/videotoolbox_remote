@@ -1,27 +1,30 @@
 # VideoToolbox Remote
 
-![Build Status](https://img.shields.io/badge/build-passing-brightgreen) ![License](https://img.shields.io/badge/license-LGPLv2.1%2B-blue) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
+[![CI](https://github.com/davelindo/videotoolbox_remote/actions/workflows/ci.yml/badge.svg)](https://github.com/davelindo/videotoolbox_remote/actions/workflows/ci.yml)
+[![Docs](https://github.com/davelindo/videotoolbox_remote/actions/workflows/pages.yml/badge.svg)](https://davelindo.github.io/videotoolbox_remote/)
+[![Latest release](https://img.shields.io/github/v/release/davelindo/videotoolbox_remote?label=release)](https://github.com/davelindo/videotoolbox_remote/releases/latest)
+[![License](https://img.shields.io/badge/license-LGPLv2.1%2B-blue)](LICENSE.md)
+[![Platform](https://img.shields.io/badge/server-macOS%2013%2B-lightgrey)](docs/getting-started.md)
 
-**Remote VideoToolbox for FFmpeg: use a Mac or Apple Silicon system over LAN as an IP-based H.264/HEVC encode/decode/transcoding accelerator.**
+**Remote VideoToolbox for FFmpeg: use a Mac or Apple Silicon system over LAN as an IP-based H.264/HEVC encode, decode, and transcoding accelerator.**
 
-VideoToolbox Remote is a networked FFmpeg accelerator that lets you use a Mac as a transcoding server. An FFmpeg client on Linux, Windows, or macOS can offload H.264/HEVC encode, decode, or full transcode jobs to VideoToolbox running on a remote Apple Silicon or T2 Mac over LAN.
+VideoToolbox Remote turns a Mac into a networked FFmpeg hardware transcoding server. Linux, Windows, and macOS clients run the included FFmpeg client locally, keep their normal input, filter, audio, subtitle, and muxing pipeline, and offload H.264/HEVC media work to VideoToolbox on a remote Apple Silicon or T2 Mac.
 
-Think of it as remote VideoToolbox over IP: FFmpeg stays local for I/O, filters, and muxing, while the Mac contributes hardware acceleration for video encoding, decoding, or packet-in/packet-out transcoding.
+This is useful when your FFmpeg workflow lives on a Linux box, Windows workstation, NAS, or homelab server, but the fastest hardware encoder available to you is a Mac on the same LAN.
 
-## Quick start from Releases
+## Try It in 1 Minute
 
-If you want to try it before building from source, start with the prebuilt binaries in the [latest release](https://github.com/davelindo/videotoolbox_remote/releases/latest).
+Download prebuilt binaries from the [latest release](https://github.com/davelindo/videotoolbox_remote/releases/latest).
 
-1. Download `vtremoted-macos-arm64.tar.gz` or `vtremoted-macos-x86_64.tar.gz` for the Mac that will run the server.
-2. Download the matching FFmpeg client tarball for Linux, macOS, or Windows from the same release page.
-3. Start the server on the Mac:
+On the Mac that will run VideoToolbox:
 
 ```bash
 tar -xzf vtremoted-macos-arm64.tar.gz
-./vtremoted/vtremoted --listen 0.0.0.0:5555 --log-level 1
+# Trusted private LAN only. Never expose this port directly to the internet.
+./vtremoted/vtremoted --listen <MAC_PRIVATE_IP>:5555 --log-level 1
 ```
 
-4. Run a remote encode from the client:
+On the FFmpeg client:
 
 ```bash
 mkdir -p ffmpeg-client
@@ -33,115 +36,139 @@ tar -xzf ffmpeg-linux-x86_64.tar.gz -C ffmpeg-client
   output.mkv
 ```
 
-## How it works
+Start with the [getting started guide](docs/getting-started.md) for setup, security notes, and platform-specific build instructions.
 
-The system consists of:
-- **Server (`vtremoted`)**: A lightweight Swift daemon running on macOS that wraps the VideoToolbox API.
-- **Client**: A modified FFmpeg with custom `h264_videotoolbox_remote` and `hevc_videotoolbox_remote` codecs.
-- **OBS Plugin (`obs-plugin/`)**: Experimental OBS encoder plugin using the same vtremoted protocol client.
+## Which Asset Do I Need?
 
-## How users can get started
+| Asset | Use it for |
+| --- | --- |
+| `vtremoted-macos-arm64.tar.gz` | macOS server binary for Apple Silicon Macs |
+| `vtremoted-macos-x86_64.tar.gz` | macOS server binary for Intel Macs |
+| `ffmpeg-linux-x86_64.tar.gz` | FFmpeg client build for Linux x86_64 |
+| `ffmpeg-macos-arm64.tar.gz` | FFmpeg client build for Apple Silicon Macs |
+| `ffmpeg-macos-x86_64.tar.gz` | FFmpeg client build for Intel Macs |
+| `ffmpeg-windows-x86_64.tar.gz` | FFmpeg client build for Windows x86_64 |
+| `SHA256SUMS.txt` | Checksums for release tarballs |
 
-### Prerequisites
+## When to Use It
 
-- **Server**: A Mac with Apple Silicon or a T2 Security Chip running macOS 13 or newer, including macOS 27.
-- **Client**: Linux, Windows, or macOS.
-- **Network**: Wired LAN (1GbE minimum, 2.5GbE+ recommended for 4K).
+Good fit:
 
-### Build from source
+- Homelab and NAS media automation where FFmpeg runs on Linux or Windows.
+- Batch transcodes where a Mac on wired LAN can provide faster H.264/HEVC hardware encoding.
+- Pipelines that need standard FFmpeg behavior while only swapping the video codec name.
+- Remote transcode jobs where compressed packets can cross the network and decode+encode happens on the Mac.
 
-#### 1. Build the Server (macOS)
+Not a good fit:
 
-```bash
-cd vtremoted
-swift build -c release
-# Binary created at: .build/release/vtremoted
-```
+- Untrusted networks without an SSH tunnel, VPN, or equivalent network isolation.
+- Workflows that require public internet exposure of the daemon.
+- GPU codecs outside VideoToolbox H.264/HEVC support.
 
-The Swift package and top-level Makefile default to a macOS 13.0 deployment target. Building on macOS 27 or with a newer SDK should not raise the minimum OS unless you explicitly override `MACOSX_DEPLOYMENT_TARGET`.
+## How It Works
 
-LZ4 and Zstd are loaded at runtime only when a client requests wire compression. Default FFmpeg/OBS clients request LZ4, so install `lz4` on the server for normal compressed sessions and `zstd` if you use `-vt_remote_wire_compression zstd`; the daemon can still start without them.
+The system has three main parts:
 
-#### 2. Build the Client (Linux/Windows/macOS)
+- **Server (`vtremoted`)**: A lightweight Swift daemon on macOS that wraps VideoToolbox.
+- **FFmpeg client**: A patched FFmpeg build with `h264_videotoolbox_remote` and `hevc_videotoolbox_remote` codecs.
+- **OBS plugin (`obs-plugin/`)**: Experimental OBS encoder plugin using the same protocol client.
 
-The standard build enables **VMAF**, **SSIM/PSNR**, and common codec libraries (including AV1).
-You will need the corresponding development headers installed (see `docs/development.md` for platform notes).
-Linux release artifacts and CI builds target `x86_64`; 32-bit `i686` builds are not part of the supported matrix.
+FFmpeg stays local for files, filters, audio, subtitles, and muxing. The remote codec sends video work over TCP to the Mac and receives encoded packets or decoded frames back.
 
-```bash
-make build-ffmpeg
-```
+## Operating Modes
 
-If a Linux source build fails in FFmpeg x86 assembly after installing current `nasm` and `yasm`, use the compatibility fallback:
+### Remote Encode
 
-```bash
-make build-ffmpeg FFMPEG_DISABLE_X86ASM=1
-```
+Send raw frames to the Mac and receive compressed H.264/HEVC packets:
 
-*(On macOS, you can use `make build` in the root directory to build both server and client.)*
-
-### Usage Examples
-
-Start the server on your Mac:
-```bash
-# Default is loopback-only (safe). For LAN clients, bind explicitly:
-./vtremoted --listen 0.0.0.0:5555 --log-level 1
-```
-
-#### Remote Encode (Client -> Server)
-Encode a video on the client using the remote Mac:
 ```bash
 ffmpeg -i input.mkv \
   -c:v h264_videotoolbox_remote \
   -vt_remote_host <MAC_IP>:5555 \
   -b:v 6000k \
+  -c:a copy -c:s copy \
   output.mkv
 ```
 
-#### Remote Transcode (Packet In -> Packet Out)
-Ideal for weak clients. Decoding, scaling, and encoding happen on the server:
+### Remote Decode
+
+Send H.264/HEVC packets to the Mac and receive raw frames for the rest of the local FFmpeg pipeline.
+
+### Remote Transcode
+
+Send compressed packets to the Mac and receive compressed packets back. Decode, optional server-side resize/pixel-format conversion where configured, and encode happen on the Mac; FFmpeg filters, audio, subtitles, and muxing remain local on the client.
+
 ```bash
 ffmpeg -i input.mkv \
-  -c:v hevc_videotoolbox_remote \
-  -vt_remote_transcode \
-  -vt_remote_host <MAC_IP>:5555 \
+  -map 0 \
+  -c copy \
+  -vt_remote_transcode:v:0 \
+  -vt_remote_host <MAC_IP> \
+  -vt_remote_port 5555 \
+  -vt_remote_out_codec:v:0 hevc \
+  -b:v:0 6000k \
   output.mkv
 ```
 
-## Parity Status
+## Performance and Compatibility
 
-Current coverage:
-- Encoder option-surface parity checks for `h264/hevc_videotoolbox` vs `h264/hevc_videotoolbox_remote` (excluding `vt_remote_*` transport options) via `tests/integration/run_option_surface_parity.sh`.
-- Remote encoder software-frame upload parity:
-  - H.264: `nv12`, `yuv420p`
-  - HEVC: `nv12`, `yuv420p`, `p010le`, `yuv420p10le`, `yuv420p10be`, `bgra`, `ayuv`, `p210le`
+- Wired LAN is strongly recommended: 1GbE minimum, 2.5GbE+ for 4K.
+- Wire compression supports LZ4 and Zstd; default clients request LZ4.
+- Current benchmark docs report 1080p H.264 around 230 fps and 4K H.264 around 62 fps on Apple Silicon loopback tests. See [benchmarks](docs/benchmarks.md) for caveats and reproduction commands.
+- The remote codecs aim to preserve local VideoToolbox option behavior where the transport and protocol can represent it.
+
+Current parity coverage includes:
+
+- Encoder option-surface parity checks for `h264/hevc_videotoolbox` vs `h264/hevc_videotoolbox_remote`.
+- Remote encoder software-frame upload parity for common 8-bit and 10-bit formats.
 - Remote encoder hardware-frame ingest for local `AV_PIX_FMT_VIDEOTOOLBOX` inputs.
 - Optional remote decoder hardware-frame output with `-vt_remote_output_hw_frames 1`.
-- Expanded frame and packet side-data forwarding for common HDR, ICC, display, timecode, Dolby Vision, SEI, caption, and mux-facing metadata.
-- `vtremote_transcode` preserves HEVC `hvc1`/HDR signaling and carries packet side data across packet-in/packet-out paths.
+- Common HDR, ICC, display, timecode, Dolby Vision, SEI, caption, and mux-facing metadata forwarding.
+- `vtremote_transcode` preservation for HEVC `hvc1`/HDR signaling and packet side data.
 
-The expanded 0.4.1 media surface requires a 0.4.1-capable `vtremoted` for hardware-frame paths, HEVC `bgra`/`ayuv`/`p210le`, and PACKET side-data forwarding. Older servers continue to support pre-existing software-frame paths and fail unsupported 0.4.1 requests during configure.
+## Build From Source
 
-## Why the project is useful
+### Server on macOS
 
-- **Hardware Acceleration Everywhere**: Enable hardware encoding on Linux/Windows machines that lack capable GPUs by using a networked Mac.
-- **High Performance**: Optimized for low-latency LAN environments (1GbE+ recommended).
-- **Flexibility**: Supports three modes to fit different network/CPU constraints:
-    - **Remote Encode**: Send raw frames to Mac, get compressed packets back.
-    - **Remote Decode**: Send compressed packets to Mac, get raw frames back.
-    - **Remote Transcode**: Send compressed packets, decode+process+encode on Mac, receive compressed packets (saves bandwidth and client CPU).
-- **Standard FFmpeg Integration**: Works like any other FFmpeg codec, fitting seamlessly into existing pipelines.
+```bash
+cd vtremoted
+swift build -c release
+```
 
-## Where users can get help
+The Swift package and top-level Makefile default to a macOS 13.0 deployment target. LZ4 and Zstd are loaded at runtime only when a client requests wire compression.
 
-- **Architecture**: [docs/architecture.md](docs/architecture.md) - System design and data flow.
-- **OBS Plugin**: [docs/obs-plugin.md](docs/obs-plugin.md) - Experimental plugin build/testing notes.
-- **Protocol**: [docs/protocol.md](docs/protocol.md) - Wire protocol specification.
-- **Troubleshooting**: [docs/troubleshooting.md](docs/troubleshooting.md) - Common issues and fixes.
-- **Security**: [docs/security.md](docs/security.md) - Recommended secure deployment.
+### Client on Linux, Windows, or macOS
 
-## Who maintains and contributes
+```bash
+make build-ffmpeg
+```
 
-We welcome contributions! Please see [docs/development.md](docs/development.md) for build instructions, testing/benchmarking scripts, and development notes.
+The standard build enables VMAF, SSIM/PSNR, and common codec libraries, including AV1. Linux release artifacts and CI builds target `x86_64`; 32-bit `i686` builds are not part of the supported matrix.
 
-**License**: This project follows FFmpeg-style licensing (LGPL v2.1+ with optional GPL parts). See [LICENSE.md](LICENSE.md) and [ffmpeg/LICENSE.md](ffmpeg/LICENSE.md).
+If a Linux source build fails in FFmpeg x86 assembly after installing current `nasm` and `yasm`, use the diagnostic fallback:
+
+```bash
+make clean-ffmpeg
+make build-ffmpeg FFMPEG_DISABLE_X86ASM=1
+```
+
+## Documentation
+
+- [Getting started](docs/getting-started.md) - Install binaries, run the server, and make the first FFmpeg call.
+- [Benchmarks](docs/benchmarks.md) - Performance numbers, caveats, and reproduction commands.
+- [Architecture](docs/architecture.md) - System design and data flow.
+- [Protocol](docs/protocol.md) - Wire protocol specification.
+- [Security](docs/security.md) - Recommended secure deployment.
+- [Troubleshooting](docs/troubleshooting.md) - Common issues and fixes.
+- [OBS plugin](docs/obs-plugin.md) - Experimental plugin build/testing notes.
+- [Development](docs/development.md) - Build, test, benchmark, and release notes.
+
+## Contributing and Support
+
+Issues and pull requests are welcome. Please include the server platform, client platform, exact FFmpeg command, `vtremoted --version`, release tag or commit, and relevant logs when reporting a problem.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflow and [SECURITY.md](SECURITY.md) for security reporting.
+
+## License
+
+This project follows FFmpeg-style licensing: LGPL v2.1+ by default, with optional GPL parts depending on how FFmpeg is configured. See [LICENSE.md](LICENSE.md), [COPYING.LGPLv2.1](COPYING.LGPLv2.1), and [ffmpeg/LICENSE.md](ffmpeg/LICENSE.md).

@@ -1,16 +1,16 @@
 ---
 title: Getting Started
-description: "Install the vtremoted server on macOS and build the FFmpeg client on Linux, Windows, or macOS. Prebuilt binaries available from GitHub releases."
+description: "Install the vtremoted macOS server and FFmpeg client binaries, then use remote VideoToolbox over LAN for H.264/HEVC encode, decode, or transcode jobs."
 ---
 
 # Getting Started
 
-VideoToolbox Remote turns a Mac into a networked FFmpeg accelerator. Use this guide if you want to use a Mac as a transcoding server and point FFmpeg at remote VideoToolbox over LAN for H.264/HEVC encode, decode, or full transcode jobs.
+VideoToolbox Remote turns a Mac into a networked FFmpeg accelerator. Use this guide if you want a Linux, Windows, or macOS FFmpeg client to use remote VideoToolbox over LAN for H.264/HEVC encode, decode, or full transcode jobs.
 
 > [!TIP]
 > Want the fastest first run? Download the prebuilt `vtremoted-*` and `ffmpeg-*` tarballs from the [latest release](https://github.com/davelindo/videotoolbox_remote/releases/latest), then use the same launch and FFmpeg commands shown below.
 
-Follow these steps to set up the macOS server and build the FFmpeg client.
+Follow these steps to set up the macOS server and a matching FFmpeg client.
 
 ## Prerequisites
 
@@ -19,6 +19,8 @@ Follow these steps to set up the macOS server and build the FFmpeg client.
 - **Network**: Wired LAN is strongly recommended (1GbE minimum, 2.5GbE+ for 4K).
 
 ## Step 1: Prepare the Mac (Server)
+
+For the fastest first run, download `vtremoted-macos-arm64.tar.gz` or `vtremoted-macos-x86_64.tar.gz` from the [latest release](https://github.com/davelindo/videotoolbox_remote/releases/latest), unpack it, and use the release-tarball command in step 4.
 
 1.  **Clone the repository**:
     ```bash
@@ -41,14 +43,22 @@ Follow these steps to set up the macOS server and build the FFmpeg client.
     The default macOS deployment target is `13.0`, even when building on macOS 27 or with a newer SDK. Override `MACOSX_DEPLOYMENT_TARGET` only when you intentionally want a newer minimum OS.
 
 4.  **Run the server**:
+
+    From a release tarball:
     ```bash
-    # Default is loopback-only (safe). For LAN clients, bind explicitly:
-    vtremoted/.build/release/vtremoted --listen 0.0.0.0:5555 --log-level 1
+    # Trusted private LAN only. Never expose this port directly to the internet.
+    ./vtremoted/vtremoted --listen <MAC_PRIVATE_IP>:5555 --log-level 1
+    ```
+
+    From a source build:
+    ```bash
+    # Trusted private LAN only. Never expose this port directly to the internet.
+    vtremoted/.build/release/vtremoted --listen <MAC_PRIVATE_IP>:5555 --log-level 1
     ```
 
     > [!TIP]
     > To install as a background service, run:
-    > `make install-vtremoted-restart VTREMOTED_LISTEN=0.0.0.0:5555`
+    > `make install-vtremoted-restart VTREMOTED_LISTEN=<MAC_PRIVATE_IP>:5555`
 
 5.  **Verify the server**:
     ```bash
@@ -58,6 +68,8 @@ Follow these steps to set up the macOS server and build the FFmpeg client.
     ```
 
 ## Step 2: Build FFmpeg (Client)
+
+For the fastest first run, download the matching `ffmpeg-*` client tarball for your client OS from the [latest release](https://github.com/davelindo/videotoolbox_remote/releases/latest).
 
 On your Linux or Windows machine (or the same Mac if testing locally):
 
@@ -93,15 +105,18 @@ ffmpeg -i input.mkv \
 ```
 
 ### Remote Transcode
-Send compressed packets to the Mac. The Mac decodes, processes, and re-encodes them.
+Send compressed packets to the Mac. The Mac handles the video decode-to-encode path, while FFmpeg I/O, filters outside vtremote transcode options, audio, subtitles, and muxing stay on the client.
 
 ```bash
 ffmpeg -i input.mkv \
-  -c:v hevc_videotoolbox_remote \
-  -vt_remote_transcode \
-  -vt_remote_host <MAC_IP>:5555 \
-  -b:v 6000k \
-output.mkv
+  -map 0 \
+  -c copy \
+  -vt_remote_transcode:v:0 \
+  -vt_remote_host <MAC_IP> \
+  -vt_remote_port 5555 \
+  -vt_remote_out_codec:v:0 hevc \
+  -b:v:0 6000k \
+  output.mkv
 ```
 
 ## Optional: OBS Plugin Smoke Test (Experimental)
@@ -117,5 +132,5 @@ This runs a mock-backed smoke test for connect/configure/frame/packet flow.
 ## Important Notes
 
 - **Compression**: Wire compression defaults to **LZ4** for all remote modes. Override with `-vt_remote_wire_compression lz4|zstd|none`, or use `auto` to choose based on resolution/FPS.
-- **Security**: Token auth is optional. See [Security](security.md) for details.
+- **Security**: Token auth is strongly recommended whenever binding beyond loopback. Tokens do not encrypt traffic, so use SSH tunnels or a VPN on untrusted networks. See [Security](security.md) for details.
 - **Optimization**: The server automatically optimizes VideoToolbox settings for batch encoding throughput.

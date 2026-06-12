@@ -126,6 +126,7 @@ make sync-github-metadata
 make release-notes TAG=v0.3.1
 make release-notes-all
 bash scripts/generate_release_notes.sh v0.3.1
+bash tests/test_llms_release_version.sh
 ```
 
 What they do:
@@ -133,6 +134,14 @@ What they do:
 - `make release-notes TAG=...` regenerates and applies the onboarding-style release body for one GitHub release.
 - `make release-notes-all` backfills all existing GitHub releases with the generated notes format.
 - `bash scripts/generate_release_notes.sh <tag>` previews the generated release body locally without editing GitHub.
+- `bash tests/test_llms_release_version.sh` verifies `docs/llms.txt` matches the latest changelog release.
+
+Release checklist:
+
+- Update `CHANGELOG.md`.
+- Update `docs/llms.txt` and `docs/_config.yml` when the public release changes.
+- Confirm the README, landing page CTA, and release notes still point to the latest release and getting-started flow.
+- Run `make sync-github-metadata` if description, homepage, or topics changed.
 
 ## Artifact Smoke Checks
 

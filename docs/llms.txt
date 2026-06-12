@@ -4,7 +4,7 @@ permalink: /llms.txt
 ---
 # VideoToolbox Remote (`videotoolbox_remote`) Briefing
 
-**Version**: v0.6.0
+**Version**: v0.6.2
 **License**: LGPL v2.1+
 **Goal**: Offload FFmpeg H.264/HEVC encoding/decoding to a remote macOS 13+ machine, including macOS 27, over LAN.
 
@@ -62,7 +62,7 @@ make -j$(nproc)
 - **Framing**: 12-byte header (magic `VTR1`, version, type, length).
 - **Wire compression**: LZ4, Zstd, or none. The FFmpeg/OBS default is LZ4; the macOS server loads LZ4/Zstd at runtime only when a client requests that compression mode.
 
-## Performance (Apple Silicon, loopback benchmark, v0.6.0)
+## Performance (Apple Silicon, loopback benchmark, v0.6.2)
 - 1080p H.264: ~230 fps (7.6x realtime at 30fps source).
 - 1080p HEVC: ~210 fps (7.0x realtime).
 - 4K H.264: ~62 fps (2.1x realtime).
@@ -80,5 +80,10 @@ make -j$(nproc)
 ## Supported Codecs & Formats
 - **Encoding**: H.264 (Baseline/Main/High), HEVC (Main, Main10)
 - **Decoding**: H.264, HEVC
-- **Pixel Formats**: NV12, YUV420P, P010LE, YUV420P10LE, YUV420P10BE
+- **Pixel Formats**: NV12, YUV420P, P010LE, YUV420P10LE, YUV420P10BE; HEVC expanded paths also negotiate BGRA, AYUV, and P210LE where the server/runtime supports them.
 - **Platforms**: macOS (server), Linux/Windows/macOS (client)
+
+## Release and Download Surface
+- Latest release: https://github.com/davelindo/videotoolbox_remote/releases/latest
+- Documentation: https://davelindo.github.io/videotoolbox_remote/
+- Benchmarks: https://davelindo.github.io/videotoolbox_remote/benchmarks.html

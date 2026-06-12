@@ -176,6 +176,7 @@ pre code {
   margin-top: 32px;
   display: flex;
   gap: 16px;
+  flex-wrap: wrap;
 }
 
 .btn {
@@ -247,7 +248,7 @@ pre code {
 }
 
 /* Mobile Nav */
-@media (max-width: 600px) {
+@media (max-width: 760px) {
   .nav-links {
     display: none;
     flex-direction: column;
