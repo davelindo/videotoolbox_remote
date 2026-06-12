@@ -1,5 +1,8 @@
 title: VideoToolbox Remote
-description: "Use any Mac on your LAN as a hardware H.264/HEVC transcoding server for FFmpeg. Drop-in VideoToolbox acceleration for Linux and Windows — no pipeline changes required."
+description: "Remote VideoToolbox for FFmpeg: use a Mac or Apple Silicon system over LAN as a hardware H.264/HEVC encode, decode, and transcoding server for Linux, Windows, and macOS clients."
+current_release: "v0.6.2"
+latest_release_url: "https://github.com/davelindo/videotoolbox_remote/releases/latest"
+repository_url: "https://github.com/davelindo/videotoolbox_remote"
 markdown: kramdown
 kramdown:
   input: GFM

@@ -5,6 +5,8 @@ on:
     branches: [ "main" ]
     paths:
       - "docs/**"
+      - "CHANGELOG.md"
+      - "tests/test_llms_release_version.sh"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -22,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Check docs release freshness
+        run: bash tests/test_llms_release_version.sh
       - uses: actions/configure-pages@v5
       - uses: actions/jekyll-build-pages@v1
         with:

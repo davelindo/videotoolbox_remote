@@ -8,12 +8,20 @@ topics=(
   videotoolbox
   ffmpeg
   transcoding
+  video-transcoding
   hardware-acceleration
+  hardware-encoding
   apple-silicon
   macos
+  media-server
+  self-hosted
+  homelab
+  video-processing
   video-encoding
   hevc
   h264
+  h265
+  lan
 )
 
 if ! command -v gh >/dev/null 2>&1; then

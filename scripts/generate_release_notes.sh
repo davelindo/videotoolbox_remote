@@ -20,6 +20,7 @@ getting_started_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/gettin
 troubleshooting_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/troubleshooting.md"
 security_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/security.md"
 architecture_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/architecture.md"
+benchmarks_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/benchmarks.md"
 changelog_url="https://github.com/${repo_slug}/blob/${doc_ref}/CHANGELOG.md"
 
 short_commit() {
@@ -152,6 +153,7 @@ EOF
 
 - [README](${readme_url})
 - [Getting started](${getting_started_url})
+- [Benchmarks](${benchmarks_url})
 - [Troubleshooting](${troubleshooting_url})
 - [Security](${security_url})
 - [Architecture](${architecture_url})

@@ -101,7 +101,7 @@ Common issues and their solutions.
    ```
 4. If using the Makefile install path, rebuild, reinstall, restart, and verify with:
    ```bash
-   make install-vtremoted-restart VTREMOTED_LISTEN=0.0.0.0:5555
+   make install-vtremoted-restart VTREMOTED_LISTEN=<MAC_PRIVATE_IP>:5555
    ```
 
 ## Encoding/Decoding

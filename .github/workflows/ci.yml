@@ -84,6 +84,7 @@ jobs:
           bash tests/test_vtremoted_package_shape.sh
           bash tests/test_ffmpeg_sync_subtree_shape.sh
           bash tests/test_next_patch_release.sh
+          bash tests/test_llms_release_version.sh
           bash tests/test_parse_ffmpeg_sync_commit.sh
           bash tests/test_update_changelog_for_ffmpeg_sync.sh
       - name: Classify scheduled changes
