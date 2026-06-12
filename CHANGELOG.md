@@ -7,6 +7,13 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
+## [v0.6.3] - 2026-06-12
+
+### Changed
+- Reworked the README and GitHub Pages landing content for faster first-run adoption, clearer release asset selection, operating modes, benchmark caveats, and security guidance.
+- Added benchmark documentation, contributor/security/community templates, issue templates, and pull request template coverage.
+- Added release metadata freshness checks for public docs and LLM briefing content.
+
 ## [v0.6.2] - 2026-06-11
 
 ### Changed
