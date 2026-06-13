@@ -159,7 +159,9 @@ jobs:
           } > ffmpeg/.subtree-sync.env
 
           FFMPEG_UPSTREAM_REF="${FFMPEG_UPSTREAM_REF}" bash scripts/update_changelog_for_ffmpeg_sync.sh "${NEXT_TAG}" "${OLD_SHA}" "${new_sha}"
-          git add ffmpeg/.subtree-sync.env CHANGELOG.md ffmpeg
+          perl -0pi -e 's/current_release: "[^"]+"/current_release: "$ENV{NEXT_TAG}"/' docs/_config.yml
+          perl -0pi -e 's/^\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+/**Version**: $ENV{NEXT_TAG}/m' docs/llms.txt
+          git add ffmpeg/.subtree-sync.env CHANGELOG.md docs/_config.yml docs/llms.txt ffmpeg
           message_file="$(mktemp)"
           trap 'rm -f "${message_file}"' EXIT
           {
