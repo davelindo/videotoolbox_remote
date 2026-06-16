@@ -21,9 +21,16 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: videotoolbox-remote-runner
     steps:
+      - name: Check runner platform
+        run: |
+          test "${RUNNER_OS}" = "Linux"
+          test "${RUNNER_ARCH}" = "X64"
+
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Check docs release freshness
         run: bash tests/test_llms_release_version.sh
       - uses: actions/configure-pages@v5
@@ -37,10 +44,15 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: videotoolbox-remote-runner
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Check runner platform
+        run: |
+          test "${RUNNER_OS}" = "Linux"
+          test "${RUNNER_ARCH}" = "X64"
+
       - uses: actions/deploy-pages@v4
         id: deployment
