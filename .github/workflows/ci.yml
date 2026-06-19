@@ -565,6 +565,8 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+      - name: Install GitHub CLI
+        run: bash scripts/install_github_cli.sh
       - name: Refresh nightly-main tag
         run: |
           git config user.name "github-actions[bot]"
@@ -598,6 +600,8 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+      - name: Install GitHub CLI
+        run: bash scripts/install_github_cli.sh
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
