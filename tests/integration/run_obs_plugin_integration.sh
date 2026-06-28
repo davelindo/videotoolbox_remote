@@ -104,6 +104,30 @@ wait_for_pid_exit() {
   return $?
 }
 
+wait_for_server_ready() {
+  local pid="$1"
+  local log_file="$2"
+  local seconds="$3"
+  local label="$4"
+  local deadline=$((SECONDS + seconds))
+
+  while (( SECONDS < deadline )); do
+    if grep -F "mock_vtremoted listening on" "$log_file" >/dev/null 2>&1; then
+      return 0
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "ERROR: ${label} exited before it was ready" >&2
+      cat "$log_file" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+
+  echo "ERROR: ${label} did not become ready within ${seconds}s" >&2
+  cat "$log_file" >&2
+  return 124
+}
+
 DL_LIBS=""
 if [[ "$(uname -s)" == "Linux" ]]; then
   DL_LIBS="-ldl"
@@ -238,7 +262,8 @@ run_case() {
     >"$server_log" 2>&1 &
   SERVER_PID=$!
 
-  sleep 0.2
+  wait_for_server_ready "$SERVER_PID" "$server_log" "$SERVER_TIMEOUT_SECS" \
+    "mock server for case '$name'"
 
   harness_cmd+=(
     --module-path "$PLUGIN_BINARY"
