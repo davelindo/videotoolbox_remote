@@ -3364,8 +3364,10 @@ static int mov_preroll_write_stbl_atoms(AVIOContext *pb, MOVTrack *track)
             if (roll_samples_remaining > 0)
                 distance = 0;
             /* Verify distance is a maximum of 32 (2.5ms) packets. */
-            if (distance > 32)
+            if (distance > 32) {
+                av_freep(&sgpd_entries);
                 return AVERROR_INVALIDDATA;
+            }
             if (i && distance == sgpd_entries[entries].roll_distance) {
                 sgpd_entries[entries].count++;
             } else {
@@ -7329,6 +7331,8 @@ int ff_mov_write_packet(AVFormatContext *s, AVPacket *pkt)
     if (sd && sd->size >= 10 && trk->par->frame_size) {
         duration = FFMAX(av_rescale_q(trk->par->frame_size, (AVRational){ 1, trk->par->sample_rate },
                                       trk->st->time_base), pkt->duration);
+        if (mov->use_editlist)
+            pkt->duration = duration;
         duration -= av_rescale_q(AV_RL32(sd->data + 4), (AVRational){ 1, trk->par->sample_rate },
                                  trk->st->time_base);
         if (duration < 0)
