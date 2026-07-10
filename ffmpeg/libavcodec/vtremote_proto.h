@@ -22,6 +22,11 @@
 #define VTREMOTE_PROTO_VERSION 1
 #define VTREMOTE_HEADER_SIZE   12
 
+#define VTREMOTE_MAX_HELLO_ACK_BYTES         (64U * 1024U)
+#define VTREMOTE_MAX_CONFIGURE_ACK_BYTES     (4U * 1024U * 1024U)
+#define VTREMOTE_MAX_MEDIA_PAYLOAD_BYTES     (256U * 1024U * 1024U)
+#define VTREMOTE_MAX_CONTROL_PAYLOAD_BYTES   (64U * 1024U)
+
 #define VTREMOTE_PIX_FMT_NV12          1
 #define VTREMOTE_PIX_FMT_P010          2
 #define VTREMOTE_PIX_FMT_BGRA          3
@@ -111,6 +116,7 @@ static inline int vtremote_read_header(const uint8_t *src, size_t src_size,
 const char *vtremote_msg_type_name(int type);
 const char *vtremote_pix_fmt_name(uint8_t pix_fmt);
 uint64_t vtremote_cap_flag_for_pix_fmt(uint8_t pix_fmt);
+int vtremote_validate_payload_length(uint16_t type, uint32_t length);
 int vtremote_cap_flag_from_name(const uint8_t *name, int name_len, uint64_t *flag);
 int vtremote_caps_parse_hello_ack(const uint8_t *payload, int len,
                                   uint8_t *status,
@@ -239,6 +245,13 @@ typedef struct VTRemotePlaneView {
     uint32_t data_len;
     const uint8_t *data;
 } VTRemotePlaneView;
+
+int vtremote_validate_plane_geometry(const VTRemotePlaneView *plane,
+                                     uint32_t minimum_stride,
+                                     uint32_t expected_height,
+                                     int compressed,
+                                     uint32_t max_decoded_bytes,
+                                     int *decoded_size);
 
 typedef struct VTRemoteFrameView {
     int64_t pts;

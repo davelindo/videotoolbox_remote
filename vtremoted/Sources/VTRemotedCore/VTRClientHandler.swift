@@ -158,11 +158,6 @@ public final class VTRClientHandler: @unchecked Sendable {
         try? messageIO.send(type: .error, body: body)
     }
 
-    private func sendErrorThrowing(code: UInt32, message: String) throws {
-        let body = makeErrorBody(code: code, message: message)
-        try messageIO.send(type: .error, body: body)
-    }
-
     private func makeErrorBody(code: UInt32, message: String) -> Data {
         let err = ErrorResponse(code: code, message: message)
         let body = err.encode()
@@ -170,11 +165,17 @@ public final class VTRClientHandler: @unchecked Sendable {
         return body
     }
 
-    private func validateMessageLength(_ length: Int, type: UInt16, cap: Int) throws {
-        if length > cap {
+    private func validateMessageLength(
+        _ length: Int,
+        type: UInt16,
+        cap: Int,
+        sendErrorResponse: Bool = true
+    ) throws {
+        guard length > cap else { return }
+        if sendErrorResponse {
             sendError(code: 4, message: "message too large type=\(type) len=\(length) cap=\(cap)")
-            throw VTRemotedError.protocolViolation("message too large")
         }
+        throw VTRemotedError.protocolViolation("message too large")
     }
 
     private func totalBodyByteCount(_ bodyParts: [Data]) -> Int {
@@ -202,7 +203,8 @@ public final class VTRClientHandler: @unchecked Sendable {
 
     private func readMessageCapped(
         timeoutSeconds: Int,
-        maxBodyBytes: Int
+        maxBodyBytes: Int,
+        sendLengthError: Bool = true
     ) throws -> (header: VTRMessageHeader, body: Data) {
         let cap = min(max(1, maxBodyBytes), maxMessageBytes)
 
@@ -211,13 +213,23 @@ public final class VTRClientHandler: @unchecked Sendable {
                 pool: inputBufferPool,
                 timeoutSeconds: timeoutSeconds,
                 validateHeader: { header in
-                    try validateMessageLength(Int(header.length), type: header.type, cap: cap)
+                    try validateMessageLength(
+                        Int(header.length),
+                        type: header.type,
+                        cap: cap,
+                        sendErrorResponse: sendLengthError
+                    )
                 }
             )
         }
 
         let (header, body) = try messageIO.readMessage(pool: inputBufferPool, timeoutSeconds: timeoutSeconds)
-        try validateMessageLength(body.count, type: header.type, cap: cap)
+        try validateMessageLength(
+            body.count,
+            type: header.type,
+            cap: cap,
+            sendErrorResponse: sendLengthError
+        )
         return (header, body)
     }
 
@@ -260,9 +272,20 @@ public final class VTRClientHandler: @unchecked Sendable {
     }
 
     private func configure() throws {
+        do {
+            try performConfigure()
+        } catch {
+            logger.error("CONFIGURE failed error=\(error)")
+            sendError(code: 1, message: "configure failed: \(error)")
+            throw error
+        }
+    }
+
+    private func performConfigure() throws {
         let (header, payload) = try readMessageCapped(
             timeoutSeconds: handshakeTimeoutSeconds,
-            maxBodyBytes: Self.maxConfigureBytes
+            maxBodyBytes: Self.maxConfigureBytes,
+            sendLengthError: false
         )
         defer { inputBufferPool.return(payload) }
         stats.bytesIn += Int64(VTRProtocol.headerSize + payload.count)
@@ -270,7 +293,11 @@ public final class VTRClientHandler: @unchecked Sendable {
             throw VTRemotedError.protocolViolation("expected CONFIGURE")
         }
         let request = try ConfigureRequest.decode(payload)
-        let config = try SessionConfiguration(codec: codec, request: request)
+        let config = try SessionConfiguration(
+            codec: codec,
+            request: request,
+            maxFrameBytes: maxMessageBytes
+        )
 
         try validateWireCompression(config.options.wireCompression)
 
@@ -297,50 +324,44 @@ public final class VTRClientHandler: @unchecked Sendable {
         codecSession = session
         configuration = config
 
-        do {
-            let extradata = try session.configure(config)
-            let resp = ConfigureAckResponse(
-                status: 0,
-                extradata: extradata,
-                pixelFormat: config.pixelFormat,
-                warnings: 0
-            )
-            let body = resp.encode()
-            stats.bytesOut += Int64(VTRProtocol.headerSize + body.count)
-            try messageIO.send(type: .configureAck, body: body)
+        let extradata = try session.configure(config)
+        let resp = ConfigureAckResponse(
+            status: 0,
+            extradata: extradata,
+            pixelFormat: config.pixelFormat,
+            warnings: 0
+        )
+        let body = resp.encode()
+        stats.bytesOut += Int64(VTRProtocol.headerSize + body.count)
+        try messageIO.send(type: .configureAck, body: body)
 
-            logger.info(
-                "CONFIGURE ok mode=\(config.mode.rawValue) codec=\(config.codec.rawValue) " +
-                    "\(config.width)x\(config.height) " +
-                    "pixfmt=\(config.pixelFormat)(\(VTRPixelFormat.name(config.pixelFormat))) " +
-                    "tb=\(config.timebase.num)/\(config.timebase.den) " +
-                    "br=\(config.options.bitrate) " +
-                    "gop=\(config.options.gop) wc=\(config.options.wireCompression)" +
-                    transcodeLogSuffix(for: config)
-            )
-        } catch {
-            logger.error("CONFIGURE failed mode=\(config.mode.rawValue) codec=\(config.codec.rawValue) error=\(error)")
-            try sendErrorThrowing(code: 1, message: "configure failed: \(error)")
-            throw error
-        }
+        logger.info(
+            "CONFIGURE ok mode=\(config.mode.rawValue) codec=\(config.codec.rawValue) " +
+                "\(config.width)x\(config.height) " +
+                "pixfmt=\(config.pixelFormat)(\(VTRPixelFormat.name(config.pixelFormat))) " +
+                "tb=\(config.timebase.num)/\(config.timebase.den) " +
+                "br=\(config.options.bitrate) " +
+                "gop=\(config.options.gop) wc=\(config.options.wireCompression)" +
+                transcodeLogSuffix(for: config)
+        )
     }
 
     private func validateWireCompression(_ wireCompression: Int) throws {
         // Wire compression modes: 0=none, 1=LZ4, 2=Zstd.
-        if wireCompression != 0, wireCompression != 1, wireCompression != 2 {
-            logger.error("CONFIGURE rejected: unsupported wire_compression=\(wireCompression)")
-            try sendErrorThrowing(code: 1, message: "unsupported wire_compression=\(wireCompression)")
-            throw VTRemotedError.unsupported("wire_compression")
-        }
-        if wireCompression == 1, !codecAvailability.lz4Available {
+        switch wireCompression {
+        case 0:
+            return
+        case 1 where !codecAvailability.lz4Available:
             logger.error("CONFIGURE rejected: lz4 codec unavailable; \(codecAvailability.lz4Diagnostics)")
-            try sendErrorThrowing(code: 1, message: "wire_compression=lz4 unavailable")
             throw VTRemotedError.unsupported("wire_compression=lz4")
-        }
-        if wireCompression == 2, !codecAvailability.zstdAvailable {
+        case 2 where !codecAvailability.zstdAvailable:
             logger.error("CONFIGURE rejected: zstd codec unavailable; \(codecAvailability.zstdDiagnostics)")
-            try sendErrorThrowing(code: 1, message: "wire_compression=zstd unavailable")
             throw VTRemotedError.unsupported("wire_compression=zstd")
+        case 1, 2:
+            return
+        default:
+            logger.error("CONFIGURE rejected: unsupported wire_compression=\(wireCompression)")
+            throw VTRemotedError.unsupported("wire_compression=\(wireCompression)")
         }
     }
 

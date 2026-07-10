@@ -135,4 +135,20 @@ final class TimestampTrackerTests: XCTestCase {
         XCTAssertFalse(adjusted)
         XCTAssertEqual(dts, 11)
     }
+
+    func testSaturatesAtMaximumTimestampWithoutOverflow() {
+        let tracker = TimestampTracker()
+        _ = tracker.process(ptsTicks: Int64.max, dtsTicks: Int64.max)
+
+        guard case .emit(let pts, let dts, let adjusted) = tracker.process(
+            ptsTicks: Int64.max,
+            dtsTicks: Int64.max
+        ) else {
+            XCTFail("Expected emit")
+            return
+        }
+        XCTAssertEqual(pts, Int64.max)
+        XCTAssertEqual(dts, Int64.max)
+        XCTAssertTrue(adjusted)
+    }
 }

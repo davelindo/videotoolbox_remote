@@ -236,5 +236,11 @@ run_case zstd success --expect-wire-compression 2 -- --wire-compression zstd
 run_case hello_oversize failure --hello-ack-bytes 70000
 run_case configure_oversize failure --configure-ack-bytes 4200000
 run_case packet_oversize failure --packet-bytes 9000000
+run_case bad_version failure --response-version 2
+run_case stalled_hello failure --stall-after hello --stall-seconds 6
+run_case reset_after_configure failure --reset-after-configure-ack
+
+LONG_TOKEN="$($PYTHON_BIN -c 'print("x" * 65536, end="")')"
+run_case long_token failure --token "$LONG_TOKEN" -- --token "$LONG_TOKEN"
 
 echo "OK: OBS plugin client smoke test passed; cases logged under $BUILD_DIR"

@@ -43,12 +43,14 @@ final class TimestampTracker: @unchecked Sendable {
 
             // Ensure strict monotonicity: DTS must be > lastDtsTicks
             if lastDtsTicks != Int64.min && dts <= lastDtsTicks {
-                dts = lastDtsTicks + 1
+                let (next, overflow) = lastDtsTicks.addingReportingOverflow(1)
+                dts = overflow ? Int64.max : next
             }
 
             if enforceMonotonicPts {
                 if lastPtsTicks != Int64.min && pts <= lastPtsTicks {
-                    pts = lastPtsTicks + 1
+                    let (next, overflow) = lastPtsTicks.addingReportingOverflow(1)
+                    pts = overflow ? Int64.max : next
                     ptsAdjusted = true
                 }
             }

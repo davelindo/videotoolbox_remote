@@ -20,6 +20,27 @@
 #include "libavutil/error.h"
 #include "libavutil/time.h"
 
+static inline int vtremote_send_flags(int flags)
+{
+#if !defined(HAVE_WINSOCK2_H) || !HAVE_WINSOCK2_H
+#ifdef MSG_NOSIGNAL
+    flags |= MSG_NOSIGNAL;
+#endif
+#endif
+    return flags;
+}
+
+static inline void vtremote_disable_sigpipe(int fd)
+{
+#if (!defined(HAVE_WINSOCK2_H) || !HAVE_WINSOCK2_H) && defined(SO_NOSIGPIPE)
+    int enabled = 1;
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE,
+               VTR_SOCKOPT_ARG &enabled, sizeof(enabled));
+#else
+    (void)fd;
+#endif
+}
+
 static inline int vtremote_remaining_timeout_ms(int64_t deadline_us)
 {
     int64_t remaining_us;

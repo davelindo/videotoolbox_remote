@@ -38,4 +38,12 @@ final class DecodeReorderBufferTests: XCTestCase {
         XCTAssertTrue(emitted[1].clamped)
         XCTAssertEqual(emitted[1].originalPtsTicks, 5)
     }
+
+    func testLateFrameSaturatesAtMaximumTimestamp() {
+        let buffer = DecodeReorderBuffer<Int>(depth: 0)
+        XCTAssertEqual(buffer.enqueue(ptsTicks: Int64.max, durTicks: 1, payload: 1)[0].ptsTicks, Int64.max)
+        let emitted = buffer.enqueue(ptsTicks: 0, durTicks: 1, payload: 2)
+        XCTAssertEqual(emitted[0].ptsTicks, Int64.max)
+        XCTAssertTrue(emitted[0].clamped)
+    }
 }

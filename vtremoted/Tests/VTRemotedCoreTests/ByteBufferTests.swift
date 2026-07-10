@@ -46,6 +46,11 @@ final class ByteBufferTests: XCTestCase {
         var reader = ByteReader(Data([1, 2, 3]))
         XCTAssertThrowsError(try reader.sliceRange(count: -1))
     }
+
+    func testSliceRangeHugeCountThrowsWithoutOverflow() {
+        var reader = ByteReader(Data([1, 2, 3]))
+        XCTAssertThrowsError(try reader.sliceRange(count: Int.max))
+    }
     
     func testReadBytesUsesSliceRange() throws {
         let data = Data([0xDE, 0xAD, 0xBE, 0xEF])
@@ -54,5 +59,15 @@ final class ByteBufferTests: XCTestCase {
         let bytes = try reader.readBytes(count: 2)
         XCTAssertEqual(bytes, Data([0xDE, 0xAD]))
         XCTAssertEqual(reader.remaining, 2)
+    }
+
+    func testOversizedStringWritesMatchingTruncatedLengthAndBody() throws {
+        let input = String(repeating: "x", count: Int(UInt16.max) + 100)
+        var writer = ByteWriter()
+        writer.writeLengthPrefixedUTF8(input)
+
+        var reader = ByteReader(writer.data)
+        XCTAssertEqual(try reader.readLengthPrefixedUTF8().utf8.count, Int(UInt16.max))
+        XCTAssertEqual(reader.remaining, 0)
     }
 }

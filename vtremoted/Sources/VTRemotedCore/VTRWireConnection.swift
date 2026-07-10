@@ -11,7 +11,10 @@ public final class VTRWireConnection: @unchecked Sendable {
         self.fileDescriptor = fileDescriptor
     }
 
-    private func encodeHeader(type: VTRMessageType, bodyLength: Int) {
+    private func encodeHeader(type: VTRMessageType, bodyLength: Int) throws {
+        guard bodyLength >= 0, bodyLength <= Int(UInt32.max) else {
+            throw VTRemotedError.protocolViolation("outbound message too large")
+        }
         let magic = VTRProtocol.magic
         let version = VTRProtocol.version
         let messageType = type.rawValue
@@ -40,7 +43,7 @@ public final class VTRWireConnection: @unchecked Sendable {
     public func send(type: VTRMessageType, body: Data = Data()) throws {
         sendLock.lock()
         defer { sendLock.unlock() }
-        encodeHeader(type: type, bodyLength: body.count)
+        try encodeHeader(type: type, bodyLength: body.count)
         if body.isEmpty {
             try POSIXIO.writeAll(fd: fileDescriptor, data: sendHeaderBuf)
             return
@@ -57,23 +60,16 @@ public final class VTRWireConnection: @unchecked Sendable {
         defer { sendLock.unlock() }
 
         let partCount = bodyParts.count
-        let totalLen: Int
-        switch partCount {
-        case 0:
-            totalLen = 0
-        case 1:
-            totalLen = bodyParts[0].count
-        case 2:
-            totalLen = bodyParts[0].count + bodyParts[1].count
-        default:
-            var sum = 0
-            for part in bodyParts {
-                sum += part.count
+        var totalLen = 0
+        for part in bodyParts {
+            let (next, overflow) = totalLen.addingReportingOverflow(part.count)
+            guard !overflow else {
+                throw VTRemotedError.protocolViolation("outbound message too large")
             }
-            totalLen = sum
+            totalLen = next
         }
 
-        encodeHeader(type: type, bodyLength: totalLen)
+        try encodeHeader(type: type, bodyLength: totalLen)
         if totalLen == 0 {
             try POSIXIO.writeAll(fd: fileDescriptor, data: sendHeaderBuf)
             return

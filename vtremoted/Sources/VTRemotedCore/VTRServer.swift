@@ -147,8 +147,20 @@ public final class VTRServer {
                     accept(socketFd, saPtr, &len)
                 }
             }
-            if clientFd < 0 { continue }
-            
+            if clientFd < 0 {
+                let code = errno
+                if code == EINTR { continue }
+                if code == EMFILE || code == ENFILE || code == ENOBUFS || code == ENOMEM {
+                    logger.error("accept temporarily unavailable: \(String(cString: strerror(code)))")
+                    Thread.sleep(forTimeInterval: 0.1)
+                    continue
+                }
+                throw VTRemotedError.ioError(
+                    code: code,
+                    message: "accept failed: \(String(cString: strerror(code)))"
+                )
+            }
+
             setSocketOption(socketFD: clientFd, level: Int32(IPPROTO_TCP), name: Int32(TCP_NODELAY), value: 1)
 
 #if !os(Linux)
@@ -156,7 +168,7 @@ public final class VTRServer {
 #endif
 
             configureSocketBuffers(socketFD: clientFd)
-            
+
             if let lowatValue = ProcessInfo.processInfo.environment["VTREMOTED_NOTSENT_LOWAT"],
                let lowat = Int32(lowatValue),
                lowat > 0 {

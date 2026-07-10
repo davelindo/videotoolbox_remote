@@ -31,6 +31,55 @@ public struct SessionConfiguration: Sendable {
     public var frameRate: (num: Int, den: Int)
     public var options: SessionOptions
     public var configExtradata: Data?
+    let maxFrameBytes: Int
+
+    private static func checkedProduct(_ lhs: Int, _ rhs: Int, field: String) throws -> Int {
+        let (value, overflow) = lhs.multipliedReportingOverflow(by: rhs)
+        guard !overflow, value > 0 else {
+            throw VTRemotedError.unsupported("\(field) is too large")
+        }
+        return value
+    }
+
+    private static func validateDimensions(width: Int, height: Int, field: String) throws {
+        guard width > 0, height > 0,
+              width <= Int(Int32.max), height <= Int(Int32.max)
+        else {
+            throw VTRemotedError.unsupported("\(field) dimensions are invalid")
+        }
+    }
+
+    private static func validateFrameSize(
+        width: Int,
+        height: Int,
+        pixelFormat: UInt8,
+        maxFrameBytes: Int,
+        field: String
+    ) throws {
+        let rowBytes: Int
+        let totalRows: Int
+        switch pixelFormat {
+        case VTRPixelFormat.nv12:
+            rowBytes = width
+            totalRows = height + ((height + 1) / 2)
+        case VTRPixelFormat.p010:
+            rowBytes = try checkedProduct(width, 2, field: field)
+            totalRows = height + ((height + 1) / 2)
+        case VTRPixelFormat.bgra, VTRPixelFormat.ayuv:
+            rowBytes = try checkedProduct(width, 4, field: field)
+            totalRows = height
+        case VTRPixelFormat.p210:
+            rowBytes = try checkedProduct(width, 2, field: field)
+            totalRows = try checkedProduct(height, 2, field: field)
+        default:
+            throw VTRemotedError.unsupported("pixel_format=\(pixelFormat)")
+        }
+
+        let bytes = try checkedProduct(rowBytes, totalRows, field: field)
+        guard bytes <= maxFrameBytes else {
+            throw VTRemotedError.unsupported("\(field) exceeds max frame bytes")
+        }
+    }
 
     private static func parsePositiveDimensionPair(width: String?, height: String?) throws -> (Int, Int)? {
         guard width != nil || height != nil else { return nil }
@@ -56,9 +105,27 @@ public struct SessionConfiguration: Sendable {
         }
     }
 
-    public init(codec: VideoCodec, request: ConfigureRequest) throws {
+    public init(
+        codec: VideoCodec,
+        request: ConfigureRequest,
+        maxFrameBytes: Int = 256 * 1024 * 1024
+    ) throws {
+        let frameLimit = max(1, maxFrameBytes)
+        try Self.validateDimensions(width: request.width, height: request.height, field: "input")
+        guard request.timebase.den <= Int(Int32.max) else {
+            throw VTRemotedError.unsupported("timebase denominator is too large")
+        }
         self.codec = codec
-        mode = SessionMode(rawValue: request.options["mode"] ?? "encode") ?? .encode
+        let modeRaw = request.options["mode"] ?? "encode"
+        guard let parsedMode = SessionMode(rawValue: modeRaw) else {
+            throw VTRemotedError.unsupported("mode=\(modeRaw)")
+        }
+        mode = parsedMode
+        guard request.frameRate.den > 0,
+              mode != .encode || request.frameRate.num > 0
+        else {
+            throw VTRemotedError.unsupported("frame rate is invalid")
+        }
         if let outCodecRaw = request.options["out_codec"] {
             guard let parsed = VideoCodec(rawValue: outCodecRaw) else {
                 throw VTRemotedError.unsupported("out_codec=\(outCodecRaw)")
@@ -95,6 +162,23 @@ public struct SessionConfiguration: Sendable {
         frameRate = request.frameRate
         options = SessionOptions(options: request.options)
         configExtradata = request.extradata
+        self.maxFrameBytes = frameLimit
+
+        try Self.validateFrameSize(
+            width: width,
+            height: height,
+            pixelFormat: pixelFormat,
+            maxFrameBytes: frameLimit,
+            field: "input frame"
+        )
+        try Self.validateDimensions(width: outputWidth, height: outputHeight, field: "output")
+        try Self.validateFrameSize(
+            width: outputWidth,
+            height: outputHeight,
+            pixelFormat: pixelFormat,
+            maxFrameBytes: frameLimit,
+            field: "output frame"
+        )
     }
 }
 

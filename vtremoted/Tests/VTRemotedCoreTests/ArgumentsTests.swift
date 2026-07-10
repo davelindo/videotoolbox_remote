@@ -29,4 +29,28 @@ final class ArgumentsTests: XCTestCase {
         let args = Arguments.parse(["vtremoted", "--bogus"])
         XCTAssertEqual(args.parseError, "unknown argument: --bogus")
     }
+
+    func testMissingOptionValueIsParseError() {
+        XCTAssertEqual(
+            Arguments.parse(["vtremoted", "--listen"]).parseError,
+            "missing value for --listen"
+        )
+        XCTAssertEqual(
+            Arguments.parse(["vtremoted", "--max-sessions"]).parseError,
+            "missing value for --max-sessions"
+        )
+    }
+
+    func testInvalidNumericAndLogValuesAreParseErrors() {
+        XCTAssertFalse(Arguments.parse(["vtremoted", "--max-sessions", "0"]).parseError.isEmpty)
+        XCTAssertFalse(Arguments.parse(["vtremoted", "--idle-timeout", "nope"]).parseError.isEmpty)
+        XCTAssertFalse(Arguments.parse(["vtremoted", "--max-message-bytes", "4294967296"]).parseError.isEmpty)
+        XCTAssertFalse(Arguments.parse(["vtremoted", "--log-level", "verbose"]).parseError.isEmpty)
+    }
+
+    func testEmptyRequiredStringValuesAreParseErrors() {
+        XCTAssertFalse(Arguments.parse(["vtremoted", "--listen", ""]).parseError.isEmpty)
+        XCTAssertFalse(Arguments.parse(["vtremoted", "--token-file", ""]).parseError.isEmpty)
+        XCTAssertFalse(Arguments.parse(["vtremoted", "--token-env", ""]).parseError.isEmpty)
+    }
 }

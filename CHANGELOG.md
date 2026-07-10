@@ -7,6 +7,25 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
+## [v0.6.27] - 2026-07-09
+
+### Added
+- Added shared server-side frame-plane geometry validation with coverage for stride, height, decoded-size, compression, and aggregate frame-size limits.
+- Added vtremote protocol tests and OBS mock cases for oversized payloads, invalid response versions, stalled peers, connection resets, and overlong authentication tokens.
+
+### Changed
+- Hardened `vtremoted` argument and session configuration parsing to reject missing, empty, invalid, or unrepresentable values before starting a session.
+- Enforced bounded protocol payloads and frame geometry across the Swift server, FFmpeg vtremote codecs and transcode filter, and OBS client.
+- Added five-second OBS socket I/O timeouts and bounded server accept backoff for transient resource exhaustion.
+
+### Fixed
+- Prevented integer overflow in wire lengths, timestamp monotonicity, timebase conversion, frame sizing, and plane sizing.
+- Prevented `SIGPIPE` termination when FFmpeg or OBS writes to a disconnected peer.
+- Fixed VideoToolbox encode callback context ownership when frame submission fails synchronously.
+- Fixed raw-frame copies into VideoToolbox buffers to validate destination height and stride, including odd-height chroma planes.
+- Fixed compressed one-plane BGRA and AYUV frames being processed as two-plane frames by the FFmpeg remote decoder.
+- Ensured failed configuration produces one protocol error response and oversized outbound strings or extradata remain internally length-consistent.
+
 ## [v0.6.26] - 2026-07-09
 
 ### Changed
