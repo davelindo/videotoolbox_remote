@@ -2215,7 +2215,7 @@ static int vulkan_frames_get_constraints(AVHWDeviceContext *ctx,
                                     NULL, NULL, NULL, NULL, p->disable_multiplane, 1) >= 0;
     }
 
-    constraints->valid_sw_formats = av_malloc_array(count + 1,
+    constraints->valid_sw_formats = av_malloc_array(count + 1 + CONFIG_CUDA,
                                                     sizeof(enum AVPixelFormat));
     if (!constraints->valid_sw_formats)
         return AVERROR(ENOMEM);
@@ -2229,6 +2229,10 @@ static int vulkan_frames_get_constraints(AVHWDeviceContext *ctx,
             constraints->valid_sw_formats[count++] = vk_formats_list[i].pixfmt;
         }
     }
+
+#if CONFIG_CUDA
+    constraints->valid_sw_formats[count++] = AV_PIX_FMT_CUDA;
+#endif
 
     constraints->valid_sw_formats[count++] = AV_PIX_FMT_NONE;
 
@@ -2799,7 +2803,7 @@ static void try_export_flags(AVHWFramesContext *hwfc,
     VkPhysicalDeviceImageFormatInfo2 pinfo = {
         .sType  = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2,
         .pNext  = !exp ? NULL : &enext,
-        .format = vk_find_format_entry(hwfc->sw_format)->vkf,
+        .format = hwctx->format[0],
         .type   = VK_IMAGE_TYPE_2D,
         .tiling = hwctx->tiling,
         .usage  = hwctx->usage,
@@ -3875,7 +3879,7 @@ static int vulkan_export_to_cuda(AVHWFramesContext *hwfc,
     CudaFunctions *cu = cu_internal->cuda_dl;
     CUarray_format cufmt = desc->comp[0].depth > 8 ? CU_AD_FORMAT_UNSIGNED_INT16 :
                                                      CU_AD_FORMAT_UNSIGNED_INT8;
-    const int elem_size = 1 + desc->comp[0].depth > 8;
+    const int elem_size = 1 + (desc->comp[0].depth > 8);
 
     dst_f = (AVVkFrame *)frame->data[0];
     dst_int = dst_f->internal;
