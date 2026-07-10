@@ -99,4 +99,21 @@ final class MessageCodecTests: XCTestCase {
         XCTAssertEqual(cfg.options["wire_compression"], "1")
         XCTAssertEqual(cfg.extradata, extra)
     }
+
+    func testConfigureAckTruncatesExtradataWithMatchingLength() throws {
+        let response = ConfigureAckResponse(
+            status: 0,
+            extradata: Data(repeating: 0xAB, count: Int(UInt16.max) + 10),
+            pixelFormat: VTRPixelFormat.nv12,
+            warnings: 0
+        )
+        var reader = ByteReader(response.encode())
+        XCTAssertEqual(try reader.readUInt8(), 0)
+        let length = try Int(reader.readBEUInt16())
+        XCTAssertEqual(length, Int(UInt16.max))
+        XCTAssertEqual(try reader.readBytes(count: length).count, length)
+        XCTAssertEqual(try reader.readUInt8(), VTRPixelFormat.nv12)
+        XCTAssertEqual(try reader.readUInt8(), 0)
+        XCTAssertEqual(reader.remaining, 0)
+    }
 }

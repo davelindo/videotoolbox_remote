@@ -4,6 +4,7 @@
  * Non-inline utilities shared across encoder and any mock/test harnesses.
  */
 
+#include <limits.h>
 #include <string.h>
 
 #include "libavutil/log.h"
@@ -54,6 +55,56 @@ uint64_t vtremote_cap_flag_for_pix_fmt(uint8_t pix_fmt)
     case VTREMOTE_PIX_FMT_P210: return VTREMOTE_CAP_PIXFMT_P210;
     default: return 0;
     }
+}
+
+int vtremote_validate_payload_length(uint16_t type, uint32_t length)
+{
+    uint32_t limit;
+
+    switch (type) {
+    case VTREMOTE_MSG_HELLO_ACK:
+        limit = VTREMOTE_MAX_HELLO_ACK_BYTES;
+        break;
+    case VTREMOTE_MSG_CONFIGURE_ACK:
+        limit = VTREMOTE_MAX_CONFIGURE_ACK_BYTES;
+        break;
+    case VTREMOTE_MSG_FRAME:
+    case VTREMOTE_MSG_PACKET:
+        limit = VTREMOTE_MAX_MEDIA_PAYLOAD_BYTES;
+        break;
+    default:
+        limit = VTREMOTE_MAX_CONTROL_PAYLOAD_BYTES;
+        break;
+    }
+
+    if (length > limit || length > INT_MAX)
+        return AVERROR_INVALIDDATA;
+    return 0;
+}
+
+int vtremote_validate_plane_geometry(const VTRemotePlaneView *plane,
+                                     uint32_t minimum_stride,
+                                     uint32_t expected_height,
+                                     int compressed,
+                                     uint32_t max_decoded_bytes,
+                                     int *decoded_size)
+{
+    uint64_t expected;
+
+    if (!plane || !plane->data || !minimum_stride || !expected_height ||
+        plane->stride < minimum_stride ||
+        plane->height != expected_height || plane->stride > INT_MAX)
+        return AVERROR_INVALIDDATA;
+
+    expected = (uint64_t)plane->stride * plane->height;
+    if (!expected || expected > INT_MAX || expected > max_decoded_bytes)
+        return AVERROR_INVALIDDATA;
+    if (compressed ? plane->data_len == 0 : plane->data_len != expected)
+        return AVERROR_INVALIDDATA;
+
+    if (decoded_size)
+        *decoded_size = (int)expected;
+    return 0;
 }
 
 static int cap_name_equals(const uint8_t *name, int name_len, const char *expected)

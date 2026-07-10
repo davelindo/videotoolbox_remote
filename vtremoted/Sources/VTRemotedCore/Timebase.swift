@@ -26,7 +26,7 @@ public struct Timebase: Equatable, Sendable {
     public func time(fromTicks ticks: Int64) -> RationalTime {
         let (value, overflow) = ticks.multipliedReportingOverflow(by: Int64(num))
         let safe = overflow ? (ticks >= 0 ? Int64.max : Int64.min) : value
-        return RationalTime(value: safe, timescale: Int32(den))
+        return RationalTime(value: safe, timescale: Int32(clamping: den))
     }
 
     public func ticks(from time: RationalTime) -> Int64 {

@@ -164,8 +164,52 @@ final class ClientHandlerTests: XCTestCase {
         XCTAssertEqual(fakeIO.sent.map(\.0), [.helloAck, .error])
         let error = try decodeError(fakeIO.sent[1].1)
         XCTAssertEqual(error.code, 1)
-        XCTAssertEqual(error.message, "wire_compression=lz4 unavailable")
+        XCTAssertEqual(error.message, "configure failed: Unsupported: wire_compression=lz4")
         XCTAssertEqual(fakeIO.incoming.map(\.0), [.flush])
+    }
+
+    func testInvalidModeSendsOneErrorWithoutCreatingSession() throws {
+        let fakeIO = FakeIO(incoming: [
+            (.hello, makeHello(token: "", codec: "h264")),
+            (.configure, makeConfigure(mode: "invalid", wireCompression: "0")),
+            (.flush, Data())
+        ])
+
+        let handler = VTRClientHandler(
+            io: fakeIO,
+            expectedToken: "",
+            sessionFactory: { _ in
+                XCTFail("session should not be created for an invalid mode")
+                return StubCodecSession(sender: { _, _ in })
+            }
+        )
+        handler.run()
+
+        XCTAssertEqual(fakeIO.sent.map(\.0), [.helloAck, .error])
+        let error = try decodeError(fakeIO.sent[1].1)
+        XCTAssertEqual(error.message, "configure failed: Unsupported: mode=invalid")
+        XCTAssertEqual(fakeIO.incoming.map(\.0), [.flush])
+    }
+
+    func testOversizedConfigureSendsExactlyOneError() throws {
+        let fakeIO = FakeIO(incoming: [
+            (.hello, makeHello(token: "", codec: "h264")),
+            (.configure, makeConfigure(mode: "encode", wireCompression: "0"))
+        ])
+        let handler = VTRClientHandler(
+            io: fakeIO,
+            expectedToken: "",
+            maxMessageBytes: 32,
+            sessionFactory: { _ in
+                XCTFail("session should not be created for an oversized CONFIGURE")
+                return StubCodecSession(sender: { _, _ in })
+            }
+        )
+        handler.run()
+
+        XCTAssertEqual(fakeIO.sent.map(\.0), [.helloAck, .error])
+        let error = try decodeError(fakeIO.sent[1].1)
+        XCTAssertEqual(error.message, "configure failed: Protocol violation: message too large")
     }
 }
 

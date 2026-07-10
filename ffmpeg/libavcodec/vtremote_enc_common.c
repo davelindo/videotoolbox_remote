@@ -67,6 +67,8 @@ static void vtremote_net_close(void) {}
 static int vtremote_sock_errno(void) { return errno; }
 #endif
 
+#include "vtremote_sock.h"
+
 #define MIN_HVCC_LENGTH 23
 #define VTREMOTE_MAX_FRAME_SIDE_DATA 16
 #define VTREMOTE_MAX_FRAME_SIDE_DATA_BYTES (1024 * 1024)
@@ -168,6 +170,8 @@ static int set_socket_timeout(int fd, int timeout_ms) {
 
 /* Configure socket for high-throughput video streaming */
 static void configure_socket_buffers(int fd) {
+  vtremote_disable_sigpipe(fd);
+
   /* Disable Nagle's algorithm for lower latency */
   int nodelay = 1;
   setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, VTR_SOCKOPT_ARG & nodelay,
@@ -775,7 +779,7 @@ static int configure_zstd_ctx(AVCodecContext *avctx, VTRemoteEncContext *s,
 static int write_full(int fd, const uint8_t *buf, int size) {
   int sent = 0;
   while (sent < size) {
-    int r = (int)send(fd, buf + sent, size - sent, 0);
+    int r = (int)send(fd, buf + sent, size - sent, vtremote_send_flags(0));
     if (r < 0) {
       int err = vtremote_sock_errno();
 #if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
@@ -1232,7 +1236,7 @@ static int vtremote_sendq_pump(AVCodecContext *avctx, int blocking) {
       const int len = slot->seg_lens[slot->seg_index];
       const uint8_t *ptr = base + slot->seg_offset;
       const int to_send = len - slot->seg_offset;
-      int r = (int)send(s->fd, ptr, to_send, flags);
+      int r = (int)send(s->fd, ptr, to_send, vtremote_send_flags(flags));
       if (r < 0) {
         int err = vtremote_sock_errno();
 #if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
@@ -1289,6 +1293,9 @@ static int vtremote_read_msg(VTRemoteEncContext *s, VTRemoteMsgHeader *hdr,
   if (ret < 0)
     return ret;
   ret = vtremote_read_header(header_buf, VTREMOTE_HEADER_SIZE, hdr);
+  if (ret < 0)
+    return ret;
+  ret = vtremote_validate_payload_length(hdr->type, hdr->length);
   if (ret < 0)
     return ret;
   if (hdr->length == 0) {

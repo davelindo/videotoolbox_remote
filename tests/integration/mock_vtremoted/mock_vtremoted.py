@@ -17,10 +17,12 @@ import socket
 import struct
 import sys
 import threading
+import time
 from typing import Dict, List, Tuple
 
 MAGIC = 0x56545231  # 'VTR1'
 VERSION = 1
+OUTBOUND_VERSION = VERSION
 
 MSG_HELLO = 1
 MSG_HELLO_ACK = 2
@@ -176,16 +178,22 @@ def read_header(conn: socket.socket) -> Tuple[int, int]:
 
 
 def write_msg(conn: socket.socket, msg_type: int, payload: bytes = b"") -> None:
-    header = HEADER_STRUCT.pack(MAGIC, VERSION, msg_type, len(payload))
+    header = HEADER_STRUCT.pack(MAGIC, OUTBOUND_VERSION, msg_type, len(payload))
     conn.sendall(header + payload)
 
 
-def write_filled_msg(conn: socket.socket, msg_type: int, length: int, fill: bytes = b"\0") -> None:
+def write_filled_msg(
+    conn: socket.socket,
+    msg_type: int,
+    length: int,
+    fill: bytes = b"\0",
+    send_body: bool = True,
+) -> None:
     if len(fill) != 1:
         raise ValueError("fill byte must be exactly one byte")
-    header = HEADER_STRUCT.pack(MAGIC, VERSION, msg_type, length)
+    header = HEADER_STRUCT.pack(MAGIC, OUTBOUND_VERSION, msg_type, length)
     conn.sendall(header)
-    if length <= 0:
+    if length <= 0 or not send_body:
         return
     chunk = fill * min(STREAM_CHUNK_BYTES, length)
     remaining = length
@@ -193,6 +201,20 @@ def write_filled_msg(conn: socket.socket, msg_type: int, length: int, fill: byte
         to_send = min(len(chunk), remaining)
         conn.sendall(chunk[:to_send])
         remaining -= to_send
+
+
+def write_configured_filled_msg(
+    conn: socket.socket,
+    msg_type: int,
+    length: int,
+    args: argparse.Namespace,
+) -> None:
+    write_filled_msg(
+        conn,
+        msg_type,
+        length,
+        send_body=not args.header_only_filled,
+    )
 
 
 def read_u16(buf: memoryview, offset: int) -> Tuple[int, int]:
@@ -391,6 +413,10 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
             client_build, _ = read_str(payload, off)
             _ = requested_codec, client_name, client_build
 
+            if args.stall_after == "hello":
+                time.sleep(args.stall_seconds)
+                return
+
             def hello_ack(status: int) -> bytes:
                 capabilities = args.capabilities
                 body = struct.pack(">B", status)
@@ -406,7 +432,7 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                 return
 
             if args.hello_ack_bytes > 0:
-                write_filled_msg(conn, MSG_HELLO_ACK, args.hello_ack_bytes)
+                write_configured_filled_msg(conn, MSG_HELLO_ACK, args.hello_ack_bytes, args)
                 return
 
             write_msg(conn, MSG_HELLO_ACK, hello_ack(0))
@@ -432,6 +458,9 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                     _ = width, height
 
                     config_options, off = parse_config_options(payload, off)
+                    if args.stall_after == "configure":
+                        time.sleep(args.stall_seconds)
+                        return
                     required_cap = PIX_FMT_CAPABILITY.get(pix_fmt)
                     if required_cap and required_cap not in args.capabilities:
                         write_msg(
@@ -492,11 +521,16 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                             )
 
                     if args.configure_ack_bytes > 0:
-                        write_filled_msg(conn, MSG_CONFIGURE_ACK, args.configure_ack_bytes)
+                        write_configured_filled_msg(conn, MSG_CONFIGURE_ACK,
+                                                    args.configure_ack_bytes, args)
                         return
 
                     write_msg(conn, MSG_CONFIGURE_ACK,
                               make_configure_ack(pix_fmt, args.configure_extradata))
+                    if args.reset_after_configure_ack:
+                        conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
+                                        struct.pack("ii", 1, 0))
+                        return
                     continue
 
                 if msg_type == MSG_FRAME:
@@ -532,8 +566,12 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                     if off != len(payload):
                         raise ValueError("unexpected trailing bytes in FRAME payload")
 
+                    if args.stall_after == "frame":
+                        time.sleep(args.stall_seconds)
+                        return
+
                     if args.packet_bytes > 0:
-                        write_filled_msg(conn, MSG_PACKET, args.packet_bytes)
+                        write_configured_filled_msg(conn, MSG_PACKET, args.packet_bytes, args)
                         return
 
                     dts = pts + int(getattr(args, "packet_dts_offset", 0))
@@ -549,6 +587,10 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
 
                     if getattr(args, "packet_reply", "frame") == "none":
                         continue
+
+                    if args.frame_bytes > 0:
+                        write_configured_filled_msg(conn, MSG_FRAME, args.frame_bytes, args)
+                        return
 
                     if getattr(args, "packet_reply", "frame") == "packet":
                         out_dts = pts + int(getattr(args, "packet_dts_offset", 0))
@@ -678,6 +720,40 @@ def main() -> int:
         help="Send PACKET with this many body bytes after FRAME, then exit",
     )
     parser.add_argument(
+        "--frame-bytes",
+        type=int,
+        default=0,
+        help="Send FRAME with this many body bytes after PACKET, then exit",
+    )
+    parser.add_argument(
+        "--header-only-filled",
+        action="store_true",
+        help="For filled-message options, send only the declared header",
+    )
+    parser.add_argument(
+        "--response-version",
+        type=int,
+        default=VERSION,
+        help="Protocol version to place in response headers",
+    )
+    parser.add_argument(
+        "--stall-after",
+        choices=["none", "hello", "configure", "frame"],
+        default="none",
+        help="Read the selected request, then stall without replying",
+    )
+    parser.add_argument(
+        "--stall-seconds",
+        type=float,
+        default=6.0,
+        help="Seconds to wait for --stall-after before closing",
+    )
+    parser.add_argument(
+        "--reset-after-configure-ack",
+        action="store_true",
+        help="Reset the connection immediately after CONFIGURE_ACK",
+    )
+    parser.add_argument(
         "--configure-extradata-hex",
         default="",
         help="Hex-encoded extradata payload to send in CONFIGURE_ACK",
@@ -705,6 +781,12 @@ def main() -> int:
     parser.add_argument("--once", action="store_true", help="handle a single connection then exit")
     args = parser.parse_args()
     try:
+        global OUTBOUND_VERSION
+        if not 0 <= args.response_version <= 0xFFFF:
+            raise ValueError("response-version must fit in uint16")
+        if args.stall_seconds < 0:
+            raise ValueError("stall-seconds must be non-negative")
+        OUTBOUND_VERSION = args.response_version
         args.capabilities = [cap for cap in args.capabilities.split(",") if cap]
         args.configure_extradata = validate_payload_size(
             load_hex_payload(

@@ -148,6 +148,8 @@ static int set_socket_timeout(int fd, int timeout_ms) {
 }
 
 static void configure_socket_buffers(int fd) {
+    vtremote_disable_sigpipe(fd);
+
     int bufsize = 16 * 1024 * 1024;
     setsockopt(fd, SOL_SOCKET, SO_SNDBUF, VTR_SOCKOPT_ARG &bufsize, sizeof(bufsize));
     setsockopt(fd, SOL_SOCKET, SO_RCVBUF, VTR_SOCKOPT_ARG &bufsize, sizeof(bufsize));
@@ -156,7 +158,7 @@ static void configure_socket_buffers(int fd) {
 static int write_full(int fd, const uint8_t *buf, int size) {
     int sent = 0;
     while (sent < size) {
-        int r = (int)send(fd, buf + sent, size - sent, 0);
+        int r = (int)send(fd, buf + sent, size - sent, vtremote_send_flags(0));
         if (r < 0) {
             int err = vtremote_sock_errno();
 #if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
@@ -774,6 +776,12 @@ static int vtremote_read_msg_internal(VTRemoteTranscodeContext *s, VTRemoteMsgHe
         }
 
         ret = vtremote_read_header(s->rx_header_buf, VTREMOTE_HEADER_SIZE, &s->rx_header);
+        if (ret < 0) {
+            vtremote_reset_rx_state(s);
+            return ret;
+        }
+        ret = vtremote_validate_payload_length(s->rx_header.type,
+                                               s->rx_header.length);
         if (ret < 0) {
             vtremote_reset_rx_state(s);
             return ret;

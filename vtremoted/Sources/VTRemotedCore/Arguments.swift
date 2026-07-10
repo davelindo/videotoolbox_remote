@@ -45,40 +45,78 @@ public struct Arguments: Equatable, Sendable {
 
     public static func parse(_ argv: [String]) -> Arguments {
         var args = Arguments()
-        var iterator = argv.makeIterator()
-        _ = iterator.next()
-        while let arg = iterator.next() {
+        var index = 1
+
+        func value(after option: String) -> String? {
+            guard index + 1 < argv.count else {
+                args.parseError = "missing value for \(option)"
+                return nil
+            }
+            index += 1
+            return argv[index]
+        }
+
+        func positiveInt(after option: String, maximum: Int? = nil) -> Int? {
+            guard let raw = value(after: option) else { return nil }
+            guard let parsed = Int(raw), parsed > 0,
+                  maximum.map({ parsed <= $0 }) ?? true
+            else {
+                args.parseError = "invalid value for \(option): \(raw)"
+                return nil
+            }
+            return parsed
+        }
+
+        func nonEmptyValue(after option: String) -> String? {
+            guard let parsed = value(after: option) else { return nil }
+            guard !parsed.isEmpty else {
+                args.parseError = "invalid value for \(option)"
+                return nil
+            }
+            return parsed
+        }
+
+        while index < argv.count {
+            let arg = argv[index]
             switch arg {
             case "--listen":
-                if let value = iterator.next() { args.listen = value }
+                guard let parsed = nonEmptyValue(after: arg) else { return args }
+                args.listen = parsed
             case "--token":
-                if let value = iterator.next() { args.token = value }
+                guard let parsed = value(after: arg) else { return args }
+                args.token = parsed
             case "--token-file":
-                if let value = iterator.next() { args.tokenFile = value }
+                guard let parsed = nonEmptyValue(after: arg) else { return args }
+                args.tokenFile = parsed
             case "--token-env":
-                if let value = iterator.next() { args.tokenEnv = value }
+                guard let parsed = nonEmptyValue(after: arg) else { return args }
+                args.tokenEnv = parsed
             case "--max-sessions":
-                if let value = iterator.next(), let parsed = Int(value), parsed > 0 { args.maxSessions = parsed }
+                guard let parsed = positiveInt(after: arg) else { return args }
+                args.maxSessions = parsed
             case "--handshake-timeout":
-                if let value = iterator.next(), let parsed = Int(value), parsed > 0 {
-                    args.handshakeTimeoutSeconds = parsed
-                }
+                guard let parsed = positiveInt(after: arg) else { return args }
+                args.handshakeTimeoutSeconds = parsed
             case "--idle-timeout":
-                if let value = iterator.next(), let parsed = Int(value), parsed > 0 { args.idleTimeoutSeconds = parsed }
+                guard let parsed = positiveInt(after: arg) else { return args }
+                args.idleTimeoutSeconds = parsed
             case "--max-message-bytes":
-                if let value = iterator.next(), let parsed = Int(value), parsed > 0 { args.maxMessageBytes = parsed }
+                guard let parsed = positiveInt(after: arg, maximum: Int(UInt32.max)) else { return args }
+                args.maxMessageBytes = parsed
             case "--log-level":
-                if let value = iterator.next() {
-                    let lower = value.lowercased()
-                    if let levelInt = Int(lower), let level = LogLevel(rawValue: levelInt) {
-                        args.logLevel = level
-                    } else if lower == "debug" {
-                        args.logLevel = .debug
-                    } else if lower == "info" {
-                        args.logLevel = .info
-                    } else if lower == "error" {
-                        args.logLevel = .error
-                    }
+                guard let raw = value(after: arg) else { return args }
+                let lower = raw.lowercased()
+                if let levelInt = Int(lower), let level = LogLevel(rawValue: levelInt) {
+                    args.logLevel = level
+                } else if lower == "debug" {
+                    args.logLevel = .debug
+                } else if lower == "info" {
+                    args.logLevel = .info
+                } else if lower == "error" {
+                    args.logLevel = .error
+                } else {
+                    args.parseError = "invalid value for \(arg): \(raw)"
+                    return args
                 }
             case "--once":
                 args.once = true
@@ -90,6 +128,7 @@ public struct Arguments: Equatable, Sendable {
                 args.parseError = "unknown argument: \(arg)"
                 return args
             }
+            index += 1
         }
         return args
     }

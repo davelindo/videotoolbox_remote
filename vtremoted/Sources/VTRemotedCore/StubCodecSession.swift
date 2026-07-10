@@ -80,8 +80,24 @@ final class StubCodecSession: CodecSession {
         let dur = try Int64(bitPattern: reader.readBEUInt64())
         let flags = try reader.readBEUInt32()
         let planeCount = try reader.readUInt8()
-        guard planeCount == 2 else {
-            throw VTRemotedError.protocolViolation("expected 2 planes")
+        let bytesPerSample = (configuration.pixelFormat == VTRPixelFormat.p010 ||
+            configuration.pixelFormat == VTRPixelFormat.p210) ? 2 : 1
+        let rowBytes = switch configuration.pixelFormat {
+        case VTRPixelFormat.bgra, VTRPixelFormat.ayuv:
+            configuration.width * 4
+        default:
+            configuration.width * bytesPerSample
+        }
+        let expectedHeights: [Int] = switch configuration.pixelFormat {
+        case VTRPixelFormat.bgra, VTRPixelFormat.ayuv:
+            [configuration.height]
+        case VTRPixelFormat.p210:
+            [configuration.height, configuration.height]
+        default:
+            [configuration.height, (configuration.height + 1) / 2]
+        }
+        guard Int(planeCount) == expectedHeights.count else {
+            throw VTRemotedError.protocolViolation("expected \(expectedHeights.count) planes")
         }
 
         struct Plane {
@@ -91,21 +107,36 @@ final class StubCodecSession: CodecSession {
         }
 
         var planes: [Plane] = []
-        planes.reserveCapacity(2)
-        for _ in 0 ..< 2 {
+        var layouts: [ValidatedFramePlaneLayout] = []
+        planes.reserveCapacity(expectedHeights.count)
+        layouts.reserveCapacity(expectedHeights.count)
+        for planeIndex in expectedHeights.indices {
             let stride = try Int(reader.readBEUInt32())
             let height = try Int(reader.readBEUInt32())
             let len = try Int(reader.readBEUInt32())
             let raw = try reader.readBytes(count: len)
 
-            let expectedSize = max(0, stride * height)
+            let layout = try FramePlaneValidation.validate(
+                stride: stride,
+                height: height,
+                encodedLength: len,
+                minimumRowBytes: rowBytes,
+                expectedHeight: expectedHeights[planeIndex],
+                maxDecodedBytes: configuration.maxFrameBytes,
+                compressionMode: configuration.options.wireCompression
+            )
             let planeData = try maybeDecompress(
                 raw,
-                expectedSize: expectedSize,
+                expectedSize: layout.decodedSize,
                 compressionMode: configuration.options.wireCompression
             )
             planes.append(Plane(stride: stride, height: height, data: planeData))
+            layouts.append(layout)
         }
+        try FramePlaneValidation.validateTotalDecodedBytes(
+            layouts,
+            maxDecodedBytes: configuration.maxFrameBytes
+        )
 
         let digest = planes[0].data.prefix(16)
         var annexB = Data([0x00, 0x00, 0x00, 0x01])
@@ -154,7 +185,7 @@ final class StubCodecSession: CodecSession {
         let yStride = configuration.width * bytesPerSample
         let uvStride = configuration.width * bytesPerSample
         let yHeight = configuration.height
-        let uvHeight = configuration.height / 2
+        let uvHeight = (configuration.height + 1) / 2
         let yBytes = yStride * yHeight
         let uvBytes = uvStride * uvHeight
 

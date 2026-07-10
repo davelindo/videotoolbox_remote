@@ -26,6 +26,7 @@
 #include "libavutil/avstring.h"
 #include "libavutil/ffversion.h"
 #include "libavutil/hwcontext.h"
+#include "libavutil/imgutils.h"
 #include "libavutil/opt.h"
 #include "libavutil/mem.h"
 #include "libavutil/common.h"
@@ -98,6 +99,8 @@ static int set_socket_timeout(int fd, int timeout_ms)
 /* Configure socket for high-throughput video streaming */
 static void configure_socket_buffers(int fd)
 {
+    vtremote_disable_sigpipe(fd);
+
     /* 16MB buffers to sustain multi-gigabit links */
     int bufsize = 16 * 1024 * 1024;
     setsockopt(fd, SOL_SOCKET, SO_SNDBUF, VTR_SOCKOPT_ARG &bufsize, sizeof(bufsize));
@@ -155,7 +158,7 @@ static int write_full(int fd, const uint8_t *buf, int size)
 {
     int sent = 0;
     while (sent < size) {
-        int r = (int)send(fd, buf + sent, size - sent, 0);
+        int r = (int)send(fd, buf + sent, size - sent, vtremote_send_flags(0));
         if (r < 0) {
             int err = vtremote_sock_errno();
 #if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
@@ -343,6 +346,9 @@ static int vtremote_read_msg(VTRemoteDecContext *s, VTRemoteMsgHeader *hdr, uint
     if (ret < 0)
         return ret;
     ret = vtremote_read_header(header_buf, VTREMOTE_HEADER_SIZE, hdr);
+    if (ret < 0)
+        return ret;
+    ret = vtremote_validate_payload_length(hdr->type, hdr->length);
     if (ret < 0)
         return ret;
     if (hdr->length == 0) {
@@ -950,26 +956,105 @@ static void add_side_data_to_frame(AVFrame *frame, const VTRemoteFrameView *view
     }
 }
 
+static int vtremote_plane_geometry(const AVCodecContext *avctx, int plane,
+                                   int *minimum_stride, int *rows)
+{
+    const AVPixFmtDescriptor *desc;
+    enum AVPixelFormat sw_fmt;
+    int plane_count;
+    int stride;
+    int height;
+
+    if (!avctx || !minimum_stride || !rows || avctx->width <= 0 ||
+        avctx->height <= 0)
+        return AVERROR_INVALIDDATA;
+
+    sw_fmt = vtremote_decode_sw_pix_fmt(avctx);
+    plane_count = av_pix_fmt_count_planes(sw_fmt);
+    if (plane < 0 || plane >= plane_count)
+        return AVERROR_INVALIDDATA;
+
+    stride = av_image_get_linesize(sw_fmt, avctx->width, plane);
+    desc = av_pix_fmt_desc_get(sw_fmt);
+    if (stride <= 0 || !desc)
+        return AVERROR_INVALIDDATA;
+
+    height = avctx->height;
+    if (plane > 0)
+        height = AV_CEIL_RSHIFT(height, desc->log2_chroma_h);
+    if (height <= 0)
+        return AVERROR_INVALIDDATA;
+
+    *minimum_stride = stride;
+    *rows = height;
+    return 0;
+}
+
+static int vtremote_validate_plane_view(const VTRemotePlaneView *p,
+                                        int minimum_stride, int rows,
+                                        int compressed, int *decoded_size)
+{
+    if (minimum_stride <= 0 || rows <= 0)
+        return AVERROR_INVALIDDATA;
+    return vtremote_validate_plane_geometry(
+        p, minimum_stride, rows, compressed,
+        VTREMOTE_MAX_MEDIA_PAYLOAD_BYTES, decoded_size);
+}
+
+static int vtremote_validate_frame_view(const AVCodecContext *avctx,
+                                        const VTRemoteFrameView *view,
+                                        int compressed)
+{
+    enum AVPixelFormat sw_fmt;
+    int plane_count;
+    uint64_t decoded_total = 0;
+
+    if (!avctx || !view)
+        return AVERROR_INVALIDDATA;
+
+    sw_fmt = vtremote_decode_sw_pix_fmt(avctx);
+    plane_count = av_pix_fmt_count_planes(sw_fmt);
+    if (plane_count <= 0 || plane_count > AV_NUM_DATA_POINTERS ||
+        view->plane_count != plane_count)
+        return AVERROR_INVALIDDATA;
+
+    for (int i = 0; i < plane_count; i++) {
+        int minimum_stride;
+        int rows;
+        int decoded_size;
+        int ret = vtremote_plane_geometry(avctx, i, &minimum_stride, &rows);
+
+        if (ret < 0)
+            return ret;
+        ret = vtremote_validate_plane_view(&view->planes[i], minimum_stride,
+                                           rows, compressed, &decoded_size);
+        if (ret < 0)
+            return ret;
+        decoded_total += decoded_size;
+        if (decoded_total > VTREMOTE_MAX_MEDIA_PAYLOAD_BYTES)
+            return AVERROR_INVALIDDATA;
+    }
+    return 0;
+}
+
 static int vtremote_copy_or_decompress_plane(VTRemoteDecContext *s,
                                              uint8_t *dst, int dst_stride,
                                              const VTRemotePlaneView *p,
-                                             int plane)
+                                             int plane, int minimum_stride,
+                                             int rows)
 {
-    int rows;
     int expected;
     int ret;
+    int compressed = s && s->wire_compression != 0;
 
-    if (!dst || dst_stride <= 0 || !p || p->stride <= 0 || p->height <= 0)
+    if (!dst || dst_stride < minimum_stride)
         return AVERROR_INVALIDDATA;
+    ret = vtremote_validate_plane_view(p, minimum_stride, rows, compressed,
+                                       &expected);
+    if (ret < 0)
+        return ret;
 
-    rows = p->height;
-    if (p->stride > INT_MAX / rows)
-        return AVERROR_INVALIDDATA;
-    expected = (int)p->stride * rows;
-    if (expected <= 0)
-        return AVERROR_INVALIDDATA;
-
-    if (!s || s->wire_compression == 0) {
+    if (!compressed) {
         int row_bytes = FFMIN((int)p->stride, dst_stride);
         vtremote_copy_plane_rows(dst, dst_stride, p->data, p->stride,
                                  row_bytes, rows);
@@ -1011,9 +1096,11 @@ static int fill_hw_frame_from_view(AVCodecContext *avctx,
     int ret;
     int cv_planes;
     enum AVPixelFormat sw_fmt = vtremote_decode_sw_pix_fmt(avctx);
+    int compressed = s && s->wire_compression != 0;
 
-    if (!view || view->plane_count < 1 || view->plane_count > 2)
-        return AVERROR_INVALIDDATA;
+    ret = vtremote_validate_frame_view(avctx, view, compressed);
+    if (ret < 0)
+        return ret;
     if (!avctx->hw_frames_ctx)
         return AVERROR(EINVAL);
 
@@ -1064,22 +1151,30 @@ static int fill_hw_frame_from_view(AVCodecContext *avctx,
     for (int i = 0; i < view->plane_count; i++) {
         uint8_t *dst;
         size_t dst_stride_size;
+        size_t dst_height_size;
         int dst_stride;
+        int minimum_stride;
+        int rows;
 
         if (CVPixelBufferIsPlanar(pixbuf)) {
             dst = CVPixelBufferGetBaseAddressOfPlane(pixbuf, i);
             dst_stride_size = CVPixelBufferGetBytesPerRowOfPlane(pixbuf, i);
+            dst_height_size = CVPixelBufferGetHeightOfPlane(pixbuf, i);
         } else {
             dst = CVPixelBufferGetBaseAddress(pixbuf);
             dst_stride_size = CVPixelBufferGetBytesPerRow(pixbuf);
+            dst_height_size = CVPixelBufferGetHeight(pixbuf);
         }
-        if (!dst || dst_stride_size > INT_MAX) {
+        ret = vtremote_plane_geometry(avctx, i, &minimum_stride, &rows);
+        if (ret < 0 || !dst || dst_stride_size > INT_MAX ||
+            dst_height_size < (size_t)rows) {
             ret = AVERROR_INVALIDDATA;
             goto unlock;
         }
         dst_stride = (int)dst_stride_size;
         ret = vtremote_copy_or_decompress_plane(s, dst, dst_stride,
-                                                &view->planes[i], i);
+                                                &view->planes[i], i,
+                                                minimum_stride, rows);
         if (ret < 0)
             goto unlock;
     }
@@ -1111,12 +1206,13 @@ static int fill_frame_from_view(AVCodecContext *avctx, AVFrame *frame, const VTR
 {
     if (avctx->pix_fmt == AV_PIX_FMT_VIDEOTOOLBOX)
         return fill_hw_frame_from_view(avctx, NULL, frame, view);
-    if (!view || view->plane_count < 1 || view->plane_count > 4)
-        return AVERROR_INVALIDDATA;
+    int ret = vtremote_validate_frame_view(avctx, view, 0);
+    if (ret < 0)
+        return ret;
     frame->format = avctx->pix_fmt;
     frame->width = avctx->width;
     frame->height = avctx->height;
-    int ret = ff_get_buffer(avctx, frame, 0);
+    ret = ff_get_buffer(avctx, frame, 0);
     if (ret < 0)
         return ret;
     // ff_get_buffer overwrites timestamps based on last packet; restore from view.
@@ -1129,7 +1225,11 @@ static int fill_frame_from_view(AVCodecContext *avctx, AVFrame *frame, const VTR
         int rows = view->planes[i].height;
         uint8_t *dst = frame->data[i];
         int dst_stride = frame->linesize[i];
-        if (!dst || !src || src_stride <= 0 || dst_stride <= 0 || rows < 0) {
+        int minimum_stride;
+        int expected_rows;
+        ret = vtremote_plane_geometry(avctx, i, &minimum_stride, &expected_rows);
+        if (ret < 0 || !dst || !src || src_stride < minimum_stride ||
+            dst_stride < minimum_stride || rows != expected_rows) {
             av_log(avctx, AV_LOG_ERROR,
                    "Invalid uncompressed remote decode plane %d: dst=%p src=%p src_stride=%d dst_stride=%d rows=%d.\n",
                    i, dst, src, src_stride, dst_stride, rows);
@@ -1144,6 +1244,11 @@ static int fill_frame_from_view(AVCodecContext *avctx, AVFrame *frame, const VTR
     return 0;
 }
 
+static int64_t vtremote_next_timestamp(int64_t value)
+{
+    return value == INT64_MAX ? INT64_MAX : value + 1;
+}
+
 static void enforce_monotonic_pts(VTRemoteDecContext *s, AVFrame *frame)
 {
     if (!s || !frame)
@@ -1151,11 +1256,12 @@ static void enforce_monotonic_pts(VTRemoteDecContext *s, AVFrame *frame)
     int64_t pts = frame->pts;
     if (pts == AV_NOPTS_VALUE)
         pts = frame->pkt_dts;
-    if (pts == AV_NOPTS_VALUE) {
-        pts = (s->last_frame_pts == AV_NOPTS_VALUE) ? 0 : s->last_frame_pts + 1;
-    }
+    if (pts == AV_NOPTS_VALUE)
+        pts = s->last_frame_pts == AV_NOPTS_VALUE
+                  ? 0
+                  : vtremote_next_timestamp(s->last_frame_pts);
     if (s->last_frame_pts != AV_NOPTS_VALUE && pts <= s->last_frame_pts)
-        pts = s->last_frame_pts + 1;
+        pts = vtremote_next_timestamp(s->last_frame_pts);
     frame->pts = pts;
     frame->pkt_dts = pts;
     s->last_frame_pts = pts;
@@ -1168,13 +1274,14 @@ static int fill_frame_from_compressed_view(AVCodecContext *avctx, VTRemoteDecCon
         return AVERROR(EINVAL);
     if (avctx->pix_fmt == AV_PIX_FMT_VIDEOTOOLBOX)
         return fill_hw_frame_from_view(avctx, s, frame, view);
-    if (view->plane_count < 2)
-        return AVERROR_INVALIDDATA;
+    int ret = vtremote_validate_frame_view(avctx, view, 1);
+    if (ret < 0)
+        return ret;
 
     frame->format = avctx->pix_fmt;
     frame->width = avctx->width;
     frame->height = avctx->height;
-    int ret = ff_get_buffer(avctx, frame, 0);
+    ret = ff_get_buffer(avctx, frame, 0);
     if (ret < 0)
         return ret;
     // ff_get_buffer overwrites timestamps based on last packet; restore from view.
@@ -1182,11 +1289,19 @@ static int fill_frame_from_compressed_view(AVCodecContext *avctx, VTRemoteDecCon
     frame->duration = view->duration;
     frame->pkt_dts = frame->pts;
 
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < view->plane_count; i++) {
         uint8_t *dst = frame->data[i];
         int dst_stride = frame->linesize[i];
+        int minimum_stride;
+        int rows;
+        ret = vtremote_plane_geometry(avctx, i, &minimum_stride, &rows);
+        if (ret < 0) {
+            av_frame_unref(frame);
+            return ret;
+        }
         ret = vtremote_copy_or_decompress_plane(s, dst, dst_stride,
-                                                &view->planes[i], i);
+                                                &view->planes[i], i,
+                                                minimum_stride, rows);
         if (ret < 0) {
             av_log(avctx, AV_LOG_ERROR,
                    "Failed to populate compressed remote decode plane %d: %s.\n",

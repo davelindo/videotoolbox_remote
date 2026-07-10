@@ -66,6 +66,15 @@ sequenceDiagram
 | 6 | `uint16` | `type` | Enum ID (see below) |
 | 8 | `uint32` | `length` | Payload size in bytes (excluding header) |
 
+### Length and Geometry Limits
+
+- Length-prefixed strings use an unsigned 16-bit byte count and can represent at most 65,535 UTF-8 bytes. Senders must keep the advertised length and emitted bytes consistent.
+- The server accepts `HELLO` payloads up to 64 KiB, `CONFIGURE` payloads up to 4 MiB, and media messages up to the configured `--max-message-bytes` limit (256 MiB by default).
+- FFmpeg clients accept `HELLO_ACK` payloads up to 64 KiB, `CONFIGURE_ACK` payloads up to 4 MiB, media payloads up to 256 MiB, and other control payloads up to 64 KiB.
+- OBS accepts `HELLO_ACK` payloads up to 64 KiB, `CONFIGURE_ACK` payloads up to 4 MiB, and streaming responses up to 8 MiB.
+- Raw-frame plane metadata must match the configured pixel format and dimensions. Stride must cover a complete row, height must match the expected plane height, and the decoded plane/frame size must remain within the receiver's media limit before allocation or decompression.
+- Receivers reject unsupported protocol versions before reading or allocating the declared payload.
+
 ## 3. Message Types
 
 | ID | Name | Direction | Payload Description |
@@ -157,7 +166,7 @@ packet.
 ## 5. Security & Error Handling
 
 - **Authentication**: Simple token matching in `HELLO`.
-- **Timeouts**: 10s read timeout suggested. Send `PING` every 5s if idle.
+- **Timeouts**: The server defaults to a 10-second handshake timeout and a 60-second idle timeout. The OBS client bounds socket reads and writes to five seconds. Send `PING` every 5s if idle.
 - **Errors**: Connection closes immediately after sending `ERROR`.
 
 ### Error Codes

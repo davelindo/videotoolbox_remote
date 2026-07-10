@@ -105,9 +105,10 @@ public struct ConfigureAckResponse: Equatable, Sendable {
 
     public func encode() -> Data {
         var writer = ByteWriter()
+        let encodedExtradata = extradata.prefix(Int(UInt16.max))
         writer.write(status)
-        writer.writeBE(UInt16(clamping: extradata.count))
-        writer.write(extradata)
+        writer.writeBE(UInt16(encodedExtradata.count))
+        writer.write(Data(encodedExtradata))
         writer.write(pixelFormat)
         writer.write(warnings)
         return writer.data

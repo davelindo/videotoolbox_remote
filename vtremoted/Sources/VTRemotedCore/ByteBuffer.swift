@@ -34,8 +34,9 @@ public struct ByteWriter: Sendable {
 
     public mutating func writeLengthPrefixedUTF8(_ string: String) {
         let bytes = string.data(using: .utf8) ?? Data()
-        writeBE(UInt16(clamping: bytes.count))
-        write(bytes)
+        let encoded = bytes.prefix(Int(UInt16.max))
+        writeBE(UInt16(encoded.count))
+        data.append(contentsOf: encoded)
     }
 }
 
@@ -56,7 +57,7 @@ public struct ByteReader: Sendable {
         guard count >= 0 else {
             throw VTRemotedError.protocolViolation("negative length")
         }
-        guard index + count <= data.count else {
+        guard index >= 0, index <= data.count, count <= data.count - index else {
             throw VTRemotedError.protocolViolation("unexpected EOF")
         }
         let startIdx = index

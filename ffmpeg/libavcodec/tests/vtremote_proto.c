@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "libavutil/avassert.h"
+#include "libavutil/common.h"
 #include "libavutil/error.h"
 #include "libavutil/frame.h"
 #include "libavutil/log.h"
@@ -90,6 +91,67 @@ static int test_short_buffer(void)
     };
     int ret = vtremote_write_header(buf, sizeof(buf), &in);
     av_assert0(ret == AVERROR(EINVAL));
+    return 0;
+}
+
+static int test_payload_length_limits(void)
+{
+    static const struct {
+        uint16_t type;
+        uint32_t limit;
+    } cases[] = {
+        { VTREMOTE_MSG_HELLO_ACK,     VTREMOTE_MAX_HELLO_ACK_BYTES     },
+        { VTREMOTE_MSG_CONFIGURE_ACK, VTREMOTE_MAX_CONFIGURE_ACK_BYTES },
+        { VTREMOTE_MSG_FRAME,         VTREMOTE_MAX_MEDIA_PAYLOAD_BYTES },
+        { VTREMOTE_MSG_PACKET,        VTREMOTE_MAX_MEDIA_PAYLOAD_BYTES },
+        { VTREMOTE_MSG_ERROR,         VTREMOTE_MAX_CONTROL_PAYLOAD_BYTES },
+    };
+
+    for (int i = 0; i < FF_ARRAY_ELEMS(cases); i++) {
+        av_assert0(vtremote_validate_payload_length(cases[i].type,
+                                                    cases[i].limit) == 0);
+        av_assert0(vtremote_validate_payload_length(cases[i].type,
+                                                    cases[i].limit + 1) == AVERROR_INVALIDDATA);
+    }
+    av_assert0(vtremote_validate_payload_length(VTREMOTE_MSG_FRAME,
+                                                UINT32_MAX) == AVERROR_INVALIDDATA);
+    return 0;
+}
+
+static int test_plane_geometry_limits(void)
+{
+    uint8_t data[16] = { 0 };
+    VTRemotePlaneView plane = {
+        .stride = 4,
+        .height = 4,
+        .data_len = sizeof(data),
+        .data = data,
+    };
+    int decoded_size = 0;
+
+    av_assert0(vtremote_validate_plane_geometry(&plane, 4, 4, 0, 16,
+                                                 &decoded_size) == 0);
+    av_assert0(decoded_size == 16);
+
+    plane.height = 5;
+    av_assert0(vtremote_validate_plane_geometry(&plane, 4, 4, 0, 32,
+                                                 NULL) == AVERROR_INVALIDDATA);
+    plane.height = 4;
+    plane.stride = 3;
+    av_assert0(vtremote_validate_plane_geometry(&plane, 4, 4, 0, 16,
+                                                 NULL) == AVERROR_INVALIDDATA);
+    plane.stride = 4;
+    plane.data_len = 15;
+    av_assert0(vtremote_validate_plane_geometry(&plane, 4, 4, 0, 16,
+                                                 NULL) == AVERROR_INVALIDDATA);
+    plane.data_len = 1;
+    av_assert0(vtremote_validate_plane_geometry(&plane, 4, 4, 1, 15,
+                                                 NULL) == AVERROR_INVALIDDATA);
+    plane.stride = UINT32_MAX;
+    plane.height = UINT32_MAX;
+    av_assert0(vtremote_validate_plane_geometry(&plane, 1, UINT32_MAX, 1,
+                                                 UINT32_MAX,
+                                                 NULL) == AVERROR_INVALIDDATA);
     return 0;
 }
 
@@ -315,6 +377,8 @@ int main(void)
     ret |= test_invalid_magic();
     ret |= test_invalid_version();
     ret |= test_short_buffer();
+    ret |= test_payload_length_limits();
+    ret |= test_plane_geometry_limits();
     ret |= test_build_and_parse_hello();
     ret |= test_build_configure();
     ret |= test_frame_and_packet_parse();

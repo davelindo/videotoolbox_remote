@@ -80,7 +80,8 @@ final class DecodeReorderBuffer<Payload> {
             var pts = frame.ptsTicks
             var clamped = false
             if lastEmittedPts != Int64.min && pts <= lastEmittedPts {
-                pts = lastEmittedPts + 1
+                let (next, overflow) = lastEmittedPts.addingReportingOverflow(1)
+                pts = overflow ? Int64.max : next
                 clamped = true
             }
             if lastEmittedPts == Int64.min || pts > lastEmittedPts {

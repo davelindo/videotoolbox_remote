@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -35,6 +36,7 @@ typedef SOCKET socket_t;
 #include <netinet/tcp.h>
 #include <poll.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 typedef int socket_t;
 #define SOCKET_INVALID (-1)
@@ -51,6 +53,53 @@ namespace {
 constexpr uint32_t HELLO_ACK_MAX_BYTES = 64 * 1024;
 constexpr uint32_t CONFIGURE_ACK_MAX_BYTES = 4 * 1024 * 1024;
 constexpr uint32_t INBOUND_MESSAGE_MAX_BYTES = 8 * 1024 * 1024;
+constexpr int SOCKET_TIMEOUT_MS = 5000;
+
+bool append_string(std::vector<uint8_t> &buf, const char *value, size_t len) {
+  if (len > std::numeric_limits<uint16_t>::max()) {
+    log_err("String is too long for the vtremote protocol: len=%zu", len);
+    return false;
+  }
+  buf.push_back(static_cast<uint8_t>(len >> 8));
+  buf.push_back(static_cast<uint8_t>(len));
+  if (len > 0)
+    buf.insert(buf.end(), value, value + len);
+  return true;
+}
+
+bool append_string(std::vector<uint8_t> &buf, const char *value) {
+  return append_string(buf, value, value ? std::strlen(value) : 0);
+}
+
+bool configure_socket_io(socket_t sock) {
+#ifdef _WIN32
+  DWORD timeout = SOCKET_TIMEOUT_MS;
+  if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
+                 reinterpret_cast<const char *>(&timeout), sizeof(timeout)) ||
+      setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO,
+                 reinterpret_cast<const char *>(&timeout), sizeof(timeout))) {
+    log_err("Failed to configure socket timeouts: error=%d", WSAGetLastError());
+    return false;
+  }
+#else
+  struct timeval timeout = {};
+  timeout.tv_sec = SOCKET_TIMEOUT_MS / 1000;
+  timeout.tv_usec = (SOCKET_TIMEOUT_MS % 1000) * 1000;
+  if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) ||
+      setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout))) {
+    log_err("Failed to configure socket timeouts: errno=%d", errno);
+    return false;
+  }
+#ifdef SO_NOSIGPIPE
+  int enabled = 1;
+  if (setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, &enabled, sizeof(enabled))) {
+    log_err("Failed to disable SIGPIPE: errno=%d", errno);
+    return false;
+  }
+#endif
+#endif
+  return true;
+}
 
 const char *wire_compression_name(int mode) {
   switch (mode) {
@@ -211,10 +260,10 @@ static int read_exact(socket_t sock, void *buf, size_t len) {
     if (r < 0) {
 #ifdef _WIN32
       int err = WSAGetLastError();
-      if (err == WSAEWOULDBLOCK || err == WSAETIMEDOUT)
+      if (err == WSAEINTR)
         continue;
 #else
-      if (errno == EAGAIN || errno == EINTR)
+      if (errno == EINTR)
         continue;
 #endif
       return READ_ERROR;
@@ -237,10 +286,27 @@ static void log_err(const char *fmt, ...) {
 static bool write_all(socket_t sock, const void *buf, size_t len) {
   const uint8_t *p = (const uint8_t *)buf;
   size_t sent = 0;
+  int flags = 0;
+#if !defined(_WIN32) && defined(MSG_NOSIGNAL)
+  flags |= MSG_NOSIGNAL;
+#endif
   while (sent < len) {
-    ssize_t w = send(sock, (const char *)(p + sent), (int)(len - sent), 0);
+    const size_t remaining = len - sent;
+    const int chunk = static_cast<int>(std::min<size_t>(
+        remaining, static_cast<size_t>(std::numeric_limits<int>::max())));
+    ssize_t w = send(sock, (const char *)(p + sent), chunk, flags);
     if (w <= 0) {
-      log_err("write_all failed: w=%zd errno=%d", w, errno);
+#ifdef _WIN32
+      const int err = WSAGetLastError();
+      if (w < 0 && err == WSAEINTR)
+        continue;
+      log_err("write_all failed: w=%zd error=%d", w, err);
+#else
+      const int err = errno;
+      if (w < 0 && err == EINTR)
+        continue;
+      log_err("write_all failed: w=%zd errno=%d", w, err);
+#endif
       return false;
     }
     sent += w;
@@ -274,7 +340,7 @@ static bool recv_header(socket_t sock, struct vtr_header *hdr) {
   hdr->version = vtr_read_be16(buf + 4);
   hdr->type = vtr_read_be16(buf + 6);
   hdr->length = vtr_read_be32(buf + 8);
-  return hdr->magic == VTR_MAGIC;
+  return hdr->magic == VTR_MAGIC && hdr->version == VTR_VERSION;
 }
 
 bool vtremoted_client_connect(VTRemotedClient *client, const char *host,
@@ -294,6 +360,12 @@ bool vtremoted_client_connect(VTRemotedClient *client, const char *host,
   client->sock = socket(AF_INET, SOCK_STREAM, 0);
   if (client->sock == SOCKET_INVALID)
     return false;
+
+  if (!configure_socket_io(client->sock)) {
+    close_socket(client->sock);
+    client->sock = SOCKET_INVALID;
+    return false;
+  }
 
   /* TCP_NODELAY for low latency */
   int yes = 1;
@@ -322,17 +394,13 @@ bool vtremoted_client_connect(VTRemotedClient *client, const char *host,
   std::vector<uint8_t> hello;
   /* token length (2) + token + codec length (2) + codec + client_name length
    * (2) + client_name + build length (2) + build */
-  auto add_string = [&hello](const char *s) {
-    size_t len = s ? strlen(s) : 0;
-    hello.push_back((len >> 8) & 0xFF);
-    hello.push_back(len & 0xFF);
-    if (len > 0)
-      hello.insert(hello.end(), s, s + len);
-  };
-  add_string(client->token.c_str());
-  add_string("h264");
-  add_string("obs-vtremoted");
-  add_string("1.0.0");
+  if (!append_string(hello, client->token.data(), client->token.size()) ||
+      !append_string(hello, "h264") ||
+      !append_string(hello, "obs-vtremoted") ||
+      !append_string(hello, "1.0.0")) {
+    vtremoted_client_disconnect(client);
+    return false;
+  }
 
   log_err("Sending HELLO");
   if (!send_msg(client->sock, VTR_MSG_HELLO, hello.data(),
@@ -423,30 +491,22 @@ bool vtremoted_client_configure(VTRemotedClient *client, uint32_t width,
   write_be32(cfg.data() + 21, fr_den);
 
   /* Options map: key-value pairs */
-  auto add_string = [&cfg](const char *value) {
-    size_t len = value ? strlen(value) : 0;
-    cfg.push_back((len >> 8) & 0xFF);
-    cfg.push_back(len & 0xFF);
-    if (len > 0) {
-      cfg.insert(cfg.end(), value, value + len);
-    }
-  };
-
   int option_count = 0;
-  auto add_option = [&cfg, &add_string, &option_count](const char *key,
-                                                        const char *value) {
+  auto add_option = [&cfg, &option_count](const char *key,
+                                          const char *value) {
     size_t klen = strlen(key);
     if (klen == 0)
-      return;
-    add_string(key);
-    add_string(value);
+      return false;
+    if (!append_string(cfg, key) || !append_string(cfg, value))
+      return false;
     option_count += 1;
+    return true;
   };
 
   auto add_option_int = [&add_option](const char *key, int value) {
     char tmp[32];
     snprintf(tmp, sizeof(tmp), "%d", value);
-    add_option(key, tmp);
+    return add_option(key, tmp);
   };
 
   /* Option count (patched after options are appended). */
@@ -454,10 +514,11 @@ bool vtremoted_client_configure(VTRemotedClient *client, uint32_t width,
   cfg.push_back(0);
   cfg.push_back(0);
 
-  add_option("mode", "encode");
-  add_option_int("bitrate", bitrate);
-  add_option_int("gop", gop);
-  add_option_int("wire_compression", wire_compression);
+  if (!add_option("mode", "encode") ||
+      !add_option_int("bitrate", bitrate) ||
+      !add_option_int("gop", gop) ||
+      !add_option_int("wire_compression", wire_compression))
+    return false;
 
   cfg[option_count_pos] = (option_count >> 8) & 0xFF;
   cfg[option_count_pos + 1] = option_count & 0xFF;

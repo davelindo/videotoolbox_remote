@@ -332,20 +332,34 @@
             case VTRPixelFormat.p210:
                 return (frameHeight, frameHeight)
             default:
-                return (frameHeight, frameHeight / 2)
+                return (frameHeight, (frameHeight + 1) / 2)
             }
+        }
+
+        private struct PixelBufferPlaneDestination {
+            let base: UnsafeMutableRawPointer
+            let stride: Int
+            let height: Int
         }
 
         private static func baseAddressAndStride(
             pixelBuffer: CVPixelBuffer,
             planeIndex: Int
-        ) -> (base: UnsafeMutableRawPointer, stride: Int)? {
+        ) -> PixelBufferPlaneDestination? {
             if CVPixelBufferIsPlanar(pixelBuffer) {
                 guard let base = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, planeIndex) else { return nil }
-                return (base, CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, planeIndex))
+                return PixelBufferPlaneDestination(
+                    base: base,
+                    stride: CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, planeIndex),
+                    height: CVPixelBufferGetHeightOfPlane(pixelBuffer, planeIndex)
+                )
             }
             guard planeIndex == 0, let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return nil }
-            return (base, CVPixelBufferGetBytesPerRow(pixelBuffer))
+            return PixelBufferPlaneDestination(
+                base: base,
+                stride: CVPixelBufferGetBytesPerRow(pixelBuffer),
+                height: CVPixelBufferGetHeight(pixelBuffer)
+            )
         }
 
         func configure(_ configuration: SessionConfiguration) throws -> Data {
@@ -436,28 +450,59 @@
 
             let stride1: Int
             let height1: Int
+            let len1: Int
             let uvRange: Range<Int>
             if planes > 1 {
                 stride1 = try Int(reader.readBEUInt32())
                 height1 = try Int(reader.readBEUInt32())
-                let len1 = try Int(reader.readBEUInt32())
+                len1 = try Int(reader.readBEUInt32())
                 // Zero-copy: get range instead of copying data
                 uvRange = try reader.sliceRange(count: len1)
             } else {
                 stride1 = 0
                 height1 = 0
-                uvRange = 0..<0
+                len1 = 0
+                uvRange = 0 ..< 0
             }
 
-            let expectedY = max(0, stride0 * height0)
-            let expectedUV = max(0, stride1 * height1)
+            let rowBytes = Self.planeRowBytes(width: config.width, pixelFormat: config.pixelFormat)
+            let planeHeights = Self.planeHeights(frameHeight: config.height, pixelFormat: config.pixelFormat)
+            let layout0 = try FramePlaneValidation.validate(
+                stride: stride0,
+                height: height0,
+                encodedLength: len0,
+                minimumRowBytes: rowBytes.y,
+                expectedHeight: planeHeights.first,
+                maxDecodedBytes: config.maxFrameBytes,
+                compressionMode: config.options.wireCompression
+            )
+            var layouts = [layout0]
+            let layout1: ValidatedFramePlaneLayout?
+            if planes > 1 {
+                let validated = try FramePlaneValidation.validate(
+                    stride: stride1,
+                    height: height1,
+                    encodedLength: len1,
+                    minimumRowBytes: rowBytes.uv,
+                    expectedHeight: planeHeights.second,
+                    maxDecodedBytes: config.maxFrameBytes,
+                    compressionMode: config.options.wireCompression
+                )
+                layout1 = validated
+                layouts.append(validated)
+            } else {
+                layout1 = nil
+            }
+            try FramePlaneValidation.validateTotalDecodedBytes(
+                layouts,
+                maxDecodedBytes: config.maxFrameBytes
+            )
 
             let pBuffer = try makeCompressionPixelBuffer(session: session)
 
             CVPixelBufferLockBaseAddress(pBuffer, [])
             defer { CVPixelBufferUnlockBaseAddress(pBuffer, []) }
 
-            let rowBytes = Self.planeRowBytes(width: config.width, pixelFormat: config.pixelFormat)
             let rowBytesY = rowBytes.y
             let rowBytesUV = rowBytes.uv
 
@@ -465,23 +510,23 @@
             func processPlane(
                 planeIndex: Int,
                 rawRange: Range<Int>,
-                expectedSize: Int,
-                stride: Int,
+                layout: ValidatedFramePlaneLayout,
                 rowBytes: Int
             ) throws {
                 guard let destination = Self.baseAddressAndStride(
                     pixelBuffer: pBuffer,
                     planeIndex: planeIndex
-                ) else { return }
+                ) else {
+                    throw VTRemotedError.videoToolboxUnavailable
+                }
                 let destBase = destination.base
                 let destStride = destination.stride
+                guard destination.height >= layout.height, destStride >= rowBytes else {
+                    throw VTRemotedError.protocolViolation("plane exceeds destination geometry")
+                }
 
                 if config.options.wireCompression == 0 {
                     // No compression: copy directly from payload into the pixel buffer (avoid temp buffer).
-                    guard rawRange.count >= expectedSize else {
-                        throw VTRemotedError.protocolViolation("plane too small")
-                    }
-                    guard expectedSize > 0 else { return }
                     payload.withUnsafeBytes { payloadPtr in
                         guard let baseAddr = payloadPtr.baseAddress else { return }
                         let srcBase = baseAddr.advanced(by: rawRange.lowerBound)
@@ -490,10 +535,11 @@
                         Self.copyPlaneBytes(
                             source: srcBase,
                             destination: dstBase,
-                            expectedSize: expectedSize,
-                            stride: stride,
+                            expectedSize: layout.decodedSize,
+                            stride: layout.stride,
                             destinationStride: destStride,
-                            rowBytes: rowBytes
+                            rowBytes: rowBytes,
+                            heightHint: layout.height
                         )
                     }
                     return
@@ -501,16 +547,13 @@
 
                 // Compressed path: decompress to temp buffer first (System Memory) to avoid
                 // reading from WC memory during LZ4 back-references.
-                var temp = inputBufferPool.get(capacity: expectedSize)
+                var temp = inputBufferPool.get(capacity: layout.decodedSize)
                 defer { inputBufferPool.return(temp) }
-                if temp.count != expectedSize {
-                    temp.count = expectedSize
+                if temp.count != layout.decodedSize {
+                    temp.count = layout.decodedSize
                 }
 
                 // Zero-copy access to source data
-                guard expectedSize > 0, !rawRange.isEmpty else {
-                    throw VTRemotedError.protocolViolation("empty compressed plane")
-                }
                 let success: Bool = payload.withUnsafeBytes { payloadPtr in
                     guard let baseAddr = payloadPtr.baseAddress else { return false }
                     let rawPtr = UnsafeRawBufferPointer(
@@ -523,7 +566,7 @@
                             mode: config.options.wireCompression,
                             source: rawPtr,
                             destination: dstBase,
-                            expectedSize: expectedSize
+                            expectedSize: layout.decodedSize
                         )
                     }
                 }
@@ -537,10 +580,11 @@
                     Self.copyPlaneBytes(
                         source: srcBase,
                         destination: dstBase,
-                        expectedSize: expectedSize,
-                        stride: stride,
+                        expectedSize: layout.decodedSize,
+                        stride: layout.stride,
                         destinationStride: destStride,
-                        rowBytes: rowBytes
+                        rowBytes: rowBytes,
+                        heightHint: layout.height
                     )
                 }
             }
@@ -555,16 +599,17 @@
                         try processPlane(
                             planeIndex: 0,
                             rawRange: yRange,
-                            expectedSize: expectedY,
-                            stride: stride0,
+                            layout: layout0,
                             rowBytes: rowBytesY
                         )
                     } else {
+                        guard let layout1 else {
+                            throw VTRemotedError.protocolViolation("missing second plane layout")
+                        }
                         try processPlane(
                             planeIndex: 1,
                             rawRange: uvRange,
-                            expectedSize: expectedUV,
-                            stride: stride1,
+                            layout: layout1,
                             rowBytes: rowBytesUV
                         )
                     }
@@ -644,14 +689,23 @@
             let stride0 = Int(try readBEUInt32())
             let height0 = Int(try readBEUInt32())
             let len0 = Int(try readBEUInt32())
-            let expectedY = max(0, stride0 * height0)
+            let rowBytes = Self.planeRowBytes(width: config.width, pixelFormat: config.pixelFormat)
+            let planeHeights = Self.planeHeights(frameHeight: config.height, pixelFormat: config.pixelFormat)
+            let layout0 = try FramePlaneValidation.validate(
+                stride: stride0,
+                height: height0,
+                encodedLength: len0,
+                minimumRowBytes: rowBytes.y,
+                expectedHeight: planeHeights.first,
+                maxDecodedBytes: config.maxFrameBytes,
+                compressionMode: config.options.wireCompression
+            )
 
             let pBuffer = try makeCompressionPixelBuffer(session: session)
 
             CVPixelBufferLockBaseAddress(pBuffer, [])
             defer { CVPixelBufferUnlockBaseAddress(pBuffer, []) }
 
-            let rowBytes = Self.planeRowBytes(width: config.width, pixelFormat: config.pixelFormat)
             let rowBytesY = rowBytes.y
             let rowBytesUV = rowBytes.uv
 
@@ -676,57 +730,49 @@
                 return data
             }
 
-            // Plane fields mirror wire metadata and destination buffer geometry.
-            // swiftlint:disable:next function_parameter_count
             func processPlane(
                 planeIndex: Int,
                 wireLen: Int,
-                expectedSize: Int,
-                stride: Int,
-                height: Int,
+                layout: ValidatedFramePlaneLayout,
                 rowBytes: Int
             ) throws {
-                guard wireLen >= 0 else { throw VTRemotedError.protocolViolation("negative plane length") }
                 try require(wireLen)
 
                 guard let destination = Self.baseAddressAndStride(pixelBuffer: pBuffer, planeIndex: planeIndex) else {
-                    try skipBytes(wireLen)
-                    return
+                    throw VTRemotedError.videoToolboxUnavailable
                 }
                 let destBase = destination.base
                 let destStride = destination.stride
+                guard destination.height >= layout.height, destStride >= rowBytes else {
+                    throw VTRemotedError.protocolViolation("plane exceeds destination geometry")
+                }
 
                 if config.options.wireCompression == 0 {
-                    guard wireLen >= expectedSize else {
-                        throw VTRemotedError.protocolViolation("plane too small")
-                    }
-
-                    if stride == destStride, stride == rowBytes {
+                    if layout.stride == destStride, layout.stride == rowBytes {
                         // Read directly into the pixel buffer plane (avoids temp buffer + memcpy).
-                        try streamIO.readExact(into: destBase, count: expectedSize)
-                        remaining -= expectedSize
-                        try skipBytes(wireLen - expectedSize)
+                        try streamIO.readExact(into: destBase, count: layout.decodedSize)
+                        remaining -= layout.decodedSize
+                        try skipBytes(wireLen - layout.decodedSize)
                         return
                     }
 
                     // Strided read: consume full rows (incl. padding) and copy the useful bytes.
-                    var rowBuf = inputBufferPool.get(capacity: stride)
+                    var rowBuf = inputBufferPool.get(capacity: layout.stride)
                     defer { inputBufferPool.return(rowBuf) }
-                    if rowBuf.count != stride { rowBuf.count = stride }
+                    if rowBuf.count != layout.stride { rowBuf.count = layout.stride }
 
                     let dstBase = destBase.assumingMemoryBound(to: UInt8.self)
-                    let copyBytes = min(rowBytes, min(stride, destStride))
-                    for row in 0 ..< max(0, height) {
-                        try streamIO.readExact(into: &rowBuf, count: stride)
-                        remaining -= stride
+                    let copyBytes = min(rowBytes, min(layout.stride, destStride))
+                    for row in 0 ..< layout.height {
+                        try streamIO.readExact(into: &rowBuf, count: layout.stride)
+                        remaining -= layout.stride
                         rowBuf.withUnsafeBytes { srcPtr in
                             guard let srcBase = srcPtr.baseAddress else { return }
                             memcpy(dstBase.advanced(by: row * destStride), srcBase, copyBytes)
                         }
                     }
 
-                    let consumed = max(0, stride * height)
-                    try skipBytes(wireLen - consumed)
+                    try skipBytes(wireLen - layout.decodedSize)
                     return
                 }
 
@@ -737,13 +783,9 @@
                 try streamIO.readExact(into: &compressed, count: wireLen)
                 remaining -= wireLen
 
-                var temp = inputBufferPool.get(capacity: expectedSize)
+                var temp = inputBufferPool.get(capacity: layout.decodedSize)
                 defer { inputBufferPool.return(temp) }
-                if temp.count != expectedSize { temp.count = expectedSize }
-
-                guard expectedSize > 0, !compressed.isEmpty else {
-                    throw VTRemotedError.protocolViolation("empty compressed plane")
-                }
+                if temp.count != layout.decodedSize { temp.count = layout.decodedSize }
                 let success: Bool = compressed.withUnsafeBytes { compressedPtr in
                     let rawPtr = UnsafeRawBufferPointer(
                         start: compressedPtr.baseAddress,
@@ -755,7 +797,7 @@
                             mode: config.options.wireCompression,
                             source: rawPtr,
                             destination: dstBase,
-                            expectedSize: expectedSize
+                            expectedSize: layout.decodedSize
                         )
                     }
                 }
@@ -767,11 +809,11 @@
                     Self.copyPlaneBytes(
                         source: srcBase,
                         destination: dstBase,
-                        expectedSize: expectedSize,
-                        stride: stride,
+                        expectedSize: layout.decodedSize,
+                        stride: layout.stride,
                         destinationStride: destStride,
                         rowBytes: rowBytes,
-                        heightHint: height
+                        heightHint: layout.height
                     )
                 }
             }
@@ -779,9 +821,7 @@
             try processPlane(
                 planeIndex: 0,
                 wireLen: len0,
-                expectedSize: expectedY,
-                stride: stride0,
-                height: height0,
+                layout: layout0,
                 rowBytes: rowBytesY
             )
 
@@ -791,14 +831,24 @@
                 let stride1 = Int(try readBEUInt32())
                 let height1 = Int(try readBEUInt32())
                 let len1 = Int(try readBEUInt32())
-                let expectedUV = max(0, stride1 * height1)
+                let layout1 = try FramePlaneValidation.validate(
+                    stride: stride1,
+                    height: height1,
+                    encodedLength: len1,
+                    minimumRowBytes: rowBytes.uv,
+                    expectedHeight: planeHeights.second,
+                    maxDecodedBytes: config.maxFrameBytes,
+                    compressionMode: config.options.wireCompression
+                )
+                try FramePlaneValidation.validateTotalDecodedBytes(
+                    [layout0, layout1],
+                    maxDecodedBytes: config.maxFrameBytes
+                )
 
                 try processPlane(
                     planeIndex: 1,
                     wireLen: len1,
-                    expectedSize: expectedUV,
-                    stride: stride1,
-                    height: height1,
+                    layout: layout1,
                     rowBytes: rowBytesUV
                 )
             }
@@ -857,7 +907,8 @@
                 infoFlagsOut: nil
             )
             if status != noErr {
-                logger.error("encode frame failed: \(status)")
+                let context = Unmanaged<FrameContext>.fromOpaque(ctxPtr).takeRetainedValue()
+                handleEncodeFrameDropped(context: context, status: status, infoFlags: [])
             }
         }
 
@@ -2573,7 +2624,7 @@
             let den = max(1, timebase.den)
             let (value, overflow) = ticks.multipliedReportingOverflow(by: Int64(num))
             let safe = overflow ? (ticks >= 0 ? Int64.max : Int64.min) : value
-            return CMTime(value: CMTimeValue(safe), timescale: Int32(den))
+            return CMTime(value: CMTimeValue(safe), timescale: Int32(clamping: den))
         }
 
         private func sampleDescriptionAtom(_ fmt: CMFormatDescription, atom: String) -> Data? {
