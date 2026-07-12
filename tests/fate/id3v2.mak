@@ -5,6 +5,16 @@ FATE_ID3V2_FFMPEG-$(CONFIG_MP3_DEMUXER) += fate-id3v2-invalid-tags
 fate-id3v2-invalid-tags: CMD = run $(FFMPEG) -nostdin -hide_banner -i $(TARGET_SAMPLES)/id3v2/invalid-tags.mp3 -f null - || true
 fate-id3v2-invalid-tags: CMP = null
 
+FATE_ID3V2_FFMPEG-$(CONFIG_MP3_DEMUXER) += fate-id3v2-keep-metadata-invalid-type
+fate-id3v2-keep-metadata-invalid-type: CMD = run $(FFMPEG) -nostdin -hide_banner -i $(TARGET_SAMPLES)/gapless/gapless-itunes.mp3 -c copy -keep_metadata:x vendor_id -f null - ; true
+fate-id3v2-keep-metadata-invalid-type: CMP = grep
+fate-id3v2-keep-metadata-invalid-type: REF = Invalid metadata type x
+
+FATE_ID3V2_FFMPEG-$(CONFIG_MP3_DEMUXER) += fate-id3v2-keep-metadata-invalid-stream-spec
+fate-id3v2-keep-metadata-invalid-stream-spec: CMD = run $(FFMPEG) -nostdin -hide_banner -i $(TARGET_SAMPLES)/gapless/gapless-itunes.mp3 -c copy -keep_metadata:s:bogus vendor_id -f null - ; true
+fate-id3v2-keep-metadata-invalid-stream-spec: CMP = grep
+fate-id3v2-keep-metadata-invalid-stream-spec: REF = Trailing garbage at the end of a stream specifier: bogus
+
 FATE_ID3V2_FFMPEG_FFPROBE-$(call REMUX, MP3) += fate-id3v2-priv-remux
 fate-id3v2-priv-remux: CMD = transcode mp3 $(TARGET_SAMPLES)/id3v2/id3v2_priv.mp3 mp3 "-c copy" "-c copy -t 0.1" "-show_entries format_tags"
 
@@ -21,6 +31,27 @@ fate-id3v2-lyrics: CMD = run_with_temp "$(FFMPEG) -nostdin -hide_banner -logleve
 FATE_ID3V2_RAW-$(call REMUX, MP3) += fate-id3v2-txxx
 fate-id3v2-txxx: $(ID3V2_TESTBIN)
 fate-id3v2-txxx: CMD = run_with_temp "$(FFMPEG) -nostdin -hide_banner -loglevel error -i $(TARGET_SAMPLES)/id3v2/id3v2_priv.mp3 -map_metadata -1 -c copy -fflags +bitexact -metadata foobar=baz -f mp3 -y" "$(ID3V2_TESTBIN)" mp3
+
+FATE_ID3V2_FFMPEG_FFPROBE-$(call ENCDEC, AAC MP3, NUT) += fate-id3v2-reenc-delete-metadata
+fate-id3v2-reenc-delete-metadata: CMD = transcode mp3 $(TARGET_SAMPLES)/gapless/gapless-itunes.mp3 nut "-c:a aac -bitexact -t 0.1" "-c copy -t 0.1" "-show_entries format_tags" "" "" "" null
+
+FATE_ID3V2_FFMPEG_FFPROBE-$(call ENCDEC, AAC MP3, NUT) += fate-id3v2-reenc-delete-metadata-keep
+fate-id3v2-reenc-delete-metadata-keep: CMD = transcode mp3 $(TARGET_SAMPLES)/gapless/gapless-itunes.mp3 nut "-c:a aac -bitexact -keep_metadata iTunSMPB -t 0.1" "-c copy -t 0.1" "-show_entries format_tags" "" "" "" null
+
+# -map_metadata must not bypass stale metadata pruning
+FATE_ID3V2_FFMPEG_FFPROBE-$(call ENCDEC, AAC MP3, NUT) += fate-id3v2-reenc-delete-metadata-map-metadata
+fate-id3v2-reenc-delete-metadata-map-metadata: CMD = transcode mp3 $(TARGET_SAMPLES)/gapless/gapless-itunes.mp3 nut "-c:a aac -bitexact -map_metadata 0 -t 0.1" "-c copy -t 0.1" "-show_entries format_tags" "" "" "" null
+
+# :g specifier targets format metadata — iTunSMPB lives there, so it should be kept
+FATE_ID3V2_FFMPEG_FFPROBE-$(call ENCDEC, AAC MP3, NUT) += fate-id3v2-reenc-delete-metadata-keep-format
+fate-id3v2-reenc-delete-metadata-keep-format: CMD = transcode mp3 $(TARGET_SAMPLES)/gapless/gapless-itunes.mp3 nut "-c:a aac -bitexact -keep_metadata:g iTunSMPB -t 0.1" "-c copy -t 0.1" "-show_entries format_tags" "" "" "" null
+
+# :s:a specifier targets stream metadata — iTunSMPB is format-level, so it should still be deleted
+FATE_ID3V2_FFMPEG_FFPROBE-$(call ENCDEC, AAC MP3, NUT) += fate-id3v2-reenc-delete-metadata-keep-stream
+fate-id3v2-reenc-delete-metadata-keep-stream: CMD = transcode mp3 $(TARGET_SAMPLES)/gapless/gapless-itunes.mp3 nut "-c:a aac -bitexact -keep_metadata:s:a iTunSMPB -t 0.1" "-c copy -t 0.1" "-show_entries format_tags" "" "" "" null
+
+FATE_ID3V2_FFMPEG_FFPROBE-$(call REMUX, MP3) += fate-id3v2-reenc-remux-keep
+fate-id3v2-reenc-remux-keep: CMD = transcode mp3 $(TARGET_SAMPLES)/gapless/gapless-itunes.mp3 mp3 "-c copy" "-c copy -t 0.1" "-show_entries format_tags" "" "" "" null
 
 FATE_ID3V2_FFMPEG_FFPROBE-$(call REMUX, AIFF, WAV_DEMUXER) += fate-id3v2-chapters
 fate-id3v2-chapters: CMD = transcode wav $(TARGET_SAMPLES)/wav/200828-005.wav aiff "-c copy -metadata:c:0 description=foo -metadata:c:0 date=2021 -metadata:c copyright=none -metadata:c:1 genre=nonsense -write_id3v2 1" "-c copy -t 0.05" "-show_entries format_tags:chapters"
