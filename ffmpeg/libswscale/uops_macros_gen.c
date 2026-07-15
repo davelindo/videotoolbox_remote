@@ -79,11 +79,6 @@ static int generate_entry_struct(void *opaque, void *key)
         break;
     case SWS_UOP_PERMUTE:
     case SWS_UOP_COPY:
-        av_bprintf(bp, ", .par.swizzle.in = {%d, %d, %d, %d}",
-                   par->swizzle.in[0], par->swizzle.in[1],
-                   par->swizzle.in[2], par->swizzle.in[3]);
-        break;
-    case SWS_UOP_MOVE:
         av_bprintf(bp, ", .par.move.num_moves = %d", par->move.num_moves);
         av_bprintf(bp, ", .par.move.dst = {%d, %d, %d, %d, %d, %d}",
                    par->move.dst[0], par->move.dst[1], par->move.dst[2],
@@ -144,11 +139,6 @@ static int generate_entry_args(void *opaque, void *key)
         break;
     case SWS_UOP_PERMUTE:
     case SWS_UOP_COPY:
-        av_bprintf(bp, ", %d, %d, %d, %d",
-                   par->swizzle.in[0], par->swizzle.in[1],
-                   par->swizzle.in[2], par->swizzle.in[3]);
-        break;
-    case SWS_UOP_MOVE:
         av_bprintf(bp, ", %d", par->move.num_moves);
         av_bprintf(bp, ", %d, %d, %d, %d, %d, %d",
                    par->move.dst[0], par->move.dst[1], par->move.dst[2],
@@ -229,7 +219,7 @@ fail:
 
 static const SwsUOpFlags uop_flags[] = {
     0,
-    SWS_UOP_FLAG_FMA | SWS_UOP_FLAG_MOVE, /* x86 backend */
+    SWS_UOP_FLAG_FMA, /* x86 backend */
 };
 
 static int register_uops(SwsContext *ctx, const SwsOpList *ops,
@@ -326,29 +316,6 @@ static int sws_uops_macros_gen(char **out_str)
                                    register_all_uops);
         if (ret < 0)
             goto fail;
-    }
-
-    /**
-     * Additionally make sure planar reads/writes are always available for all
-     * formats, because checkasm depends on them to be able to verify the
-     * input/output of any other operations.
-     */
-    for (enum SwsPixelType type = SWS_PIXEL_NONE+1; type < SWS_PIXEL_TYPE_NB; type++) {
-        if (!ff_sws_pixel_type_is_int(type))
-            continue;
-        for (int elems = 1; elems <= 4; elems++) {
-            for (int rw = 0; rw < 2; rw++) {
-                SwsUOp uop = {
-                    .type = type,
-                    .uop  = rw ? SWS_UOP_WRITE_PLANAR : SWS_UOP_READ_PLANAR,
-                    .mask = SWS_COMP_ELEMS(elems),
-                };
-
-                ret = register_uop(&root, &uop);
-                if (ret < 0)
-                    goto fail;
-            }
-        }
     }
 
     #define BPRINT_STR(str) av_bprint_append_data(bp, str, strlen(str))
