@@ -318,7 +318,8 @@ SWS_FOR_STRUCT(TYPE, WRITE_NIBBLE,    DECL_ENTRY, EXT, NULL, NULL)              
 SWS_FOR_STRUCT(TYPE, WRITE_BIT,       DECL_ENTRY, EXT, NULL, NULL)              \
 SWS_FOR_STRUCT(TYPE, SWAP_BYTES,      DECL_ENTRY, EXT, NULL, NULL)              \
 SWS_FOR_STRUCT(TYPE, EXPAND_BIT,      DECL_ENTRY, EXT, NULL, NULL)              \
-SWS_FOR_STRUCT(TYPE, MOVE,            DECL_ENTRY, EXT, NULL, NULL)              \
+SWS_FOR_STRUCT(TYPE, PERMUTE,         DECL_ENTRY, EXT, NULL, NULL)              \
+SWS_FOR_STRUCT(TYPE, COPY,            DECL_ENTRY, EXT, NULL, NULL)              \
 SWS_FOR_STRUCT(TYPE, SCALE,           DECL_ENTRY, EXT, NULL, setup_scale)       \
 SWS_FOR_STRUCT(TYPE, ADD,             DECL_ENTRY, EXT, NULL, ff_sws_setup_vec4) \
 SWS_FOR_STRUCT(TYPE, MIN,             DECL_ENTRY, EXT, NULL, ff_sws_setup_vec4) \
@@ -327,6 +328,7 @@ SWS_FOR_STRUCT(TYPE, UNPACK,          DECL_ENTRY, EXT, NULL, NULL)              
 SWS_FOR_STRUCT(TYPE, PACK,            DECL_ENTRY, EXT, NULL, NULL)              \
 SWS_FOR_STRUCT(TYPE, LSHIFT,          DECL_ENTRY, EXT, NULL, NULL)              \
 SWS_FOR_STRUCT(TYPE, RSHIFT,          DECL_ENTRY, EXT, NULL, NULL)              \
+SWS_FOR_STRUCT(TYPE, LINEAR,          DECL_ENTRY, EXT, NULL, setup_linear)      \
 SWS_FOR_STRUCT(TYPE, LINEAR_FMA,      DECL_ENTRY, EXT, NULL, setup_linear)      \
 SWS_FOR_STRUCT(TYPE, DITHER,          DECL_ENTRY, EXT, NULL, setup_dither)      \
 /* end of macro */
@@ -341,7 +343,8 @@ SWS_FOR_STRUCT(TYPE, DITHER,          DECL_ENTRY, EXT, NULL, setup_dither)      
     SWS_FOR(TYPE, WRITE_BIT,      REF_ENTRY, EXT)                               \
     SWS_FOR(TYPE, SWAP_BYTES,     REF_ENTRY, EXT)                               \
     SWS_FOR(TYPE, EXPAND_BIT,     REF_ENTRY, EXT)                               \
-    SWS_FOR(TYPE, MOVE,           REF_ENTRY, EXT)                               \
+    SWS_FOR(TYPE, PERMUTE,        REF_ENTRY, EXT)                               \
+    SWS_FOR(TYPE, COPY,           REF_ENTRY, EXT)                               \
     SWS_FOR(TYPE, SCALE,          REF_ENTRY, EXT)                               \
     SWS_FOR(TYPE, ADD,            REF_ENTRY, EXT)                               \
     SWS_FOR(TYPE, MIN,            REF_ENTRY, EXT)                               \
@@ -350,6 +353,7 @@ SWS_FOR_STRUCT(TYPE, DITHER,          DECL_ENTRY, EXT, NULL, setup_dither)      
     SWS_FOR(TYPE, PACK,           REF_ENTRY, EXT)                               \
     SWS_FOR(TYPE, LSHIFT,         REF_ENTRY, EXT)                               \
     SWS_FOR(TYPE, RSHIFT,         REF_ENTRY, EXT)                               \
+    SWS_FOR(TYPE, LINEAR,         REF_ENTRY, EXT)                               \
     SWS_FOR(TYPE, LINEAR_FMA,     REF_ENTRY, EXT)                               \
     SWS_FOR(TYPE, DITHER,         REF_ENTRY, EXT)                               \
     /* end of macro */
@@ -484,6 +488,19 @@ SWS_DECL_FUNC(ff_sws_process2_x86);
 SWS_DECL_FUNC(ff_sws_process3_x86);
 SWS_DECL_FUNC(ff_sws_process4_x86);
 
+static int get_mmsize(void)
+{
+    const int cpu_flags = av_get_cpu_flags();
+    if (EXTERNAL_AVX512(cpu_flags))
+        return 64;
+    else if (EXTERNAL_AVX2(cpu_flags))
+        return 32;
+    else if (EXTERNAL_SSE4(cpu_flags))
+        return 16;
+    else
+        return AVERROR(ENOTSUP);
+}
+
 static int movsize(const int bytes, const int mmsize)
 {
     return bytes <= 4 ? 4 : /* movd */
@@ -491,11 +508,15 @@ static int movsize(const int bytes, const int mmsize)
            mmsize;          /* movu */
 }
 
-static int solve_shuffle(const SwsOpList *ops, int mmsize, SwsCompiledOp *out)
+static int solve_shuffle(const SwsOpList *ops, SwsCompiledOp *out)
 {
     uint8_t shuffle[16];
+    int mmsize = get_mmsize();
     int read_bytes, write_bytes;
     int pixels;
+
+    if (mmsize < 0)
+        return mmsize;
 
     /* Solve the shuffle mask for one 128-bit lane only */
     pixels = ff_sws_solve_shuffle(ops, shuffle, 16, 0x80, &read_bytes, &write_bytes);
@@ -573,45 +594,19 @@ static void normalize_clear(SwsUOp *uop)
         uop->data.vec4[i].u32 = expand32(uop->type, uop->data.vec4[i]);
 }
 
-static int compile(SwsContext *ctx, const SwsOpList *ops, SwsCompiledOp *out)
+static int compile_uops_x86(SwsContext *ctx, const SwsUOpList *uops, SwsCompiledOp *out)
 {
-    const int cpu_flags = av_get_cpu_flags();
-    int ret, mmsize;
-    if (EXTERNAL_AVX512(cpu_flags))
-        mmsize = 64;
-    else if (EXTERNAL_AVX2(cpu_flags))
-        mmsize = 32;
-    else if (EXTERNAL_SSE4(cpu_flags))
-        mmsize = 16;
-    else
-        return AVERROR(ENOTSUP);
-
-    /* Special fast path for in-place packed shuffle */
-    ret = solve_shuffle(ops, mmsize, out);
-    if (ret != AVERROR(ENOTSUP))
-        return ret;
+    int ret, mmsize = get_mmsize();
+    if (mmsize < 0)
+        return mmsize;
 
     SwsOpChain *chain = ff_sws_op_chain_alloc();
     if (!chain)
         return AVERROR(ENOMEM);
 
-    SwsUOpList *uops = ff_sws_uop_list_alloc();
-    if (!uops) {
-        ret = AVERROR(ENOMEM);
-        goto fail;
-    }
-
-    SwsUOpFlags flags = SWS_UOP_FLAG_MOVE;
-    if (EXTERNAL_FMA3(cpu_flags))
-        flags |= SWS_UOP_FLAG_FMA;
-
-    ret = ff_sws_ops_translate(ctx, ops, flags, uops);
-    if (ret < 0)
-        goto fail;
-
     *out = (SwsCompiledOp) {
         /* Use at most two full YMM regs during the widest precision section */
-        .block_size  = 2 * FFMIN(mmsize, 32) / ff_sws_op_list_max_size(ops),
+        .block_size  = 2 * FFMIN(mmsize, 32) / uops->pixel_size_max,
         .slice_align = 1,
         .free        = ff_sws_op_chain_free_cb,
         .priv        = chain,
@@ -634,11 +629,7 @@ static int compile(SwsContext *ctx, const SwsOpList *ops, SwsCompiledOp *out)
             goto fail;
     }
 
-    const SwsOp *read      = ff_sws_op_list_input(ops);
-    const SwsOp *write     = ff_sws_op_list_output(ops);
-    const int read_planes  = read ? ff_sws_rw_op_planes(read) : 0;
-    const int write_planes = ff_sws_rw_op_planes(write);
-    switch (FFMAX(read_planes, write_planes)) {
+    switch (av_popcount(uops->planes_in | uops->planes_out)) {
     case 1: out->func = ff_sws_process1_x86; break;
     case 2: out->func = ff_sws_process2_x86; break;
     case 3: out->func = ff_sws_process3_x86; break;
@@ -653,18 +644,56 @@ static int compile(SwsContext *ctx, const SwsOpList *ops, SwsCompiledOp *out)
     out->cpu_flags = chain->cpu_flags;
     memcpy(out->over_read,  chain->over_read,  sizeof(out->over_read));
     memcpy(out->over_write, chain->over_write, sizeof(out->over_write));
-    ff_sws_uop_list_free(&uops);
+
+    av_log(ctx, AV_LOG_DEBUG, "Compiled micro-ops:\n");
+    for (int i = 0; i < uops->num_ops; i++) {
+        char name[SWS_UOP_NAME_MAX];
+        ff_sws_uop_name(&uops->ops[i], name);
+        av_log(ctx, AV_LOG_DEBUG, "    %s\n", name);
+    }
+
     return 0;
 
 fail:
-    ff_sws_uop_list_free(&uops);
     ff_sws_op_chain_free(chain);
     return ret;
 }
 
+static int compile_x86(SwsContext *ctx, const SwsOpList *ops, SwsCompiledOp *out)
+{
+    const int cpu_flags = av_get_cpu_flags();
+    const int mmsize = get_mmsize();
+    if (mmsize < 0)
+        return mmsize;
+
+    SwsUOpFlags flags = 0;
+    if (EXTERNAL_FMA3(cpu_flags))
+        flags |= SWS_UOP_FLAG_FMA;
+
+    /* Special fast path for in-place packed shuffle */
+    int ret = solve_shuffle(ops, out);
+    if (ret != AVERROR(ENOTSUP))
+        return ret;
+
+    SwsUOpList *uops = ff_sws_uop_list_alloc();
+    if (!uops)
+        return AVERROR(ENOMEM);
+
+    ret = ff_sws_ops_translate(ctx, ops, flags, uops);
+    if (ret < 0)
+        goto fail;
+
+    ret = compile_uops_x86(ctx, uops, out);
+
+fail:
+    ff_sws_uop_list_free(&uops);
+    return ret;
+}
+
 const SwsOpBackend backend_x86 = {
-    .name       = "x86",
-    .flags      = SWS_BACKEND_X86,
-    .compile    = compile,
-    .hw_format  = AV_PIX_FMT_NONE,
+    .name           = "x86",
+    .flags          = SWS_BACKEND_X86,
+    .compile        = compile_x86,
+    .compile_uops   = compile_uops_x86,
+    .hw_format      = AV_PIX_FMT_NONE,
 };
