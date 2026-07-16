@@ -495,8 +495,11 @@ static int translate_linear_op(SwsContext *ctx, SwsUOpList *ops,
     uint32_t exact = 0;
 
     for (int i = 0; i < 4; i++) {
-        if (SWS_OP_NEEDED(op, i) && (op->lin.mask & SWS_MASK_ROW(i)))
-            uop.mask |= SWS_COMP(i);
+        if (!SWS_OP_NEEDED(op, i) || !(op->lin.mask & SWS_MASK_ROW(i))) {
+            uop.par.lin.zero |= SWS_MASK_ROW(i);
+            continue;
+        }
+        uop.mask |= SWS_COMP(i);
         bool nonzero = (op->lin.m[i][4].num != 0);
         for (int j = 0; j < 5; j++) {
             const AVRational64 k = op->lin.m[i][j];
@@ -590,7 +593,8 @@ static int translate_op(SwsContext *ctx, SwsUOpList *uops, SwsUOpFlags flags,
         uop.mask = 0;
         for (int i = 0; i < 4 && op->pack.pattern[i]; i++) {
             uop.par.pack.pattern[i] = op->pack.pattern[i];
-            uop.mask |= SWS_COMP(i);
+            if (op->op == SWS_OP_PACK || SWS_OP_NEEDED(op, i))
+                uop.mask |= SWS_COMP(i);
         }
         break;
     case SWS_OP_LSHIFT:
