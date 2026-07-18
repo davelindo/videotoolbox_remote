@@ -7,6 +7,11 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
+## [v0.6.34] - 2026-07-18
+
+### Changed
+- Rebased the vendored `ffmpeg/` subtree to upstream `master` snapshot `0869e710e687` (from `8d394252d80d`).
+
 ## [v0.6.33] - 2026-07-17
 
 ### Changed
