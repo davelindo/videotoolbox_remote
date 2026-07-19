@@ -2980,10 +2980,13 @@ static const struct {
     // iTunes gapless playback: encoder-specific sample counts and padding;
     // gapless_playback is the M4A/MOV equivalent of iTunPGAP
     { "iTunPGAP",                     0,                     REENC_AUDIO_ONLY },
+    { "comment-iTunPGAP-eng",         0,                     REENC_AUDIO_ONLY },
     { "iTunSMPB",                     0,                     REENC_AUDIO_ONLY },
+    { "comment-iTunSMPB-eng",         0,                     REENC_AUDIO_ONLY },
     { "gapless_playback",             0,                     REENC_AUDIO_ONLY },
     // iTunes Sound Check: peak amplitude computed from the original waveform
     { "iTunNORM",                     0,                     REENC_AUDIO_ONLY },
+    { "comment-iTunNORM-eng",         0,                     REENC_AUDIO_ONLY },
     // encoding provenance: describe the original encoder, not the new one
     { "encoded_by",                   0,                     REENC_ANY },
     { "encoding_tool",                0,                     REENC_ANY },
@@ -3487,6 +3490,11 @@ int of_open(const OptionsContext *o, const char *filename, Scheduler *sch)
         } else {
             recording_time = stop_time - start_time;
         }
+    }
+
+    if (recording_time < 0) {
+        av_log(mux, AV_LOG_ERROR, "-t value must be non-negative; aborting.\n");
+        return AVERROR(EINVAL);
     }
 
     of->recording_time = recording_time;
