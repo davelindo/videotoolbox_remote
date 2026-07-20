@@ -24,8 +24,6 @@
 #include "libavutil/avstring.h"
 #include "libavutil/tree.h"
 
-#include "ops_lookup.h"
-
 #include "ops_impl_conv.c"
 
 /**
@@ -43,6 +41,30 @@ static_assert(offsetof_impl_cont     == offsetof(SwsOpImpl, cont),     "SwsOpImp
 static_assert(offsetof_impl_priv     == offsetof(SwsOpImpl, priv),     "SwsOpImpl layout mismatch");
 
 /*********************************************************************/
+/* Forward-declare exported functions. */
+#define ENTRY(fname, ...) extern void fname(void);
+#include "ops_entries.c"
+#undef ENTRY
+
+static const struct {
+    void (*func)(void);
+    SwsAArch64OpImplParams params;
+} ops_entries[] = {
+#define ENTRY(fname, ...) { .func = fname, .params = __VA_ARGS__ },
+#include "ops_entries.c"
+#undef ENTRY
+};
+
+/* Look up the exported function pointer for the given parameters. */
+static SwsFuncPtr aarch64_lookup(const SwsAArch64OpImplParams *p)
+{
+    for (int i = 0; i < FF_ARRAY_ELEMS(ops_entries); i++)
+        if (!memcmp(p, &ops_entries[i].params, sizeof(SwsAArch64OpImplParams)))
+            return ops_entries[i].func;
+    return NULL;
+}
+
+/*********************************************************************/
 static int aarch64_setup_linear(const SwsAArch64OpImplParams *p,
                                 const SwsOp *op, SwsImplResult *res)
 {
@@ -57,14 +79,16 @@ static int aarch64_setup_linear(const SwsAArch64OpImplParams *p,
         return AVERROR(ENOMEM);
 
     /**
-     * Copy non-zero coefficients, reordered to match SwsAArch64LinearOpMask.
-     * The coefficients are packed in sequential order. The same order must
-     * be followed in asmgen_op_linear().
+     * Copy non-zero coefficients, packed in sequential order, offset first.
+     * The same order must be followed in asmgen_op_linear().
      */
     int i_coeff = 0;
-    LOOP_LINEAR_MASK(p, i, j) {
-        const int jj = linear_index_to_sws_op(j);
-        coeffs[i_coeff++] = (float) op->lin.m[i][jj].num / op->lin.m[i][jj].den;
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 5; j++) {
+            const int jj = (j == 0) ? 4 : (j - 1);
+            if (!(p->par.lin.zero & SWS_MASK(i, jj)))
+                coeffs[i_coeff++] = (float) op->lin.m[i][jj].num / op->lin.m[i][jj].den;
+        }
     }
 
     res->priv.ptr = coeffs;
@@ -199,7 +223,7 @@ static int aarch64_compile(SwsContext *ctx, const SwsOpList *ops,
         ret = convert_to_aarch64_impl(ctx, ops, i, block_size, &params);
         if (ret < 0)
             goto error;
-        SwsFuncPtr func = ff_sws_aarch64_lookup(&params);
+        SwsFuncPtr func = aarch64_lookup(&params);
         if (!func) {
             ret = AVERROR(ENOTSUP);
             goto error;
