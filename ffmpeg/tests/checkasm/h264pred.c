@@ -37,7 +37,7 @@ static const char * const pred4x4_modes[4][15] = {
         [DIAG_DOWN_LEFT_PRED ] = "down_left",
         [DIAG_DOWN_RIGHT_PRED] = "down_right",
         [VERT_RIGHT_PRED     ] = "vertical_right",
-        [HOR_DOWN_PRED       ] = "horizontal_right",
+        [HOR_DOWN_PRED       ] = "horizontal_down",
         [VERT_LEFT_PRED      ] = "vertical_left",
         [HOR_UP_PRED         ] = "horizontal_up",
         [LEFT_DC_PRED        ] = "left_dc",
@@ -80,6 +80,7 @@ static const char * const pred8x8_modes[4][11] = {
         [ALZHEIMER_DC_0L0_PRED8x8] = "mad_cow_dc_0l0",
     },
     { /* VP8 */
+        [DC_PRED8x8    ] = "dc_rv40",
         [PLANE_PRED8x8 ] = "tm_vp8",
         [DC_127_PRED8x8] = "dc_127_vp8",
         [DC_129_PRED8x8] = "dc_129_vp8",
