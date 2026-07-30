@@ -1,6 +1,6 @@
 title: VideoToolbox Remote
 description: "Remote VideoToolbox for FFmpeg: use a Mac or Apple Silicon system over LAN as a hardware H.264/HEVC encode, decode, and transcoding server for Linux, Windows, and macOS clients."
-current_release: "v0.6.45"
+current_release: "v0.6.46"
 latest_release_url: "https://github.com/davelindo/videotoolbox_remote/releases/latest"
 repository_url: "https://github.com/davelindo/videotoolbox_remote"
 markdown: kramdown
