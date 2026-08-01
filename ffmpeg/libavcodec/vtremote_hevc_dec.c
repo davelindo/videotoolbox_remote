@@ -28,10 +28,44 @@ static const AVClass vtremote_hevc_dec_class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
+static int vtremote_hevc_extradata_is_main10(const AVCodecContext *avctx)
+{
+    const uint8_t *data = avctx->extradata;
+    const int size = avctx->extradata_size;
+
+    if (!data || size < 2)
+        return 0;
+
+    /* HEVCDecoderConfigurationRecord: general_profile_idc is in byte 1. */
+    if (data[0] == 1)
+        return (data[1] & 0x1f) == AV_PROFILE_HEVC_MAIN_10;
+
+    /* Annex B: profile_idc is the second SPS RBSP byte after the NAL header. */
+    for (int i = 0; i + 7 < size; i++) {
+        int start_code_size;
+        if (data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1)
+            start_code_size = 3;
+        else if (data[i] == 0 && data[i + 1] == 0 &&
+                 data[i + 2] == 0 && data[i + 3] == 1)
+            start_code_size = 4;
+        else
+            continue;
+
+        const int nal = i + start_code_size;
+        if (nal + 3 < size && ((data[nal] >> 1) & 0x3f) == 33)
+            return (data[nal + 3] & 0x1f) == AV_PROFILE_HEVC_MAIN_10;
+    }
+
+    return 0;
+}
+
 static av_cold int vtremote_hevc_dec_init(AVCodecContext *avctx)
 {
     VTRemoteDecContext *s = avctx->priv_data;
-    enum AVPixelFormat sw_fmt = (avctx->bits_per_raw_sample > 8) ? AV_PIX_FMT_P010LE : AV_PIX_FMT_NV12;
+    const int is_main10 = avctx->bits_per_raw_sample > 8 ||
+                          avctx->profile == AV_PROFILE_HEVC_MAIN_10 ||
+                          vtremote_hevc_extradata_is_main10(avctx);
+    enum AVPixelFormat sw_fmt = is_main10 ? AV_PIX_FMT_P010LE : AV_PIX_FMT_NV12;
 #if CONFIG_VIDEOTOOLBOX && defined(__APPLE__)
     if (s->output_hw_frames) {
         /*
@@ -54,7 +88,8 @@ static av_cold int vtremote_hevc_dec_init(AVCodecContext *avctx)
         AV_PIX_FMT_VIDEOTOOLBOX,
         AV_PIX_FMT_NONE,
     };
-    const enum AVPixelFormat *pix_fmts = (avctx->bits_per_raw_sample > 8) ? pix_fmts_10_sw : pix_fmts_8_sw;
+    const enum AVPixelFormat *pix_fmts =
+        is_main10 ? pix_fmts_10_sw : pix_fmts_8_sw;
 #else
     static const enum AVPixelFormat pix_fmts_10[] = {
         AV_PIX_FMT_P010LE,
@@ -66,7 +101,7 @@ static av_cold int vtremote_hevc_dec_init(AVCodecContext *avctx)
         AV_PIX_FMT_P010LE,
         AV_PIX_FMT_NONE,
     };
-    const enum AVPixelFormat *pix_fmts = (avctx->bits_per_raw_sample > 8) ? pix_fmts_10 : pix_fmts_8;
+    const enum AVPixelFormat *pix_fmts = is_main10 ? pix_fmts_10 : pix_fmts_8;
     if (s->output_hw_frames) {
         av_log(avctx, AV_LOG_ERROR,
                "VideoToolbox hardware-frame decode output requires macOS "

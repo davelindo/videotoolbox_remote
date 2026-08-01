@@ -92,7 +92,7 @@ run_case() {
 
 run_case h264 "${RUN_DIR}/input_h264.mp4" nv12
 if [[ "$HEVC_OK" -eq 1 ]]; then
-  run_case hevc "${RUN_DIR}/input_hevc.mp4" nv12
+  run_case hevc "${RUN_DIR}/input_hevc.mp4" p010le
 fi
 
 echo "OK: hardware-frame decode output cases passed; logs at ${RUN_DIR}"

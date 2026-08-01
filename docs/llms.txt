@@ -4,7 +4,7 @@ permalink: /llms.txt
 ---
 # VideoToolbox Remote (`videotoolbox_remote`) Briefing
 
-**Version**: v0.6.48
+**Version**: v0.7.0
 **License**: LGPL v2.1+
 **Goal**: Offload FFmpeg H.264/HEVC encoding/decoding to a remote macOS 13+ machine, including macOS 27, over LAN.
 
@@ -62,14 +62,12 @@ make -j$(nproc)
 - **Framing**: 12-byte header (magic `VTR1`, version, type, length).
 - **Wire compression**: LZ4, Zstd, or none. The FFmpeg/OBS default is LZ4; the macOS server loads LZ4/Zstd at runtime only when a client requests that compression mode.
 
-## Performance (Apple Silicon, loopback benchmark, v0.6.2)
-- 1080p H.264: ~230 fps (7.6x realtime at 30fps source).
-- 1080p HEVC: ~210 fps (7.0x realtime).
-- 4K H.264: ~62 fps (2.1x realtime).
-- 4K HEVC: ~59 fps (1.9x realtime).
-- LZ4/Zstd wire compression reduces bandwidth 40-70%.
-- Adaptive in-flight buffering keeps encoder pipeline saturated.
-- Parity with local VideoToolbox output when settings match.
+## Performance (v0.7.0 validation)
+- On a measured 2.5 GbE Linux-to-M2 Air path, remote H.264/HEVC encoding reached 98.8-100.5% of matching local VideoToolbox throughput at 1080p and 4K.
+- HEVC Main10 4K packet transcode reached 83.6 fps both locally and remotely while using approximately 14 Mb/s in each direction.
+- Raw HEVC Main10 4K decode is bandwidth/compression-bound on 2.5 GbE; packet transcode is preferred when the client does not require raw frames.
+- LZ4/Zstd wire compression reduces bandwidth 40-70%; a fixed in-flight depth of 32 performed best for high-throughput HEVC in the tested LAN setup.
+- Local and remote VMAF/SSIM matched when encoder settings matched.
 
 ## Key Constraints
 - Server **must** run on macOS with hardware encoding support.

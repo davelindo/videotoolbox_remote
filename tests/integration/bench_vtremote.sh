@@ -97,24 +97,26 @@ vtremote_start_server /tmp/vtremoted_bench.log
 VTREMOTED_PID="${VTREMOTE_SERVER_PID:-}"
 PORT="$VTREMOTE_PORT"
 
+matches_output() {
+  local pattern="$1"
+  # Do not use -q: an early matcher exit triggers SIGPIPE under pipefail.
+  if command -v rg >/dev/null 2>&1; then
+    rg "$pattern" >/dev/null
+  else
+    grep "$pattern" >/dev/null
+  fi
+}
+
 have_encoder() {
   local bin="$1"
   local enc="$2"
-  if command -v rg >/dev/null 2>&1; then
-    "$bin" -encoders 2>/dev/null | rg -q "\\b${enc}\\b"
-  else
-    "$bin" -encoders 2>/dev/null | grep -q "\\b${enc}\\b"
-  fi
+  "$bin" -encoders 2>/dev/null | matches_output "\\b${enc}\\b"
 }
 
 have_bsf() {
   local bin="$1"
   local bsf="$2"
-  if command -v rg >/dev/null 2>&1; then
-    "$bin" -bsfs 2>/dev/null | rg -q "\b${bsf}\b"
-  else
-    "$bin" -bsfs 2>/dev/null | grep -q "\b${bsf}\b"
-  fi
+  "$bin" -bsfs 2>/dev/null | matches_output "\b${bsf}\b"
 }
 
 HAVE_LOCAL_H264=0
@@ -134,20 +136,12 @@ encoder_supports_option() {
   local bin="$1"
   local enc="$2"
   local opt="$3"
-  if command -v rg >/dev/null 2>&1; then
-    "$bin" -h encoder="$enc" 2>/dev/null | rg -q "\\b${opt}\\b"
-  else
-    "$bin" -h encoder="$enc" 2>/dev/null | grep -q "\\b${opt}\\b"
-  fi
+  "$bin" -h encoder="$enc" 2>/dev/null | matches_output "\\b${opt}\\b"
 }
 
 supports_fps_mode() {
   local bin="$1"
-  if command -v rg >/dev/null 2>&1; then
-    "$bin" -h full 2>/dev/null | rg -q "\\bfps_mode\\b"
-  else
-    "$bin" -h full 2>/dev/null | grep -q "\\bfps_mode\\b"
-  fi
+  "$bin" -h full 2>/dev/null | matches_output "\\bfps_mode\\b"
 }
 
 FPS_ARGS_FFMPEG_BIN=( -vsync cfr )

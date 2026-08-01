@@ -1396,6 +1396,57 @@ static void vtremote_log_error_payload(AVCodecContext *avctx,
     av_log(avctx, AV_LOG_ERROR, "vtremote server error %u\n", code);
 }
 
+static int vtremote_inflight_at_limit(const VTRemoteEncContext *s) {
+  return s->queued_frames + s->inflight_frames >= s->inflight;
+}
+
+static int vtremote_wait_for_inflight_slot(AVCodecContext *avctx) {
+  VTRemoteEncContext *s = avctx->priv_data;
+
+  while (vtremote_inflight_at_limit(s)) {
+    VTRemoteMsgHeader hdr;
+    uint8_t *payload = NULL;
+    int ret = vtremote_sendq_pump(avctx, 1);
+    if (ret < 0 && ret != AVERROR(EAGAIN))
+      return ret;
+    ret = vtremote_read_msg(s, &hdr, &payload);
+    if (ret < 0)
+      return ret;
+
+    switch (hdr.type) {
+    case VTREMOTE_MSG_PACKET:
+      ret = enqueue_packet(avctx, payload, hdr.length);
+      av_free(payload);
+      if (ret < 0)
+        return ret;
+      if (s->inflight_frames > 0)
+        s->inflight_frames--;
+      break;
+    case VTREMOTE_MSG_DONE:
+      av_free(payload);
+      s->done = 1;
+      return AVERROR_EOF;
+    case VTREMOTE_MSG_PING:
+      av_free(payload);
+      ret = vtremote_sendq_enqueue_empty(s, VTREMOTE_MSG_PONG, 0);
+      if (ret < 0)
+        return ret;
+      ret = vtremote_sendq_pump(avctx, 0);
+      if (ret < 0 && ret != AVERROR(EAGAIN))
+        return ret;
+      break;
+    case VTREMOTE_MSG_ERROR:
+      vtremote_log_error_payload(avctx, payload, hdr.length);
+      av_free(payload);
+      return AVERROR(EIO);
+    default:
+      av_free(payload);
+      break;
+    }
+  }
+  return 0;
+}
+
 static int vtremote_handle_hello_ack(AVCodecContext *avctx,
                                      const uint8_t *payload, int len) {
   VTRemoteEncContext *s = avctx->priv_data;
@@ -2428,6 +2479,7 @@ int ff_vtremote_encode(AVCodecContext *avctx, AVPacket *pkt,
   }
 
   int ret = 0;
+  int frame_submitted = 0;
 
   /*
    * Pipelining optimization: Try to drain any available packets first
@@ -2442,8 +2494,13 @@ int ff_vtremote_encode(AVCodecContext *avctx, AVPacket *pkt,
   if (ret < 0 && ret != AVERROR(EAGAIN))
     return ret;
 
-  /* Return a queued packet if available */
+  /* Return a queued packet if available. Consume the current input frame too. */
   if (s->pkt_q_count > 0) {
+    if (frame && vtremote_inflight_at_limit(s)) {
+      ret = vtremote_wait_for_inflight_slot(avctx);
+      if (ret < 0)
+        return ret;
+    }
     AVPacket *src = &s->pkt_queue[s->pkt_q_head];
     int rc = av_packet_ref(pkt, src);
     av_packet_unref(src);
@@ -2451,15 +2508,17 @@ int ff_vtremote_encode(AVCodecContext *avctx, AVPacket *pkt,
     s->pkt_q_count--;
     if (got_packet)
       *got_packet = 1;
-    /* Continue to send the frame if we have one (pipelining) */
-    if (frame && s->inflight_frames < s->inflight) {
-      ff_vtremote_common_send_frame(avctx, frame);
+    /* Continue to send the frame if we have one (pipelining). */
+    if (frame && !vtremote_inflight_at_limit(s)) {
+      int send_ret = ff_vtremote_common_send_frame(avctx, frame);
+      if (send_ret < 0)
+        return send_ret;
     }
     return rc;
   }
 
   /* If we have a frame and haven't hit the inflight limit, send it */
-  if (frame && s->inflight_frames < s->inflight) {
+  if (frame && !vtremote_inflight_at_limit(s)) {
     ret = ff_vtremote_common_send_frame(avctx, frame);
     if (ret == AVERROR(EAGAIN)) {
       int pump = vtremote_sendq_pump(avctx, 1);
@@ -2474,10 +2533,12 @@ int ff_vtremote_encode(AVCodecContext *avctx, AVPacket *pkt,
     }
     if (ret < 0 && ret != AVERROR_EOF)
       return ret;
+    if (ret >= 0)
+      frame_submitted = 1;
   }
 
-  /* If we have a frame but hit the inflight limit, we must wait for a packet */
-  if (frame && s->inflight_frames >= s->inflight) {
+  /* If an unsent frame hit the inflight limit, wait for a packet. */
+  if (frame && !frame_submitted && vtremote_inflight_at_limit(s)) {
     if (s->inflight_auto)
       s->inflight_blocked++;
     vtremote_sendq_pump(avctx, 1);

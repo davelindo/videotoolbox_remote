@@ -2,12 +2,13 @@
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
-  echo "usage: $0 <output_file>" >&2
+  echo "usage: $0 <output_file> [expected_frames]" >&2
   echo "env: FFPROBE overrides ffprobe path (default ../ffmpeg/ffprobe)" >&2
   exit 1
 fi
 
 OUT="$1"
+EXPECTED_FRAMES="${2:-}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FFPROBE_BIN="${FFPROBE:-${REPO_ROOT}/ffmpeg/ffprobe}"
 
@@ -20,11 +21,12 @@ if [[ ! -x "$FFPROBE_BIN" ]]; then
   fi
 fi
 
-python3 - <<PY
-import json, subprocess, sys
+EXPECTED_FRAMES="$EXPECTED_FRAMES" python3 - <<PY
+import json, os, subprocess, sys
 
 ffprobe = "$FFPROBE_BIN"
 out = "$OUT"
+expected_frames_raw = os.environ.get("EXPECTED_FRAMES", "")
 
 cmd = [
     ffprobe, "-v", "error", "-select_streams", "v:0",
@@ -93,4 +95,14 @@ if frames is None or frames <= 0:
 if frames != packets:
     print(f"frame/packet mismatch: frames={frames} packets={packets}", file=sys.stderr)
     sys.exit(1)
+
+if expected_frames_raw:
+    try:
+        expected_frames = int(expected_frames_raw)
+    except ValueError:
+        print(f"invalid expected frame count: {expected_frames_raw}", file=sys.stderr)
+        sys.exit(1)
+    if frames != expected_frames:
+        print(f"unexpected frame count: frames={frames} expected={expected_frames}", file=sys.stderr)
+        sys.exit(1)
 PY

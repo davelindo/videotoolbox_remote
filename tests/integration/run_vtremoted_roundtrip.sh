@@ -154,7 +154,7 @@ echo "Checking PTS/DTS monotonicity..."
 "$ROOT/tests/integration/check_pts_dts.sh" "$OUT_MP4_H264" 30
 
 echo "Checking frame/packet parity..."
-"$ROOT/tests/integration/check_frame_packet_count.sh" "$OUT_MP4_H264"
+"$ROOT/tests/integration/check_frame_packet_count.sh" "$OUT_MP4_H264" 150
 
 if [[ "$H264_BASELINE_OK" -eq 1 ]]; then
   echo "Checking bitrate near target..."
@@ -187,7 +187,7 @@ echo "Checking HEVC PTS/DTS monotonicity..."
 "$ROOT/tests/integration/check_pts_dts.sh" "$OUT_MP4_HEVC" 30
 
 echo "Checking HEVC frame/packet parity..."
-"$ROOT/tests/integration/check_frame_packet_count.sh" "$OUT_MP4_HEVC"
+"$ROOT/tests/integration/check_frame_packet_count.sh" "$OUT_MP4_HEVC" 150
 
 if [[ "$HEVC_BASELINE_OK" -eq 1 ]]; then
   echo "Checking HEVC bitrate near target..."
