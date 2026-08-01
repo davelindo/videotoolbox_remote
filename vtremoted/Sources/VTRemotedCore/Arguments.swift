@@ -23,7 +23,7 @@ public struct Arguments: Equatable, Sendable {
 
     public init() {}
 
-    public static let version = "0.6.0"
+    public static let version = "0.7.0"
 
     public static let usage = """
     Usage: vtremoted [options]

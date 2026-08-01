@@ -7,6 +7,18 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
+## [v0.7.0] - 2026-08-01
+
+### Fixed
+- Prevented remote encoders from submitting an input frame twice or dropping it when queued and transmitted frames jointly fill the in-flight window, restoring exact input-frame/output-packet parity under real network timing.
+- Detected HEVC Main10 from the codec profile or extradata when `bits_per_raw_sample` is unavailable, so remote decode negotiates P010 instead of NV12.
+- Corrected benchmark capability probes that could misinterpret a matcher SIGPIPE under `pipefail` as an unsupported FFmpeg option.
+
+### Changed
+- Strengthened roundtrip and decode integration coverage with exact expected frame counts and explicit Main10-to-P010 negotiation checks.
+- Updated hardware-frame decode coverage and benchmark documentation for the corrected Main10 path and measured 2.5 GbE behavior.
+- Bumped the packaged `vtremoted --version` output to `0.7.0`.
+
 ## [v0.6.48] - 2026-08-01
 
 ### Changed

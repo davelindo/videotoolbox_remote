@@ -39,6 +39,7 @@ RUN_DIR="$(mktemp -d /tmp/vtremote_decode.XXXXXX)"
 IN_H264="${RUN_DIR}/input_h264.mp4"
 IN_HEVC="${RUN_DIR}/input_hevc.mp4"
 SERVER_PID=""
+SERVER_LOG="${RUN_DIR}/vtremoted.log"
 cleanup() {
   vtremote_stop_server
   if [[ -n "${RUN_DIR:-}" && -d "${RUN_DIR:-}" ]]; then
@@ -104,7 +105,7 @@ fi
 
 if [[ -z "$USE_EXISTING" ]]; then
   echo "Starting vtremoted on 127.0.0.1:${VTREMOTE_PORT:-<auto>}..."
-  vtremote_start_server /tmp/vtremoted_decode.log
+  vtremote_start_server "$SERVER_LOG"
   SERVER_PID="${VTREMOTE_SERVER_PID:-}"
   PORT="$VTREMOTE_PORT"
   echo "Using vtremoted on 127.0.0.1:${PORT} (pid=${SERVER_PID})"
@@ -115,7 +116,7 @@ fi
 ensure_server_running() {
   if [[ -n "${SERVER_PID:-}" ]] && ! kill -0 "$SERVER_PID" 2>/dev/null; then
     echo "WARN: vtremoted died; restarting..." >&2
-    vtremote_restart_server /tmp/vtremoted_decode.log
+    vtremote_restart_server "$SERVER_LOG"
     SERVER_PID="${VTREMOTE_SERVER_PID:-}"
     PORT="$VTREMOTE_PORT"
   fi
@@ -139,13 +140,18 @@ if [[ "$SKIP_HEVC" -eq 0 ]]; then
   set -e
   if [[ $rc -ne 0 ]]; then
     echo "WARN: HEVC decode failed; retrying with fresh vtremoted..." >&2
-    vtremote_restart_server /tmp/vtremoted_decode.log
+    vtremote_restart_server "$SERVER_LOG"
     SERVER_PID="${VTREMOTE_SERVER_PID:-}"
     PORT="$VTREMOTE_PORT"
     "$FFMPEG_BIN" -v error -xerror \
       -vt_remote_host 127.0.0.1:${PORT} ${TOKEN_ARGS[@]+"${TOKEN_ARGS[@]}"} \
       ${DECODE_ARGS[@]+"${DECODE_ARGS[@]}"} \
       -c:v hevc_videotoolbox_remote -i "$IN_HEVC" -f null - >/dev/null
+  fi
+  if [[ -z "$USE_EXISTING" ]] && ! grep -q 'CONFIGURE req mode=decode codec=hevc .* pix=2(p010)' "$SERVER_LOG"; then
+    echo "ERROR: HEVC Main10 remote decode did not negotiate P010 output" >&2
+    tail -n 200 "$SERVER_LOG" >&2
+    exit 1
   fi
 else
   echo "SKIP: HEVC decode (no local HEVC input available)"
