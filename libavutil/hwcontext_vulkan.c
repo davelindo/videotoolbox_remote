@@ -99,6 +99,10 @@ typedef struct VulkanDeviceFeatures {
     VkPhysicalDeviceShaderExpectAssumeFeaturesKHR expect_assume;
 #endif
 
+#ifdef VK_KHR_shader_maximal_reconvergence
+    VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR maximal_reconvergence;
+#endif
+
     VkPhysicalDeviceVideoMaintenance1FeaturesKHR video_maintenance_1;
 #ifdef VK_KHR_video_maintenance2
     VkPhysicalDeviceVideoMaintenance2FeaturesKHR video_maintenance_2;
@@ -265,6 +269,11 @@ static void device_features_init(AVHWDeviceContext *ctx, VulkanDeviceFeatures *f
                      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_EXPECT_ASSUME_FEATURES_KHR);
 #endif
 
+#ifdef VK_KHR_shader_maximal_reconvergence
+    FF_VK_STRUCT_EXT(s, &feats->device, &feats->maximal_reconvergence, FF_VK_EXT_MAXIMAL_RECONVERGENCE,
+                     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MAXIMAL_RECONVERGENCE_FEATURES_KHR);
+#endif
+
     FF_VK_STRUCT_EXT(s, &feats->device, &feats->video_maintenance_1, FF_VK_EXT_VIDEO_MAINTENANCE_1,
                      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_MAINTENANCE_1_FEATURES_KHR);
 #ifdef VK_KHR_video_maintenance2
@@ -401,6 +410,10 @@ static void device_features_copy_needed(VulkanDeviceFeatures *dst, VulkanDeviceF
 
 #ifdef VK_KHR_shader_expect_assume
     COPY_VAL(expect_assume.shaderExpectAssume);
+#endif
+
+#ifdef VK_KHR_shader_maximal_reconvergence
+    COPY_VAL(maximal_reconvergence.shaderMaximalReconvergence);
 #endif
 
 #ifdef VK_KHR_internally_synchronized_queues
@@ -722,6 +735,9 @@ static const VulkanOptExtension optional_device_exts[] = {
 #endif
 #ifdef VK_KHR_shader_expect_assume
     { VK_KHR_SHADER_EXPECT_ASSUME_EXTENSION_NAME,             FF_VK_EXT_EXPECT_ASSUME          },
+#endif
+#ifdef VK_KHR_shader_maximal_reconvergence
+    { VK_KHR_SHADER_MAXIMAL_RECONVERGENCE_EXTENSION_NAME,     FF_VK_EXT_MAXIMAL_RECONVERGENCE  },
 #endif
     { VK_KHR_VIDEO_MAINTENANCE_1_EXTENSION_NAME,              FF_VK_EXT_VIDEO_MAINTENANCE_1    },
 #ifdef VK_KHR_video_maintenance2
@@ -3025,9 +3041,15 @@ static int vulkan_frames_init(AVHWFramesContext *hwfc)
                                            VK_IMAGE_USAGE_STORAGE_BIT      |
                                            VK_IMAGE_USAGE_SAMPLED_BIT);
 
+        /* Frames which may double as active references (coinciding decode
+         * output) cannot support host transfers: decode submissions bake the
+         * image layout into their barriers at record time, so a host-side
+         * layout transition cannot be synchronized against them, not even
+         * by the frame lock and timeline semaphore. */
         if (p->vkctx.extensions & FF_VK_EXT_HOST_IMAGE_COPY &&
             !(p->dprops.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY) &&
-            !(p->dprops.driverID == VK_DRIVER_ID_MOLTENVK))
+            !(p->dprops.driverID == VK_DRIVER_ID_MOLTENVK) &&
+            !(hwctx->usage & VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR))
             hwctx->usage |= supported_usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT;
 
         /* Enables encoding of images, if supported by format and extensions */
@@ -4520,7 +4542,7 @@ static int host_map_frame(AVHWFramesContext *hwfc, AVBufferRef **dst, int *nb_bu
     /* Single buffer contains all planes */
     if (nb_src_bufs == 1) {
         err = ff_vk_host_map_buffer(&p->vkctx, &dst[0],
-                                    swf->data[0], swf->buf[0],
+                                    swf->data[0], VK_WHOLE_SIZE, swf->buf[0],
                                     buf_usage);
         if (err < 0)
             return err;
@@ -4532,8 +4554,8 @@ static int host_map_frame(AVHWFramesContext *hwfc, AVBufferRef **dst, int *nb_bu
     } else if (nb_src_bufs == planes) { /* One buffer per plane */
         for (int i = 0; i < planes; i++) {
             err = ff_vk_host_map_buffer(&p->vkctx, &dst[i],
-                                        swf->data[i], swf->buf[i],
-                                        buf_usage);
+                                        swf->data[i], VK_WHOLE_SIZE,
+                                        swf->buf[i], buf_usage);
             if (err < 0)
                 goto fail;
             (*nb_bufs)++;
@@ -4584,10 +4606,12 @@ static int vulkan_transfer_host(AVHWFramesContext *hwfc, AVFrame *hwf,
         if (compat)
             continue;
 
+        /* This should only ever happen on uploads, so using UNDEFINED is safe */
+        av_assert1(upload);
         layout_ch_info[nb_layout_ch] = (VkHostImageLayoutTransitionInfoEXT) {
             .sType = VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO_EXT,
             .image = hwf_vk->img[i],
-            .oldLayout = hwf_vk->layout[i],
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
             .newLayout = VK_IMAGE_LAYOUT_GENERAL,
             .subresourceRange = {
                 .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
@@ -4709,8 +4733,27 @@ static int vulkan_transfer_frame(AVHWFramesContext *hwfc,
     if (swf->width > hwfc->width || swf->height > hwfc->height)
         return AVERROR(EINVAL);
 
-    if (hwctx->usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT &&
-        !(p->dprops.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY))
+    int host_copy = hwctx->usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT &&
+                    !(p->dprops.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY);
+
+    /* Host layout transitions may only originate from a host-copyable layout */
+    if (!upload && host_copy) {
+        for (int i = 0; i < nb_images; i++) {
+            int compat = 0;
+            for (int j = 0; j < p->vkctx.host_image_props.copySrcLayoutCount; j++) {
+                if (hwf_vk->layout[i] == p->vkctx.host_image_props.pCopySrcLayouts[j]) {
+                    compat = 1;
+                    break;
+                }
+            }
+            if (!compat) {
+                host_copy = 0;
+                break;
+            }
+        }
+    }
+
+    if (host_copy)
         return vulkan_transfer_host(hwfc, hwf, swf, upload);
 
     for (int i = 0; i < av_pix_fmt_count_planes(swf->format); i++) {
