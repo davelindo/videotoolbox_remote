@@ -103,6 +103,13 @@ typedef struct VulkanDeviceFeatures {
     VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR maximal_reconvergence;
 #endif
 
+#ifdef VK_KHR_maintenance9
+    VkPhysicalDeviceMaintenance9FeaturesKHR maintenance_9;
+#endif
+#ifdef VK_KHR_unified_image_layouts
+    VkPhysicalDeviceUnifiedImageLayoutsFeaturesKHR unified_layouts;
+#endif
+
     VkPhysicalDeviceVideoMaintenance1FeaturesKHR video_maintenance_1;
 #ifdef VK_KHR_video_maintenance2
     VkPhysicalDeviceVideoMaintenance2FeaturesKHR video_maintenance_2;
@@ -274,6 +281,15 @@ static void device_features_init(AVHWDeviceContext *ctx, VulkanDeviceFeatures *f
                      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MAXIMAL_RECONVERGENCE_FEATURES_KHR);
 #endif
 
+#ifdef VK_KHR_maintenance9
+    FF_VK_STRUCT_EXT(s, &feats->device, &feats->maintenance_9, FF_VK_EXT_MAINTENANCE_9,
+                     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_9_FEATURES_KHR);
+#endif
+#ifdef VK_KHR_unified_image_layouts
+    FF_VK_STRUCT_EXT(s, &feats->device, &feats->unified_layouts, FF_VK_EXT_UNIFIED_IMAGE_LAYOUTS,
+                     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_UNIFIED_IMAGE_LAYOUTS_FEATURES_KHR);
+#endif
+
     FF_VK_STRUCT_EXT(s, &feats->device, &feats->video_maintenance_1, FF_VK_EXT_VIDEO_MAINTENANCE_1,
                      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_MAINTENANCE_1_FEATURES_KHR);
 #ifdef VK_KHR_video_maintenance2
@@ -414,6 +430,14 @@ static void device_features_copy_needed(VulkanDeviceFeatures *dst, VulkanDeviceF
 
 #ifdef VK_KHR_shader_maximal_reconvergence
     COPY_VAL(maximal_reconvergence.shaderMaximalReconvergence);
+#endif
+
+#ifdef VK_KHR_maintenance9
+    COPY_VAL(maintenance_9.maintenance9);
+#endif
+#ifdef VK_KHR_unified_image_layouts
+    COPY_VAL(unified_layouts.unifiedImageLayouts);
+    COPY_VAL(unified_layouts.unifiedImageLayoutsVideo);
 #endif
 
 #ifdef VK_KHR_internally_synchronized_queues
@@ -738,6 +762,12 @@ static const VulkanOptExtension optional_device_exts[] = {
 #endif
 #ifdef VK_KHR_shader_maximal_reconvergence
     { VK_KHR_SHADER_MAXIMAL_RECONVERGENCE_EXTENSION_NAME,     FF_VK_EXT_MAXIMAL_RECONVERGENCE  },
+#endif
+#ifdef VK_KHR_maintenance9
+    { VK_KHR_MAINTENANCE_9_EXTENSION_NAME,                    FF_VK_EXT_MAINTENANCE_9          },
+#endif
+#ifdef VK_KHR_unified_image_layouts
+    { VK_KHR_UNIFIED_IMAGE_LAYOUTS_EXTENSION_NAME,            FF_VK_EXT_UNIFIED_IMAGE_LAYOUTS  },
 #endif
     { VK_KHR_VIDEO_MAINTENANCE_1_EXTENSION_NAME,              FF_VK_EXT_VIDEO_MAINTENANCE_1    },
 #ifdef VK_KHR_video_maintenance2
@@ -2562,7 +2592,9 @@ static int switch_layout(AVHWFramesContext *hwfc, FFVkExecPool *ectx,
     VkCommandBuffer cmd_buf;
     FFVkExecContext *exec = ff_vk_exec_get(&p->vkctx, ectx);
     cmd_buf = exec->buf;
-    ff_vk_exec_start(&p->vkctx, exec);
+    err = ff_vk_exec_start(&p->vkctx, exec);
+    if (err < 0)
+        return err;
 
     err = ff_vk_exec_add_dep_frame(&p->vkctx, exec, &tmp_frame,
                                    VK_PIPELINE_STAGE_2_NONE,
@@ -2585,8 +2617,8 @@ static int switch_layout(AVHWFramesContext *hwfc, FFVkExecPool *ectx,
     if (err < 0)
         return err;
 
-    /* We can do this because there are no real dependencies */
-    ff_vk_exec_discard_deps(&p->vkctx, exec);
+    /* Drops the stack-based frame above from the dependency list */
+    ff_vk_exec_wait(&p->vkctx, exec);
 
     return 0;
 }
@@ -3635,7 +3667,12 @@ static int vulkan_map_from_drm_frame_sync(AVHWFramesContext *hwfc, AVFrame *dst,
         exec = ff_vk_exec_get(&p->vkctx, &fp->compute_exec);
         cmd_buf = exec->buf;
 
-        ff_vk_exec_start(&p->vkctx, exec);
+        err = ff_vk_exec_start(&p->vkctx, exec);
+        if (err < 0) {
+            for (int i = 0; i < desc->nb_objects; i++)
+                vk->DestroySemaphore(hwctx->act_dev, drm_sync_sem[i], hwctx->alloc);
+            return err;
+        }
 
         /* Ownership of semaphores is passed */
         ff_vk_exec_add_dep_bool_sem(&p->vkctx, exec,
@@ -3645,8 +3682,10 @@ static int vulkan_map_from_drm_frame_sync(AVHWFramesContext *hwfc, AVFrame *dst,
         err = ff_vk_exec_add_dep_frame(&p->vkctx, exec, dst,
                                        VK_PIPELINE_STAGE_2_NONE,
                                        VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-        if (err < 0)
+        if (err < 0) {
+            ff_vk_exec_discard(&p->vkctx, exec);
             return err;
+        }
 
         ff_vk_frame_barrier(&p->vkctx, exec, dst, img_bar, &nb_img_bar,
                             VK_PIPELINE_STAGE_2_NONE,
@@ -4207,8 +4246,6 @@ static int vulkan_drm_export_sync_fd(AVHWFramesContext *hwfc, AVVkFrame *f,
                        ff_vk_ret2str(ret));
                 sync_fd = -1;
             }
-        } else {
-            ff_vk_exec_discard_deps(&p->vkctx, exec);
         }
     }
 
@@ -4791,14 +4828,18 @@ static int vulkan_transfer_frame(AVHWFramesContext *hwfc,
     exec = ff_vk_exec_get(&p->vkctx, &fp->upload_exec);
     cmd_buf = exec->buf;
 
-    ff_vk_exec_start(&p->vkctx, exec);
+    err = ff_vk_exec_start(&p->vkctx, exec);
+    if (err < 0)
+        goto end;
 
     /* Prep destination Vulkan frame */
     err = ff_vk_exec_add_dep_frame(&p->vkctx, exec, hwf,
                                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                                    VK_PIPELINE_STAGE_2_TRANSFER_BIT);
-    if (err < 0)
+    if (err < 0) {
+        ff_vk_exec_discard(&p->vkctx, exec);
         goto end;
+    }
 
     /* No need to declare buf deps for synchronous transfers (downloads) */
     if (upload) {
@@ -4806,7 +4847,7 @@ static int vulkan_transfer_frame(AVHWFramesContext *hwfc,
         if (host_mapped) {
             err = ff_vk_exec_add_dep_sw_frame(&p->vkctx, exec, swf);
             if (err < 0) {
-                ff_vk_exec_discard_deps(&p->vkctx, exec);
+                ff_vk_exec_discard(&p->vkctx, exec);
                 goto end;
             }
         }
@@ -4855,9 +4896,7 @@ static int vulkan_transfer_frame(AVHWFramesContext *hwfc,
     }
 
     err = ff_vk_exec_submit(&p->vkctx, exec);
-    if (err < 0) {
-        ff_vk_exec_discard_deps(&p->vkctx, exec);
-    } else if (!upload) {
+    if (err >= 0 && !upload) {
         ff_vk_exec_wait(&p->vkctx, exec);
         if (!host_mapped)
             err = copy_buffer_data(hwfc, bufs[0], swf, region, planes, 0);
