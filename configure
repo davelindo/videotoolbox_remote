@@ -2267,6 +2267,7 @@ THREADS_LIST="
 
 ATOMICS_LIST="
     atomics_win32
+    atomics_os2
 "
 
 AUTODETECT_LIBS="
@@ -2746,7 +2747,6 @@ CONFIG_EXTRA="
     faandct
     faanidct
     fdctdsp
-    fmtconvert
     frame_thread_encoder
     g722dsp
     golomb
@@ -3036,8 +3036,10 @@ valgrind_backtrace_deps="valgrind_valgrind_h"
 
 # threading support
 atomics_win32_if="MemoryBarrier"
+atomics_os2_if="stdatomic"
 atomics_native_if_any="$ATOMICS_LIST"
 w32threads_deps="atomics_native"
+os2threads_deps="atomics_native"
 threads_if_any="$THREADS_LIST"
 
 # subsystems
@@ -3094,7 +3096,7 @@ aac_decoder_select="adts_header mpeg4audio sinewin"
 aac_fixed_decoder_select="adts_header mpeg4audio"
 aac_encoder_select="audio_frame_queue lpc sinewin"
 aac_latm_decoder_select="aac_decoder aac_latm_parser"
-ac3_decoder_select="ac3_parser ac3dsp bswapdsp fmtconvert"
+ac3_decoder_select="ac3_parser ac3dsp bswapdsp"
 ac3_fixed_decoder_select="ac3_parser ac3dsp bswapdsp"
 ac3_encoder_select="ac3dsp audiodsp me_cmp"
 ac3_fixed_encoder_select="ac3dsp audiodsp me_cmp"
