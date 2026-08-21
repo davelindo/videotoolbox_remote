@@ -195,6 +195,7 @@ void fill_encoder_settings(obs_data_t *settings, const Args &args, int bitrate,
   obs_data_set_string(settings, "host", args.host.c_str());
   obs_data_set_int(settings, "port", args.port);
   obs_data_set_string(settings, "token", args.token.c_str());
+  obs_data_set_string(settings, "codec", "h264");
   obs_data_set_int(settings, "bitrate", bitrate);
   obs_data_set_int(settings, "keyint_sec", keyint_sec);
   obs_data_set_int(settings, "wire_compression", args.wire_compression);
@@ -213,6 +214,8 @@ void validate_defaults() {
           "unexpected default keyint_sec");
   require(obs_data_get_int(defaults.ptr, "wire_compression") == VTR_WIRE_LZ4,
           "unexpected default wire_compression");
+  require(std::string(obs_data_get_string(defaults.ptr, "codec")) == "h264",
+          "unexpected default codec");
 }
 
 void validate_properties() {
@@ -245,6 +248,24 @@ void validate_properties() {
     require(obs_property_list_item_int(wire, i) == expected[i].value,
             "wire_compression item value mismatch");
   }
+
+  obs_property_t *codec =
+      obs_properties_get(props.ptr, "codec");
+  require(codec != nullptr, "codec property missing");
+  require(obs_property_get_type(codec) == OBS_PROPERTY_LIST,
+          "codec property type mismatch");
+  require(obs_property_list_format(codec) == OBS_COMBO_FORMAT_STRING,
+          "codec list format mismatch");
+  require(obs_property_list_item_count(codec) == 2,
+          "codec item count mismatch");
+  require(std::string(obs_property_list_item_name(codec, 0)) == "H.264 (AVC)",
+          "codec item 0 name mismatch");
+  require(std::string(obs_property_list_item_string(codec, 0)) == "h264",
+          "codec item 0 value mismatch");
+  require(std::string(obs_property_list_item_name(codec, 1)) == "HEVC (H.265)",
+          "codec item 1 name mismatch");
+  require(std::string(obs_property_list_item_string(codec, 1)) == "hevc",
+          "codec item 1 value mismatch");
 }
 
 const struct obs_encoder_info *load_encoder_info(obs_module_t *module) {
