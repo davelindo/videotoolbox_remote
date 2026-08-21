@@ -68,6 +68,11 @@ static void vtremoted_defaults(obs_data_t *settings) {
   obs_data_set_default_string(settings, "codec", "h264");
 }
 
+static const char *locale_string(const char *lookup, const char *fallback) {
+  const char *value = NULL;
+  return obs_module_get_string(lookup, &value) && value ? value : fallback;
+}
+
 static obs_properties_t *vtremoted_properties(void *unused) {
   UNUSED_PARAMETER(unused);
 
@@ -79,12 +84,12 @@ static obs_properties_t *vtremoted_properties(void *unused) {
 
   obs_property_t *codec_list =
       obs_properties_add_list(props, "codec",
-                              obs_module_get_string("VideoCodec"),
+                              locale_string("VideoCodec", "Video Codec"),
                               OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-  obs_property_list_add_string(codec_list, obs_module_get_string("H264"),
-                               "h264");
-  obs_property_list_add_string(codec_list, obs_module_get_string("HEVC"),
-                               "hevc");
+  obs_property_list_add_string(codec_list,
+                               locale_string("H264", "H.264 (AVC)"), "h264");
+  obs_property_list_add_string(codec_list,
+                               locale_string("HEVC", "HEVC (H.265)"), "hevc");
 
   obs_property_t *p =
       obs_properties_add_int(props, "bitrate", "Bitrate", 500, 100000, 100);
