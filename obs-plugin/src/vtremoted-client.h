@@ -23,7 +23,8 @@ VTRemotedClient *vtremoted_client_create(void);
 void vtremoted_client_destroy(VTRemotedClient *client);
 
 bool vtremoted_client_connect(VTRemotedClient *client, const char *host,
-                              int port, const char *token);
+                              int port, const char *token,
+                              const char *codec);
 void vtremoted_client_disconnect(VTRemotedClient *client);
 bool vtremoted_client_is_connected(VTRemotedClient *client);
 

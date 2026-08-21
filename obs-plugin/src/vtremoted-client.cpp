@@ -360,13 +360,18 @@ static bool recv_header(socket_t sock, struct vtr_header *hdr) {
 }
 
 bool vtremoted_client_connect(VTRemotedClient *client, const char *host,
-                              int port, const char *token) {
+                              int port, const char *token,
+                              const char *codec) {
   if (!client || client->connected)
     return false;
 
   client->host = host ? host : "127.0.0.1";
   client->port = port > 0 ? port : VTR_PORT;
   client->token = token ? token : "";
+  const char *hello_codec =
+      (codec && (strcmp(codec, "h264") == 0 || strcmp(codec, "hevc") == 0))
+          ? codec
+          : "h264";
 
 #ifdef _WIN32
   WSADATA wsa;
@@ -411,7 +416,7 @@ bool vtremoted_client_connect(VTRemotedClient *client, const char *host,
   /* token length (2) + token + codec length (2) + codec + client_name length
    * (2) + client_name + build length (2) + build */
   if (!append_string(hello, client->token.data(), client->token.size()) ||
-      !append_string(hello, "h264") ||
+      !append_string(hello, hello_codec) ||
       !append_string(hello, "obs-vtremoted") ||
       !append_string(hello, OBS_PLUGIN_VERSION)) {
     vtremoted_client_disconnect(client);

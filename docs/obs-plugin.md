@@ -1,11 +1,15 @@
 ---
 title: OBS Plugin
-description: "Experimental OBS Studio plugin for VideoToolbox Remote: build, configure, and stream using remote H.264 hardware encoding from a Mac over LAN."
+description: "Experimental OBS Studio plugin for VideoToolbox Remote: build, configure, and stream using remote H.264/HEVC hardware encoding from a Mac over LAN."
 ---
 
 # OBS Plugin (Experimental)
 
 The `obs-plugin/` tree contains an experimental OBS encoder plugin that connects to `vtremoted` and uses the same wire protocol as the FFmpeg client.
+
+## Codec Selection
+
+The encoder exposes a **Video Codec** property (`h264` or `hevc`). The codec is negotiated in the protocol HELLO message; HEVC requires an Apple Silicon server.
 
 ## Scope
 

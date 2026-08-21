@@ -90,7 +90,8 @@ int main(int argc, char **argv) {
   }
 
   const bool connected =
-      vtremoted_client_connect(client, args.host.c_str(), args.port, args.token.c_str());
+      vtremoted_client_connect(client, args.host.c_str(), args.port,
+                               args.token.c_str(), "h264");
   if (!connected) {
     std::fprintf(stderr, "connect failed\n");
     vtremoted_client_destroy(client);
