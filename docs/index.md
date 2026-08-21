@@ -4,15 +4,38 @@ description: "Remote VideoToolbox for FFmpeg: use a Mac or Apple Silicon system 
 ---
 
 <div class="hero">
+  <div class="hero-badge">
+    <span class="badge-dot"></span>
+    v0.7.11 &middot; Stable protocol v1
+  </div>
   <h1>Remote VideoToolbox for FFmpeg</h1>
   <p>
-    Use a Mac or Apple Silicon system on your LAN as a hardware H.264/HEVC encode, decode, and transcoding server.<br>
+    Turn a Mac on your LAN into a hardware H.264/HEVC encode, decode, and transcoding server.
     Drop-in FFmpeg codecs for Linux, Windows, and macOS clients.
   </p>
   <div class="cta-row">
     <a class="btn primary" href="getting-started.html">Get Started</a>
     <a class="btn" href="https://github.com/davelindo/videotoolbox_remote/releases/latest">Download Binaries</a>
     <a class="btn" href="protocol.html">Protocol Spec</a>
+  </div>
+</div>
+
+<div class="stats-strip">
+  <div class="stat">
+    <div class="stat-value">230 fps</div>
+    <div class="stat-label">1080p H.264 encode</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">210 fps</div>
+    <div class="stat-label">1080p HEVC encode</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">~60 fps</div>
+    <div class="stat-label">4K HEVC encode</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">100%</div>
+    <div class="stat-label">Output parity vs local</div>
   </div>
 </div>
 
@@ -64,16 +87,18 @@ See [benchmarks](benchmarks.html) for hardware, network, and reproduction detail
 
 ## Documentation
 
-- [Getting Started](getting-started.html) — Installation, setup, and first encode.
-- [Benchmarks](benchmarks.html) — Performance numbers, caveats, and reproduction commands.
-- [Architecture](architecture.html) — System design, data flow, and component overview.
-- [Protocol](protocol.html) — Wire specification (v1, stable).
-- [OBS Plugin](obs-plugin.html) — Experimental OBS Studio integration.
-- [Security](security.html) — SSH tunnels, VPN, and token authentication.
-- [Troubleshooting](troubleshooting.html) — Common issues and performance tuning.
-- [Development](development.html) — Building from source and running tests.
+<div class="doc-grid">
+<a class="doc-card" href="getting-started.html"><div class="doc-card-title">Getting Started</div><div class="doc-card-desc">Installation, setup, and first encode.</div></a>
+<a class="doc-card" href="benchmarks.html"><div class="doc-card-title">Benchmarks</div><div class="doc-card-desc">Performance numbers, caveats, and reproduction commands.</div></a>
+<a class="doc-card" href="architecture.html"><div class="doc-card-title">Architecture</div><div class="doc-card-desc">System design, data flow, and component overview.</div></a>
+<a class="doc-card" href="protocol.html"><div class="doc-card-title">Protocol</div><div class="doc-card-desc">Wire specification (v1, stable).</div></a>
+<a class="doc-card" href="obs-plugin.html"><div class="doc-card-title">OBS Plugin</div><div class="doc-card-desc">Experimental OBS Studio integration.</div></a>
+<a class="doc-card" href="security.html"><div class="doc-card-title">Security</div><div class="doc-card-desc">SSH tunnels, VPN, and token authentication.</div></a>
+<a class="doc-card" href="troubleshooting.html"><div class="doc-card-title">Troubleshooting</div><div class="doc-card-desc">Common issues and performance tuning.</div></a>
+<a class="doc-card" href="development.html"><div class="doc-card-title">Development</div><div class="doc-card-desc">Building from source and running tests.</div></a>
+</div>
 
-<div class="cta-row" style="margin-top: 48px;">
+<div class="cta-row" style="margin-top: 56px;">
   <a class="btn primary" href="https://github.com/davelindo/videotoolbox_remote/releases/latest">Download Latest Release</a>
   <a class="btn" href="https://github.com/davelindo/videotoolbox_remote">View on GitHub</a>
 </div>
