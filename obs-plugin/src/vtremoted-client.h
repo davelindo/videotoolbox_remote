@@ -5,6 +5,10 @@
 #ifndef VTREMOTED_CLIENT_H
 #define VTREMOTED_CLIENT_H
 
+/* Plugin build identity reported in the protocol HELLO message.
+ * Keep in sync with obs-plugin/CMakeLists.txt project() version. */
+#define OBS_PLUGIN_VERSION "1.0.0"
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
