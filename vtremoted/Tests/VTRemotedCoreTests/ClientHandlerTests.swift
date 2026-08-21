@@ -66,6 +66,32 @@ final class ClientHandlerTests: XCTestCase {
         XCTAssertEqual(fakeIO.sent[0].1.first, 0)
     }
 
+    func testHelloCodecSelectionFlowsIntoConfigure() {
+        for codecName in ["h264", "hevc"] {
+            let helloPayload = makeHello(token: "", codec: codecName)
+            let configurePayload = makeConfigure(mode: "encode", wireCompression: "0")
+            var configured: SessionConfiguration?
+            let fakeIO = FakeIO(incoming: [
+                (.hello, helloPayload),
+                (.configure, configurePayload),
+                (.done, Data())
+            ])
+
+            Logger.shared.level = .error
+            let handler = VTRClientHandler(
+                io: fakeIO,
+                expectedToken: "",
+                sessionFactory: { sender in
+                    StubCodecSession(sender: sender, onConfigure: { configured = $0 })
+                }
+            )
+            handler.run()
+
+            XCTAssertEqual(configured?.codec.rawValue, codecName,
+                           "codec \(codecName) should flow from HELLO into CONFIGURE")
+        }
+    }
+
     func testAuthFailStopsAfterHelloAck() {
         let helloPayload = makeHello(token: "bad", codec: "h264")
         let fakeIO = FakeIO(incoming: [

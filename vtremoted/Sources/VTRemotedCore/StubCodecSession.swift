@@ -9,14 +9,17 @@ final class StubCodecSession: CodecSession {
 
     private let send: MessageSender
     private var config: SessionConfiguration?
+    private var onConfigure: ((SessionConfiguration) -> Void)?
     private let timestampTracker = TimestampTracker()
 
-    init(sender: @escaping MessageSender) {
+    init(sender: @escaping MessageSender, onConfigure: ((SessionConfiguration) -> Void)? = nil) {
         send = sender
+        self.onConfigure = onConfigure
     }
 
     func configure(_ configuration: SessionConfiguration) throws -> Data {
         config = configuration
+        onConfigure?(configuration)
         let enforceMonotonicPts = configuration.options.maxBFrames <= 0
         timestampTracker.reset(enforceMonotonicPts: enforceMonotonicPts)
         return Data()
