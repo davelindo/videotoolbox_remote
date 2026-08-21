@@ -78,10 +78,13 @@ static obs_properties_t *vtremoted_properties(void *unused) {
   obs_properties_add_text(props, "token", "Auth Token", OBS_TEXT_PASSWORD);
 
   obs_property_t *codec_list =
-      obs_properties_add_list(props, "codec", "Video Codec", OBS_COMBO_TYPE_LIST,
-                              OBS_COMBO_FORMAT_STRING);
-  obs_property_list_add_string(codec_list, "H.264 (AVC)", "h264");
-  obs_property_list_add_string(codec_list, "HEVC (H.265)", "hevc");
+      obs_properties_add_list(props, "codec",
+                              obs_module_get_string("VideoCodec"),
+                              OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+  obs_property_list_add_string(codec_list, obs_module_get_string("H264"),
+                               "h264");
+  obs_property_list_add_string(codec_list, obs_module_get_string("HEVC"),
+                               "hevc");
 
   obs_property_t *p =
       obs_properties_add_int(props, "bitrate", "Bitrate", 500, 100000, 100);
