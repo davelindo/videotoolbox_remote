@@ -1,6 +1,6 @@
 # OBS Plugin (Experimental)
 
-This directory contains an experimental OBS plugin for remote H.264 encoding via `vtremoted`.
+This directory contains an experimental OBS plugin for remote H.264/HEVC encoding via `vtremoted`.
 
 ## Layout
 
@@ -33,3 +33,9 @@ tests/integration/run_obs_plugin_client_mock.sh
 ```
 
 This compiles the plugin client and validates connect/configure/frame/packet flow against the Python mock server.
+
+## Codec Selection
+
+The encoder exposes a **Video Codec** property (`h264` or `hevc`). The choice is
+negotiated in the protocol HELLO message and honored by `vtremoted` when the
+server advertises the matching capability (HEVC requires Apple Silicon).

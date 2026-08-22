@@ -22,6 +22,7 @@ struct vtremoted_encoder {
 
   char *host;
   char *token;
+  char *codec;
   int port;
   int bitrate;
   int gop;
@@ -51,6 +52,7 @@ static void vtremoted_destroy(void *data) {
 
   bfree(enc->host);
   bfree(enc->token);
+  bfree(enc->codec);
   bfree(enc->extra_data);
   da_free(enc->packet_data);
   bfree(enc);
@@ -63,6 +65,12 @@ static void vtremoted_defaults(obs_data_t *settings) {
   obs_data_set_default_int(settings, "bitrate", 6000);
   obs_data_set_default_int(settings, "keyint_sec", 2);
   obs_data_set_default_int(settings, "wire_compression", VTR_WIRE_LZ4);
+  obs_data_set_default_string(settings, "codec", "h264");
+}
+
+static const char *locale_string(const char *lookup, const char *fallback) {
+  const char *value = NULL;
+  return obs_module_get_string(lookup, &value) && value ? value : fallback;
 }
 
 static obs_properties_t *vtremoted_properties(void *unused) {
@@ -73,6 +81,15 @@ static obs_properties_t *vtremoted_properties(void *unused) {
   obs_properties_add_text(props, "host", "Server Host", OBS_TEXT_DEFAULT);
   obs_properties_add_int(props, "port", "Server Port", 1, 65535, 1);
   obs_properties_add_text(props, "token", "Auth Token", OBS_TEXT_PASSWORD);
+
+  obs_property_t *codec_list =
+      obs_properties_add_list(props, "codec",
+                              locale_string("VideoCodec", "Video Codec"),
+                              OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+  obs_property_list_add_string(codec_list,
+                               locale_string("H264", "H.264 (AVC)"), "h264");
+  obs_property_list_add_string(codec_list,
+                               locale_string("HEVC", "HEVC (H.265)"), "hevc");
 
   obs_property_t *p =
       obs_properties_add_int(props, "bitrate", "Bitrate", 500, 100000, 100);
@@ -92,6 +109,10 @@ static obs_properties_t *vtremoted_properties(void *unused) {
   return props;
 }
 
+static bool vtremoted_is_supported_codec(const char *codec) {
+  return codec && (strcmp(codec, "h264") == 0 || strcmp(codec, "hevc") == 0);
+}
+
 static void *vtremoted_create(obs_data_t *settings, obs_encoder_t *encoder) {
   struct vtremoted_encoder *enc = bzalloc(sizeof(struct vtremoted_encoder));
   enc->encoder = encoder;
@@ -100,9 +121,16 @@ static void *vtremoted_create(obs_data_t *settings, obs_encoder_t *encoder) {
   enc->host = bstrdup(obs_data_get_string(settings, "host"));
   enc->port = (int)obs_data_get_int(settings, "port");
   enc->token = bstrdup(obs_data_get_string(settings, "token"));
+  enc->codec = bstrdup(obs_data_get_string(settings, "codec"));
   enc->bitrate = (int)obs_data_get_int(settings, "bitrate");
   enc->gop = (int)obs_data_get_int(settings, "keyint_sec");
   enc->wire_compression = (int)obs_data_get_int(settings, "wire_compression");
+
+  if (!enc->codec || !vtremoted_is_supported_codec(enc->codec)) {
+    warn("Unsupported codec requested");
+    vtremoted_destroy(enc);
+    return NULL;
+  }
 
   enc->client = vtremoted_client_create();
   if (!enc->client) {
@@ -117,10 +145,17 @@ static void *vtremoted_create(obs_data_t *settings, obs_encoder_t *encoder) {
 static bool vtremoted_update(void *data, obs_data_t *settings) {
   struct vtremoted_encoder *enc = data;
 
+  if (!vtremoted_is_supported_codec(obs_data_get_string(settings, "codec"))) {
+    warn("Ignoring unsupported codec change request");
+    return false;
+  }
+
   bfree(enc->host);
   bfree(enc->token);
+  bfree(enc->codec);
 
   enc->host = bstrdup(obs_data_get_string(settings, "host"));
+  enc->codec = bstrdup(obs_data_get_string(settings, "codec"));
   enc->port = (int)obs_data_get_int(settings, "port");
   enc->token = bstrdup(obs_data_get_string(settings, "token"));
   enc->bitrate = (int)obs_data_get_int(settings, "bitrate");
@@ -170,7 +205,7 @@ static bool connect_and_configure(struct vtremoted_encoder *enc) {
   info("Connecting to %s:%d", enc->host, enc->port);
 
   if (!vtremoted_client_connect(enc->client, enc->host, enc->port,
-                                enc->token)) {
+                                enc->token, enc->codec)) {
     warn("Failed to connect to server");
     return false;
   }

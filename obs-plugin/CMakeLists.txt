@@ -2,6 +2,20 @@ cmake_minimum_required(VERSION 3.16)
 
 project(obs-vtremoted VERSION 1.0.0)
 
+# Sanity-check the protocol HELLO build string against this project version.
+# The header define is parsed here so a drift fails configuration immediately.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/vtremoted-client.h" _client_h)
+string(REGEX MATCH "#define OBS_PLUGIN_VERSION .([0-9.]+)." _ver_match "${_client_h}")
+if(NOT _ver_match)
+    message(FATAL_ERROR "OBS_PLUGIN_VERSION not found in src/vtremoted-client.h")
+endif()
+set(_header_version "${CMAKE_MATCH_1}")
+if(NOT PROJECT_VERSION STREQUAL _header_version)
+    message(FATAL_ERROR
+        "CMake project() version (${PROJECT_VERSION}) must match OBS_PLUGIN_VERSION "
+        "(${_header_version}) in src/vtremoted-client.h")
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)

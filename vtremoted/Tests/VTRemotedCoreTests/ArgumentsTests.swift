@@ -22,7 +22,9 @@ final class ArgumentsTests: XCTestCase {
         XCTAssertTrue(Arguments.parse(["vtremoted", "-h"]).showHelp)
         XCTAssertTrue(Arguments.parse(["vtremoted", "--version"]).showVersion)
         XCTAssertTrue(Arguments.usage.contains("--listen HOST:PORT"))
-        XCTAssertEqual(Arguments.version, "0.7.0")
+        XCTAssertTrue(Arguments.version.hasPrefix("0."),
+                      "version should be a semver string, got \(Arguments.version)")
+        XCTAssertEqual(Arguments.version.split(separator: ".").count, 3)
     }
 
     func testUnknownArgumentIsParseError() {

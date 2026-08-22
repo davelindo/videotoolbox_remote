@@ -5,6 +5,10 @@
 #ifndef VTREMOTED_CLIENT_H
 #define VTREMOTED_CLIENT_H
 
+/* Plugin build identity reported in the protocol HELLO message.
+ * Keep in sync with obs-plugin/CMakeLists.txt project() version. */
+#define OBS_PLUGIN_VERSION "1.0.0"
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -19,7 +23,8 @@ VTRemotedClient *vtremoted_client_create(void);
 void vtremoted_client_destroy(VTRemotedClient *client);
 
 bool vtremoted_client_connect(VTRemotedClient *client, const char *host,
-                              int port, const char *token);
+                              int port, const char *token,
+                              const char *codec);
 void vtremoted_client_disconnect(VTRemotedClient *client);
 bool vtremoted_client_is_connected(VTRemotedClient *client);
 

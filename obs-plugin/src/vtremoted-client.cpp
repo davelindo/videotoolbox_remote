@@ -46,7 +46,8 @@ typedef int socket_t;
 
 enum { READ_OK = 0, READ_ERROR = -1, READ_DISCONNECTED = -2 };
 static int read_exact(socket_t sock, void *buf, size_t len);
-static void log_err(const char *fmt, ...);
+static void vtr_log(const char *fmt, ...);
+static void vtr_log_debug(const char *fmt, ...);
 
 namespace {
 
@@ -57,7 +58,7 @@ constexpr int SOCKET_TIMEOUT_MS = 5000;
 
 bool append_string(std::vector<uint8_t> &buf, const char *value, size_t len) {
   if (len > std::numeric_limits<uint16_t>::max()) {
-    log_err("String is too long for the vtremote protocol: len=%zu", len);
+    vtr_log("String is too long for the vtremote protocol: len=%zu", len);
     return false;
   }
   buf.push_back(static_cast<uint8_t>(len >> 8));
@@ -78,7 +79,7 @@ bool configure_socket_io(socket_t sock) {
                  reinterpret_cast<const char *>(&timeout), sizeof(timeout)) ||
       setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO,
                  reinterpret_cast<const char *>(&timeout), sizeof(timeout))) {
-    log_err("Failed to configure socket timeouts: error=%d", WSAGetLastError());
+    vtr_log("Failed to configure socket timeouts: error=%d", WSAGetLastError());
     return false;
   }
 #else
@@ -87,13 +88,13 @@ bool configure_socket_io(socket_t sock) {
   timeout.tv_usec = (SOCKET_TIMEOUT_MS % 1000) * 1000;
   if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) ||
       setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout))) {
-    log_err("Failed to configure socket timeouts: errno=%d", errno);
+    vtr_log("Failed to configure socket timeouts: errno=%d", errno);
     return false;
   }
 #ifdef SO_NOSIGPIPE
   int enabled = 1;
   if (setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, &enabled, sizeof(enabled))) {
-    log_err("Failed to disable SIGPIPE: errno=%d", errno);
+    vtr_log("Failed to disable SIGPIPE: errno=%d", errno);
     return false;
   }
 #endif
@@ -121,7 +122,7 @@ bool is_supported_wire_compression(int mode) {
 
 bool validate_inbound_length(uint16_t type, uint32_t length, uint32_t cap) {
   if (length > cap) {
-    log_err("Rejecting message type=%u len=%u cap=%u", (unsigned)type, length,
+    vtr_log("Rejecting message type=%u len=%u cap=%u", (unsigned)type, length,
             cap);
     return false;
   }
@@ -154,7 +155,7 @@ bool compress_plane_payload(const uint8_t *src, uint32_t src_size,
   case VTR_WIRE_LZ4: {
     const int max_dst = LZ4_compressBound((int)src_size);
     if (max_dst <= 0) {
-      log_err("Invalid LZ4 bound for src_size=%u", src_size);
+      vtr_log("Invalid LZ4 bound for src_size=%u", src_size);
       return false;
     }
     if (compress_buf.size() < (size_t)max_dst)
@@ -163,7 +164,7 @@ bool compress_plane_payload(const uint8_t *src, uint32_t src_size,
         LZ4_compress_default((const char *)src, (char *)compress_buf.data(),
                              (int)src_size, max_dst);
     if (compressed <= 0) {
-      log_err("LZ4 compression failed src_size=%u", src_size);
+      vtr_log("LZ4 compression failed src_size=%u", src_size);
       return false;
     }
     payload = compress_buf.data();
@@ -173,7 +174,7 @@ bool compress_plane_payload(const uint8_t *src, uint32_t src_size,
   case VTR_WIRE_ZSTD: {
     const size_t max_dst = ZSTD_compressBound((size_t)src_size);
     if (max_dst == 0 || ZSTD_isError(max_dst)) {
-      log_err("Invalid Zstd bound for src_size=%u", src_size);
+      vtr_log("Invalid Zstd bound for src_size=%u", src_size);
       return false;
     }
     if (compress_buf.size() < max_dst)
@@ -182,7 +183,7 @@ bool compress_plane_payload(const uint8_t *src, uint32_t src_size,
         ZSTD_compress(compress_buf.data(), max_dst, src, (size_t)src_size,
                       ZSTD_CLEVEL_DEFAULT);
     if (ZSTD_isError(compressed) || compressed == 0) {
-      log_err("Zstd compression failed src_size=%u err=%s", src_size,
+      vtr_log("Zstd compression failed src_size=%u err=%s", src_size,
               ZSTD_getErrorName(compressed));
       return false;
     }
@@ -191,7 +192,7 @@ bool compress_plane_payload(const uint8_t *src, uint32_t src_size,
     return true;
   }
   default:
-    log_err("Unsupported wire compression mode=%d", wire_compression);
+    vtr_log("Unsupported wire compression mode=%d", wire_compression);
     return false;
   }
 }
@@ -273,14 +274,29 @@ static int read_exact(socket_t sock, void *buf, size_t len) {
   return READ_OK;
 }
 
-static void log_err(const char *fmt, ...) {
+static void vtr_vlog(char *buffer, size_t buffer_size, const char *fmt,
+                     va_list args) {
+  vsnprintf(buffer, buffer_size, fmt, args);
+}
+
+static void vtr_log(const char *fmt, ...) {
   char buffer[4096];
   va_list args;
   va_start(args, fmt);
-  vsnprintf(buffer, sizeof(buffer), fmt, args);
+  vtr_vlog(buffer, sizeof(buffer), fmt, args);
   va_end(args);
 
   blog(LOG_WARNING, "[vtremoted-client] %s", buffer);
+}
+
+static void vtr_log_debug(const char *fmt, ...) {
+  char buffer[4096];
+  va_list args;
+  va_start(args, fmt);
+  vtr_vlog(buffer, sizeof(buffer), fmt, args);
+  va_end(args);
+
+  blog(LOG_INFO, "[vtremoted-client] %s", buffer);
 }
 
 static bool write_all(socket_t sock, const void *buf, size_t len) {
@@ -300,12 +316,12 @@ static bool write_all(socket_t sock, const void *buf, size_t len) {
       const int err = WSAGetLastError();
       if (w < 0 && err == WSAEINTR)
         continue;
-      log_err("write_all failed: w=%zd error=%d", w, err);
+      vtr_log("write_all failed: w=%zd error=%d", w, err);
 #else
       const int err = errno;
       if (w < 0 && err == EINTR)
         continue;
-      log_err("write_all failed: w=%zd errno=%d", w, err);
+      vtr_log("write_all failed: w=%zd errno=%d", w, err);
 #endif
       return false;
     }
@@ -322,11 +338,11 @@ static bool send_msg(socket_t sock, uint16_t type, const uint8_t *body,
   write_be16(hdr + 6, type);
   write_be32(hdr + 8, len);
   if (!write_all(sock, hdr, 12)) {
-    log_err("send_msg header failed type=%d", type);
+    vtr_log("send_msg header failed type=%d", type);
     return false;
   }
   if (len > 0 && !write_all(sock, body, len)) {
-    log_err("send_msg body failed type=%d len=%d", type, len);
+    vtr_log("send_msg body failed type=%d len=%d", type, len);
     return false;
   }
   return true;
@@ -344,13 +360,18 @@ static bool recv_header(socket_t sock, struct vtr_header *hdr) {
 }
 
 bool vtremoted_client_connect(VTRemotedClient *client, const char *host,
-                              int port, const char *token) {
+                              int port, const char *token,
+                              const char *codec) {
   if (!client || client->connected)
     return false;
 
   client->host = host ? host : "127.0.0.1";
   client->port = port > 0 ? port : VTR_PORT;
   client->token = token ? token : "";
+  const char *hello_codec =
+      (codec && (strcmp(codec, "h264") == 0 || strcmp(codec, "hevc") == 0))
+          ? codec
+          : "h264";
 
 #ifdef _WIN32
   WSADATA wsa;
@@ -376,7 +397,7 @@ bool vtremoted_client_connect(VTRemotedClient *client, const char *host,
   addr.sin_family = AF_INET;
   addr.sin_port = htons((uint16_t)client->port);
   if (inet_pton(AF_INET, client->host.c_str(), &addr.sin_addr) != 1) {
-    log_err("Invalid address: %s", client->host.c_str());
+    vtr_log("Invalid address: %s", client->host.c_str());
     close_socket(client->sock);
     client->sock = SOCKET_INVALID;
     return false;
@@ -395,17 +416,17 @@ bool vtremoted_client_connect(VTRemotedClient *client, const char *host,
   /* token length (2) + token + codec length (2) + codec + client_name length
    * (2) + client_name + build length (2) + build */
   if (!append_string(hello, client->token.data(), client->token.size()) ||
-      !append_string(hello, "h264") ||
+      !append_string(hello, hello_codec) ||
       !append_string(hello, "obs-vtremoted") ||
-      !append_string(hello, "1.0.0")) {
+      !append_string(hello, OBS_PLUGIN_VERSION)) {
     vtremoted_client_disconnect(client);
     return false;
   }
 
-  log_err("Sending HELLO");
+  vtr_log_debug("Sending HELLO");
   if (!send_msg(client->sock, VTR_MSG_HELLO, hello.data(),
                 (uint32_t)hello.size())) {
-    log_err("Send HELLO failed");
+    vtr_log("Send HELLO failed");
     vtremoted_client_disconnect(client);
     return false;
   }
@@ -413,12 +434,12 @@ bool vtremoted_client_connect(VTRemotedClient *client, const char *host,
   /* Receive HELLO_ACK */
   struct vtr_header hdr;
   if (!recv_header(client->sock, &hdr)) {
-    log_err("Recv HELLO_ACK header failed");
+    vtr_log("Recv HELLO_ACK header failed");
     vtremoted_client_disconnect(client);
     return false;
   }
   if (hdr.type != VTR_MSG_HELLO_ACK) {
-    log_err("Expected HELLO_ACK (2), got %d", hdr.type);
+    vtr_log("Expected HELLO_ACK (2), got %d", hdr.type);
     vtremoted_client_disconnect(client);
     return false;
   }
@@ -426,23 +447,23 @@ bool vtremoted_client_connect(VTRemotedClient *client, const char *host,
     vtremoted_client_disconnect(client);
     return false;
   }
-  log_err("Received HELLO_ACK header, len=%d", hdr.length);
+  vtr_log_debug("Received HELLO_ACK header, len=%d", hdr.length);
 
   std::vector<uint8_t> ack_body(hdr.length);
   if (hdr.length > 0 && read_exact(client->sock, ack_body.data(), hdr.length)) {
-    log_err("Recv HELLO_ACK body failed");
+    vtr_log("Recv HELLO_ACK body failed");
     vtremoted_client_disconnect(client);
     return false;
   }
 
   /* Check status */
   if (ack_body.size() < 1 || ack_body[0] != VTR_STATUS_OK) {
-    log_err("HELLO_ACK status error: %d",
+    vtr_log("HELLO_ACK status error: %d",
             ack_body.size() > 0 ? ack_body[0] : -1);
     vtremoted_client_disconnect(client);
     return false;
   }
-  log_err("Connected successfully");
+  vtr_log_debug("Connected successfully");
 
   return true;
 }
@@ -470,7 +491,7 @@ bool vtremoted_client_configure(VTRemotedClient *client, uint32_t width,
   if (!client || !client->connected)
     return false;
   if (!is_supported_wire_compression(wire_compression)) {
-    log_err("Unsupported wire compression mode=%d", wire_compression);
+    vtr_log("Unsupported wire compression mode=%d", wire_compression);
     return false;
   }
 
@@ -529,51 +550,51 @@ bool vtremoted_client_configure(VTRemotedClient *client, uint32_t width,
   cfg.push_back(0);
   cfg.push_back(0);
 
-  log_err("Sending CONFIGURE, len=%u", (uint32_t)cfg.size());
+  vtr_log_debug("Sending CONFIGURE, len=%u", (uint32_t)cfg.size());
   if (!send_msg(client->sock, VTR_MSG_CONFIGURE, cfg.data(),
                 (uint32_t)cfg.size())) {
-    log_err("Send CONFIGURE failed");
+    vtr_log("Send CONFIGURE failed");
     return false;
   }
 
   /* Receive CONFIGURE_ACK */
   struct vtr_header hdr;
-  log_err("Waiting for CONFIGURE_ACK");
+  vtr_log("Waiting for CONFIGURE_ACK");
   if (!recv_header(client->sock, &hdr)) {
-    log_err("Recv CONFIGURE_ACK header failed");
+    vtr_log("Recv CONFIGURE_ACK header failed");
     return false;
   }
   if (hdr.type != VTR_MSG_CONFIGURE_ACK) {
-    log_err("Expected CONFIGURE_ACK (4), got %d", hdr.type);
+    vtr_log("Expected CONFIGURE_ACK (4), got %d", hdr.type);
     return false;
   }
   if (!validate_inbound_length(hdr.type, hdr.length, CONFIGURE_ACK_MAX_BYTES)) {
     vtremoted_client_disconnect(client);
     return false;
   }
-  log_err("Received CONFIGURE_ACK, len=%d", hdr.length);
+  vtr_log("Received CONFIGURE_ACK, len=%d", hdr.length);
 
   std::vector<uint8_t> ack_body(hdr.length);
   if (hdr.length > 0 && read_exact(client->sock, ack_body.data(), hdr.length)) {
-    log_err("Recv CONFIGURE_ACK body failed");
+    vtr_log("Recv CONFIGURE_ACK body failed");
     return false;
   }
 
   if (ack_body.size() < 4) {
-    log_err("CONFIGURE_ACK too short: %zu", ack_body.size());
+    vtr_log("CONFIGURE_ACK too short: %zu", ack_body.size());
     return false;
   }
 
   const uint8_t status = ack_body[0];
   if (status != VTR_STATUS_OK) {
-    log_err("CONFIGURE_ACK status error: %u", status);
+    vtr_log("CONFIGURE_ACK status error: %u", status);
     return false;
   }
 
   const uint16_t extradata_len = (uint16_t(ack_body[1]) << 8) | ack_body[2];
   const size_t expected_min = size_t(3) + extradata_len + 2; // +pixel_format +warnings
   if (ack_body.size() < expected_min) {
-    log_err("CONFIGURE_ACK malformed: extradata_len=%u body_len=%zu",
+    vtr_log("CONFIGURE_ACK malformed: extradata_len=%u body_len=%zu",
             extradata_len, ack_body.size());
     return false;
   }
@@ -623,7 +644,7 @@ bool vtremoted_client_send_frame(VTRemotedClient *client, int64_t pts,
 
     if (!compress_plane_payload(planes[i], sizes[i], client->wire_compression,
                                 client->compress_buf, payload, payload_size)) {
-      log_err("Failed to compress plane=%d mode=%s", i,
+      vtr_log("Failed to compress plane=%d mode=%s", i,
               wire_compression_name(client->wire_compression));
       return false;
     }
@@ -677,7 +698,7 @@ bool vtremoted_client_receive_packet(VTRemotedClient *client,
     return false;
 
   if (buf.size() < 32) {
-    log_err("Packet message too short: len=%zu min=32", buf.size());
+    vtr_log("Packet message too short: len=%zu min=32", buf.size());
     return false;
   }
 
@@ -689,7 +710,7 @@ bool vtremoted_client_receive_packet(VTRemotedClient *client,
 
   size_t data_offset = 32;
   if (buf.size() < data_offset + data_len) {
-    log_err("Packet message data length exceeds payload: len=%zu data_len=%u",
+    vtr_log("Packet message data length exceeds payload: len=%zu data_len=%u",
             buf.size(), data_len);
     return false;
   }
