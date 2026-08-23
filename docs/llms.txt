@@ -4,7 +4,7 @@ permalink: /llms.txt
 ---
 # VideoToolbox Remote (`videotoolbox_remote`) Briefing
 
-**Version**: v0.7.13
+**Version**: v0.7.14
 **License**: LGPL v2.1+
 **Goal**: Offload FFmpeg H.264/HEVC encoding/decoding to a remote macOS 13+ machine, including macOS 27, over LAN.
 
