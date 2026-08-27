@@ -6804,11 +6804,13 @@ static int mov_flush_fragment(AVFormatContext *s, int force)
             return 0;
         }
 
-        buf_size = avio_get_dyn_buf(mov->mdat_buf, &buf);
-        avio_wb32(s->pb, buf_size + 8);
-        ffio_wfourcc(s->pb, "mdat");
-        avio_write(s->pb, buf, buf_size);
-        ffio_reset_dyn_buf(mov->mdat_buf);
+        if (mov->mdat_buf) {
+            buf_size = avio_get_dyn_buf(mov->mdat_buf, &buf);
+            avio_wb32(s->pb, buf_size + 8);
+            ffio_wfourcc(s->pb, "mdat");
+            avio_write(s->pb, buf, buf_size);
+            ffio_reset_dyn_buf(mov->mdat_buf);
+        }
 
         if (mov->flags & FF_MOV_FLAG_GLOBAL_SIDX)
             mov->reserved_header_pos = avio_tell(s->pb);
@@ -8689,6 +8691,9 @@ static int mov_init(AVFormatContext *s)
             }
         } else if (st->codecpar->codec_type == AVMEDIA_TYPE_DATA) {
             track->timescale = st->time_base.den;
+            if (track->tag == MKTAG('t','m','c','d') &&
+                st->codecpar->extradata_size >= 8)
+                track->timecode_flags = AV_RB32(st->codecpar->extradata + 4);
         } else {
             track->timescale = mov->movie_timescale;
         }
@@ -9346,6 +9351,7 @@ static const AVCodecTag codec_mp4_tags[] = {
     { AV_CODEC_ID_VP9,             MKTAG('v', 'p', '0', '9') },
     { AV_CODEC_ID_AV1,             MKTAG('a', 'v', '0', '1') },
     { AV_CODEC_ID_AAC,             MKTAG('m', 'p', '4', 'a') },
+    { AV_CODEC_ID_APPLE_APAC,      MKTAG('a', 'p', 'a', 'c') },
     { AV_CODEC_ID_ALAC,            MKTAG('a', 'l', 'a', 'c') },
     { AV_CODEC_ID_MP4ALS,          MKTAG('m', 'p', '4', 'a') },
     { AV_CODEC_ID_MP3,             MKTAG('m', 'p', '4', 'a') },
