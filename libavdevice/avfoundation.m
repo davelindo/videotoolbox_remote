@@ -30,11 +30,12 @@
 #import <AVFoundation/AVFoundation.h>
 #if HAVE_IOKIT
 #   import <IOKit/IOKitLib.h>
-    /* kIOMainPortDefault is only available since macOS 12; fall back to the
-     * equivalent kIOMasterPortDefault when targeting older releases. */
-#   if defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && __MAC_OS_X_VERSION_MIN_REQUIRED >= 120000
+    /* kIOMainPortDefault is only available since macOS 12 or iOS 15; fall back
+     * to the equivalent kIOMasterPortDefault on macOS when targeting older
+     * releases. */
+#   if (TARGET_OS_OSX && __MAC_OS_X_VERSION_MIN_REQUIRED >= 120000) || (TARGET_OS_IPHONE && __IPHONE_OS_VERSION_MIN_REQUIRED >= 150000)
 #       define AVF_IO_MAIN_PORT_DEFAULT kIOMainPortDefault
-#   else
+#   elif TARGET_OS_OSX
 #       define AVF_IO_MAIN_PORT_DEFAULT kIOMasterPortDefault
 #   endif
 #endif
@@ -867,7 +868,7 @@ static NSArray* getDevicesWithMediaType(AVMediaType mediaType) {
 #endif
 }
 
-#if HAVE_IOKIT
+#if HAVE_IOKIT && defined(AVF_IO_MAIN_PORT_DEFAULT)
 static int avf_io_get_string(io_service_t service, CFStringRef key, char *buf, size_t size)
 {
     CFTypeRef ref = IORegistryEntryCreateCFProperty(service, key, kCFAllocatorDefault, 0);
@@ -885,9 +886,7 @@ static int avf_io_get_uint32(io_service_t service, CFStringRef key, uint32_t *ou
         CFRelease(ref);
     return ok;
 }
-#endif
 
-#if HAVE_IOKIT
 static int64_t avf_usb_location_for_serial(const char *serial)
 {
     int64_t location = -1;
@@ -911,14 +910,7 @@ static int64_t avf_usb_location_for_serial(const char *serial)
 
     return location;
 }
-#else
-static int64_t avf_usb_location_for_serial(const char *serial)
-{
-    return -1;
-}
-#endif
 
-#if HAVE_IOKIT
 static NSString *avf_usb_serial_for_location(uint32_t location)
 {
     NSString *serial = nil;
@@ -941,12 +933,6 @@ static NSString *avf_usb_serial_for_location(uint32_t location)
 
     return serial;
 }
-#else
-static NSString *avf_usb_serial_for_location(uint32_t location)
-{
-    return nil;
-}
-#endif
 
 // USB video uniqueID = locationID<<32 | VID<<16 | PID; match on the locationID.
 static AVCaptureDevice *avf_video_device_with_serial(const char *serial,
@@ -973,7 +959,6 @@ static AVCaptureDevice *avf_video_device_with_serial(const char *serial,
 }
 
 // CoreAudio USB-audio UID: AppleUSBAudioEngine:manufacturer:device:serial:interfaces
-#if HAVE_IOKIT
 static NSString *avf_audio_serial_for_uid(NSString *uid)
 {
     if (![uid hasPrefix:@"AppleUSBAudioEngine:"])
@@ -986,7 +971,18 @@ static NSString *avf_audio_serial_for_uid(NSString *uid)
         return serial;
     return nil;
 }
+
 #else
+
+static NSString *avf_usb_serial_for_location(uint32_t location)
+{
+    return nil;
+}
+static AVCaptureDevice *avf_video_device_with_serial(const char *serial,
+    NSArray *devices, NSArray *devices_muxed, int *is_muxed)
+{
+    return nil;
+}
 static NSString *avf_audio_serial_for_uid(NSString *uid)
 {
     return nil;
