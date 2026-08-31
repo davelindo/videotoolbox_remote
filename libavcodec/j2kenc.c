@@ -176,6 +176,8 @@ static void j2k_flush(Jpeg2000EncoderContext *s)
 {
     if (s->bit_index){
         s->bit_index = 0;
+        if (*s->buf == 0xff)
+            *(++s->buf) = 0;
         s->buf++;
     }
 }
@@ -719,15 +721,16 @@ static int encode_packet(Jpeg2000EncoderContext *s, Jpeg2000ResLevel *rlevel, in
 {
     int bandno, empty = 1;
     int i;
-    // init bitstream
-    *s->buf = 0;
-    s->bit_index = 0;
-
     if (s->sop) {
         bytestream_put_be16(&s->buf, JPEG2000_SOP);
         bytestream_put_be16(&s->buf, 4);
         bytestream_put_be16(&s->buf, packetno);
     }
+
+    // init bitstream
+    *s->buf = 0;
+    s->bit_index = 0;
+
     // header
 
     if (!layno) {
@@ -779,6 +782,9 @@ static int encode_packet(Jpeg2000EncoderContext *s, Jpeg2000ResLevel *rlevel, in
                 break;
         }
     }
+
+    if (s->buf_end - s->buf < 3)
+        return -1;
 
     put_bits(s, !empty, 1);
     if (empty){
@@ -841,6 +847,10 @@ static int encode_packet(Jpeg2000EncoderContext *s, Jpeg2000ResLevel *rlevel, in
             }
         }
     }
+
+    if (s->buf_end - s->buf < 2 + 2 * s->eph)
+        return -1;
+
     j2k_flush(s);
     if (s->eph) {
         bytestream_put_be16(&s->buf, JPEG2000_EPH);
