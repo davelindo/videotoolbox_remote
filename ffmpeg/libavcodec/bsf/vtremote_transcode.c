@@ -39,7 +39,7 @@
 #include "libavutil/pixdesc.h"
 #include "libavutil/rational.h"
 #include "libavutil/time.h"
-#include "vtremote_proto.h"
+#include "../vtremote_proto.h"
 
 #if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
 #define VTR_CLOSE_SOCKET closesocket
@@ -60,7 +60,7 @@ static void vtremote_net_close(void) {}
 static int vtremote_sock_errno(void) { return errno; }
 #endif
 
-#include "vtremote_sock.h"
+#include "../vtremote_sock.h"
 
 #ifndef MSG_DONTWAIT
 #define MSG_DONTWAIT 0

@@ -15,9 +15,10 @@ The non-version `nightly` tag is intentionally excluded.
   including Main 10/P010, CBR/VBR/CQP rate control, LZ4/Zstandard/automatic
   wire compression, an experimental static C SDK, release packaging, and stock
   FFmpeg integration tests.
-- Added a Plex image that converts Plex's recognized VA-API pipeline to
-  software decode/scale plus VTRemote encode, with unclaimed-server and claimed
-  playback tests.
+- Added a Plex-specific FFmpeg 6 bitstream-filter shim and container image that
+  send compressed H.264 or HEVC packets to `vtremoted` for remote decode,
+  scale, and encode, with unclaimed-server and claimed playback tests. The
+  Plex path does not require a Linux GPU or render node.
 
 ### Fixed
 

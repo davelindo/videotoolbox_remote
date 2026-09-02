@@ -1,72 +1,71 @@
-# Plex playback-transcode integration
+# Plex remote video-transcode integration
 
-The supported Plex path is software decode and scale followed by one VA-API
-upload and remote H.264 or HEVC encoding. The image installs a narrow wrapper
-in front of Plex Transcoder. It recognizes Plex's standard VA-API scale graph,
-removes input hardware decode, changes `scale_vaapi` to software scale, and
-selects the VTRemote driver only for the final encoder. Unrecognized graphs
-pass through unchanged to Plex's native Transcoder and driver environment.
+The supported Plex path sends compressed H.264 or HEVC packets to
+`vtremoted`. The Mac performs video decode, resize, and H.264/HEVC encode;
+Plex on Linux retains demuxing, audio/subtitle processing, and muxing. Decoded
+frames do not cross the network, and the Linux host needs no GPU or DRM render
+node.
 
-This path does not require Intel decode hardware. It still requires a DRM
-render node as the libva device identity. It does not claim remote decode,
-deinterlace, tone mapping, OpenCL interop, or DMA-BUF import/export.
+The image installs a narrow wrapper in front of Plex Transcoder. It recognizes
+Plex's ordinary VA-API upload/scale graph and replaces the complete video chain
+with the `vtremote_transcode` packet filter. Unknown codecs, multiple hardware
+graphs, tone mapping, deinterlace, and other unrecognized graphs pass through
+unchanged to Plex's native Transcoder. A native fallback can use only devices
+that you separately expose to the container.
 
-The example pins an amd64 official `pms-docker` bootstrap image digest. Like
-the upstream `beta` image, its init script downloads the configured Plex Media
-Server version when the container starts. Build it from the driver directory:
+The image pins an amd64 official `pms-docker` bootstrap digest. Like the
+upstream `beta` image, its init script downloads the configured Plex Media
+Server version when the container starts. Build from the repository root:
 
 ```bash
-docker build -f docker/Dockerfile.plex \
-  --build-arg VTREMOTE_VERSION="$(git -C .. describe --tags --always)" \
+docker build -f vaapi-driver/docker/Dockerfile.plex \
+  --build-arg VTREMOTE_VERSION="$(git describe --tags --always)" \
   -t plex-vtremote .
 ```
 
-The Linux host must provide a render node. With no physical GPU, load vgem on
-the host and pass its render node into the container:
-
-```bash
-sudo modprobe vgem
-ls -l /dev/dri/renderD*
-```
-
 Use `docker/docker-compose.plex.yml.example` as a merge fragment. Set
-`VTREMOTE_HOST`, `RENDER_DEVICE`, and `RENDER_GID`; set `PLEX_CLAIM` or reuse an
-existing Plex configuration as required by the official image. The isolated
-`iHD` alias is provided because Plex can explicitly request that driver name.
-It does not replace a host Intel driver.
+`VTREMOTE_HOST` and optionally `VTREMOTE_TOKEN`; set `PLEX_CLAIM` or reuse an
+existing Plex configuration as required by the official image. Do not add a
+render device for the remote path.
 
-First validate the exact Plex Transcoder and libva stack without claiming the
-server. This test supplies raw frames to Plex's bundled Transcoder, encodes
-H.264, HEVC Main, and HEVC Main 10 through VA-API, and requires no Plex token,
-library, downloaded codec modules, or Plex Pass entitlement:
+The integration builds its injected filter against official FFmpeg 6.1
+headers. At runtime it verifies the libavcodec major before accessing the
+private BSF context layout. This is deliberately tied to Plex's current FFmpeg
+6 family and fails closed after an incompatible Plex upgrade.
+
+## Unclaimed-server validation
+
+First validate the bundled Plex Transcoder without claiming a server. The
+script creates a short H.264 source, submits a Plex-shaped hardware graph,
+then requires 24 decoded H.264 frames at the remotely requested dimensions:
 
 ```bash
 PLEX_CONTAINER=plex \
-RENDER_DEVICE=/dev/dri/renderD128 \
-  ./scripts/plex-transcoder-vaapi-smoke.sh
+  ./vaapi-driver/scripts/plex-transcoder-remote-smoke.sh
 ```
 
-This is the primary deterministic Plex compatibility smoke test. It validates
-the bundled Plex Transcoder, its libva integration, the render node, the
-VTRemote driver, the network transport, and the remote VideoToolbox encoder.
+This validates the actual Plex binary, injected filter, network protocol, Mac
+decoder/scaler/encoder, and returned bitstream. It requires host `ffmpeg` and
+`ffprobe`, but no Plex token, library, or Plex Pass entitlement.
 
-As a separate product-policy acceptance test, enable hardware acceleration and
-hardware encoding in a claimed Plex Pass server. Plex requests its usual full
-VA-API pipeline; the wrapper converts a recognized graph to software
-decode/scale plus VTRemote encode. `scripts/plex-playback-smoke.sh` first asks
-Plex for a playback decision, downloads an HLS segment, decodes it with
-`ffprobe`, and requires a new wrapper audit entry from the container.
+## Claimed-server playback validation
+
+Enable hardware acceleration and hardware encoding in a claimed Plex Pass
+server, then exercise a real playback decision and HLS request:
 
 ```bash
 PLEX_URL=http://127.0.0.1:32400 \
 PLEX_TOKEN=... \
 PLEX_RATING_KEY=12345 \
 PLEX_CONTAINER=plex \
-  ./scripts/plex-playback-smoke.sh
+  ./vaapi-driver/scripts/plex-playback-smoke.sh
 ```
 
-Use an SDR item for H.264 playback validation and a 10-bit item when validating
-HEVC Main 10. The claimed-server test proves PMS selected the wrapper and
-produced decodable media during a real playback request. The unclaimed-server
-test proves the underlying Plex Transcoder/VA-API integration independently of
-account policy.
+Use an SDR H.264 or HEVC item whose transcode needs only resize and encode.
+The script downloads one HLS segment, verifies decodable frames, requires a
+new successful-handshake audit marker, and stops only its own session.
+
+A marker in `VTREMOTE_PLEX_AUDIT_FILE` proves that remote decode/scale/encode
+started; its absence means Plex used a native or unsupported path. A valid
+segment plus a new marker proves media returned through the remote path. Check
+Linux process CPU and `vtremoted` logs separately when validating performance.

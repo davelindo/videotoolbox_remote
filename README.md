@@ -153,7 +153,9 @@ The standard build enables VMAF, SSIM/PSNR, and common codec libraries, includin
 
 For stock VA-API applications, install `vtremote-vaapi-linux-x86_64.tar.gz`
 or run `make test-vaapi-driver`. The driver supports H.264 and HEVC encode,
-including Main 10/P010, with software decode and filtering. See the
+including Main 10/P010, with application-side decode and filtering. The Plex
+container uses a separate compressed-packet path so `vtremoted` performs the
+complete video decode, scale, and encode pipeline without a Linux GPU. See the
 [VA-API and Plex guide](docs/vaapi-driver.md).
 
 If a Linux source build fails in FFmpeg x86 assembly after installing current `nasm` and `yasm`, use the diagnostic fallback:

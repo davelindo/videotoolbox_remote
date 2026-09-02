@@ -117,9 +117,17 @@ export LIBVA_DRIVER_NAME=vtremote
 /opt/vtremote-vaapi/bin/vtremote-probe --host "$VTREMOTE_HOST" --codec h264
 ```
 
-With no physical GPU, load `vgem` on the Linux host and grant the application
-access to its `/dev/dri/renderD*` node. For Plex, do not copy the iHD alias into
-the system DRI directory; keep it in the isolated VTRemote path.
+With no physical GPU, stock VA-API applications can use a `vgem` render node.
+The Plex packet-transcode image does not use libva and needs no render node.
+
+### Plex transcode still uses substantial Linux CPU
+
+Confirm that the input is H.264 or HEVC and that Plex emitted the supported
+VA-API upload/scale graph. A successful remote handshake appends
+`remote-decode-scale-encode` to `VTREMOTE_PLEX_AUDIT_FILE`. If the marker does
+not appear, the wrapper deliberately passed the command through unchanged.
+Tone mapping, deinterlace, subtitle burn-in, unsupported graphs, audio
+transcoding, and container I/O can still consume Linux CPU.
 
 ### Slow HEVC 10-bit Encoding
 **Context**: 10-bit HEVC is compute-intensive. Expect ~200 fps at 1080p and ~60 fps at 4K on Apple Silicon (loopback). Over a real network, throughput depends on bandwidth and latency.

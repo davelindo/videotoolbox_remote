@@ -6,6 +6,8 @@ FROM --platform=${VTREMOTE_BUILD_PLATFORM} ubuntu:20.04 AS vtremote-builder
 ARG VTREMOTE_VERSION=dev
 ARG LIBVA_VERSION=2.22.0
 ARG LIBVA_SHA256=467c418c2640a178c6baad5be2e00d569842123763b80507721ab87eb7af8735
+ARG PLEX_FFMPEG_VERSION=6.1.1
+ARG PLEX_FFMPEG_SHA256=8684f4b00f94b85461884c3719382f1261f0d9eb3d59640a1f4ac0873616f968
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive \
     apt-get install -y --no-install-recommends \
         build-essential cmake pkg-config python3 curl ca-certificates \
@@ -21,12 +23,21 @@ RUN curl -fL --retry 3 -o /tmp/libva.tar.gz \
         -Dwith_x11=yes -Dwith_glx=no -Dwith_wayland=no -Denable_docs=false \
     && ninja -C /tmp/libva-build install \
     && rm -rf /tmp/libva-build "/tmp/libva-${LIBVA_VERSION}" /tmp/libva.tar.gz
+RUN curl -fL --retry 3 -o /tmp/ffmpeg.tar.xz \
+        "https://ffmpeg.org/releases/ffmpeg-${PLEX_FFMPEG_VERSION}.tar.xz" \
+    && echo "${PLEX_FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c - \
+    && tar -xJf /tmp/ffmpeg.tar.xz -C /tmp \
+    && cd "/tmp/ffmpeg-${PLEX_FFMPEG_VERSION}" \
+    && ./configure --disable-everything --disable-x86asm --disable-doc \
+    && make libavutil/ffversion.h \
+    && rm /tmp/ffmpeg.tar.xz
 WORKDIR /src
 COPY . .
-RUN PKG_CONFIG_PATH=/usr/local/lib/pkgconfig cmake -S . -B build \
+RUN PKG_CONFIG_PATH=/usr/local/lib/pkgconfig cmake -S vaapi-driver -B build \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/opt/vtremote-vaapi \
         -DVTREMOTE_VERSION="${VTREMOTE_VERSION}" \
+        -DVTREMOTE_PLEX_FFMPEG_SOURCE_DIR="/tmp/ffmpeg-${PLEX_FFMPEG_VERSION}" \
         -DBUILD_TESTING=OFF \
         -DVTREMOTE_INSTALL_VGEM_ALIAS=ON \
         -DVTREMOTE_INSTALL_IHD_ALIAS=OFF \
@@ -38,11 +49,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         liblz4-1 libzstd1 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=vtremote-builder /opt/vtremote-vaapi /opt/vtremote-vaapi
-COPY docker/55-vtremote-plex-transcoder /etc/cont-init.d/55-vtremote-plex-transcoder
+COPY vaapi-driver/docker/55-vtremote-plex-transcoder /etc/cont-init.d/55-vtremote-plex-transcoder
 RUN chmod 0755 /etc/cont-init.d/55-vtremote-plex-transcoder
-ENV VTREMOTE_PLEX_SOFTWARE_PIPELINE=1 \
-    VTREMOTE_PLEX_DRIVERS_PATH=/opt/vtremote-vaapi/lib/dri \
-    VTREMOTE_PLEX_RENDER_DEVICE=/dev/dri/renderD128 \
+ENV VTREMOTE_PLEX_REMOTE_TRANSCODE=1 \
+    VTREMOTE_PLEX_BSF_LIBRARY=/opt/vtremote-vaapi/lib/vtremote-plex-bsf.so \
     VTREMOTE_PLEX_AUDIT_FILE=/dev/shm/plex/vtremote-plex-wrapper.log \
-    VTREMOTE_TIMEOUT_MS=10000 \
-    VTREMOTE_WIRE_COMPRESSION=auto
+    VTREMOTE_TIMEOUT_MS=10000

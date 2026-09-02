@@ -5,6 +5,12 @@ set -eu
 wrapper=/opt/vtremote-vaapi/bin/vtremote-plex-transcoder
 target='/usr/lib/plexmediaserver/Plex Transcoder'
 real='/usr/lib/plexmediaserver/Plex Transcoder.real'
+audit=${VTREMOTE_PLEX_AUDIT_FILE:-/dev/shm/plex/vtremote-plex-wrapper.log}
+audit_dir=${audit%/*}
+
+if [ "$audit_dir" != "$audit" ]; then
+    install -d -o plex -g plex -m 0755 "$audit_dir"
+fi
 
 if cmp -s "$wrapper" "$target"; then
     exit 0

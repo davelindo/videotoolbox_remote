@@ -20,3 +20,16 @@ connection.
 The module does not link to libva itself: libva loads it. It links to pthread,
 LZ4, Zstandard, and the C runtime. The separately installed experimental static
 client SDK exposes the protocol transport without VA-API.
+
+## Plex packet-transcode path
+
+The Plex container does not use the VA-API module. A narrow argument wrapper
+recognizes Plex's H.264/HEVC VA-API upload-and-scale graph, removes that local
+video pipeline, and attaches the `vtremote_transcode` bitstream filter to the
+compressed input stream. An injected FFmpeg 6 shim registers the filter inside
+Plex's bundled Transcoder. `vtremoted` then decodes, scales, and encodes video;
+Plex retains demuxing, audio/subtitle work, and output muxing.
+
+The shim checks the runtime libavcodec major before touching FFmpeg's private
+BSF context. Unsupported codecs or graphs bypass the rewrite, and the shim is
+not preloaded. A successful remote handshake writes one audit marker.

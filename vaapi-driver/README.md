@@ -2,9 +2,10 @@
 
 This Linux VA-API encode driver sends raw NV12 or P010 frames to `vtremoted`
 on macOS and returns the H.264 or HEVC access units produced by VideoToolbox.
-It is intended for applications such as Plex that already know how to use a
-VA-API encoder. The supplied Plex image uses software decode and scaling, so
-the render node is only a libva identity; it does not require Intel decode.
+It is intended for applications that already know how to use a VA-API encoder.
+The supplied Plex image uses a separate packet-filter integration: it sends
+compressed video to `vtremoted` for decode, scale, and encode, and therefore
+does not require a Linux GPU or render node.
 
 Supported profiles are H.264 Constrained Baseline, Main, and High, plus HEVC
 Main and Main 10. Decode, VA-API video processing, B-frames, and external
@@ -86,6 +87,6 @@ The release bundle includes `libvtremote_client.a`, public headers, and
 `vtremote-client.pc`. This client API is experimental and can change between
 repository releases; the wire protocol remains the published v1 contract.
 
-See [Plex integration](docs/PLEX.md), including its unclaimed-server
-Plex Transcoder smoke test, and
+See [Plex integration](docs/PLEX.md), including its unclaimed-server compressed
+packet smoke test, and
 [architecture](docs/ARCHITECTURE.md) for operational details.

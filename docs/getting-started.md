@@ -133,9 +133,10 @@ This runs a mock-backed smoke test for connect/configure/frame/packet flow.
 
 The Linux x86_64 release includes an encode-only VA-API driver for stock
 applications. It accepts software-uploaded NV12/P010 surfaces and supports
-H.264, HEVC Main, and HEVC Main 10. Install the matching release asset and read
-the [VA-API driver guide](vaapi-driver.md) before enabling it in Plex. A vgem
-render node can be used when the Linux host has no physical GPU.
+H.264, HEVC Main, and HEVC Main 10. The supplied Plex image instead sends
+compressed video packets to the Mac for decode, scale, and encode, so it does
+not require a Linux render node. Read the [VA-API and Plex guide](vaapi-driver.md)
+before deployment.
 
 ## Important Notes
 

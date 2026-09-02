@@ -16,6 +16,8 @@ option(VTREMOTE_INSTALL_IHD_ALIAS
     "Install isolated iHD_drv_video.so compatibility symlink" OFF)
 option(VTREMOTE_WARNINGS_AS_ERRORS "Treat driver warnings as build errors" OFF)
 option(VTREMOTE_ENABLE_STOCK_FFMPEG_TEST "Run stock FFmpeg VA-API E2E tests" ON)
+set(VTREMOTE_PLEX_FFMPEG_SOURCE_DIR "" CACHE PATH
+    "Configured FFmpeg 6.1 source tree used to build the Plex BSF shim")
 
 set(VTREMOTE_WARNING_FLAGS -Wall -Wextra -Wpedantic)
 if(VTREMOTE_WARNINGS_AS_ERRORS)
@@ -50,6 +52,35 @@ target_compile_options(vtremote-probe PRIVATE ${VTREMOTE_WARNING_FLAGS})
 
 add_executable(vtremote-plex-transcoder tools/plex-transcoder-wrapper.c)
 target_compile_options(vtremote-plex-transcoder PRIVATE ${VTREMOTE_WARNING_FLAGS})
+
+if(VTREMOTE_PLEX_FFMPEG_SOURCE_DIR)
+    if(NOT EXISTS "${VTREMOTE_PLEX_FFMPEG_SOURCE_DIR}/libavutil/avconfig.h")
+        message(FATAL_ERROR
+            "VTREMOTE_PLEX_FFMPEG_SOURCE_DIR must be an FFmpeg 6.1 tree after configure")
+    endif()
+    add_library(vtremote_plex_bsf SHARED
+        tools/plex-vtremote-bsf.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../ffmpeg/libavcodec/bsf/vtremote_transcode.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../ffmpeg/libavcodec/vtremote_proto.c
+    )
+    target_include_directories(vtremote_plex_bsf SYSTEM PRIVATE
+        ${VTREMOTE_PLEX_FFMPEG_SOURCE_DIR}
+        ${VTREMOTE_PLEX_FFMPEG_SOURCE_DIR}/libavcodec
+    )
+    target_link_libraries(vtremote_plex_bsf PRIVATE
+        ${CMAKE_DL_LIBS}
+        Threads::Threads
+    )
+    target_compile_definitions(vtremote_plex_bsf PRIVATE _POSIX_C_SOURCE=200809L)
+    target_compile_options(vtremote_plex_bsf PRIVATE
+        ${VTREMOTE_WARNING_FLAGS}
+        -Wno-missing-field-initializers
+    )
+    set_target_properties(vtremote_plex_bsf PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "vtremote-plex-bsf"
+    )
+endif()
 
 add_library(vtremote_drv_video MODULE src/va_driver.c)
 target_include_directories(vtremote_drv_video PRIVATE
@@ -121,6 +152,11 @@ install(TARGETS vtremote-probe
 install(TARGETS vtremote-plex-transcoder
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+if(TARGET vtremote_plex_bsf)
+    install(TARGETS vtremote_plex_bsf
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    )
+endif()
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 configure_file(cmake/vtremote-client.pc.in vtremote-client.pc @ONLY)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/vtremote-client.pc
