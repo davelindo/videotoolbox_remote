@@ -579,6 +579,15 @@ int main(int argc, char *argv[])
 
     if (test_mode) {
         for (input_index = 0; input_index < output_index; ++input_index) {
+            if (rewritten_argv[input_index] == NULL) {
+                fprintf(stderr,
+                        "vtremote Plex wrapper: internal argument rewrite error\n");
+                free_remote_graph(&graph);
+                free(filter_argument);
+                free(bsf_option);
+                free(rewritten_argv);
+                return 70;
+            }
             puts(rewritten_argv[input_index]);
         }
         if (transformed) {
