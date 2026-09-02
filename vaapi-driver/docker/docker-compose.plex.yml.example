@@ -1,0 +1,19 @@
+services:
+  plex:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.plex
+      args:
+        VTREMOTE_VERSION: "${VTREMOTE_VERSION:-dev}"
+    devices:
+      - "${RENDER_DEVICE:-/dev/dri/renderD128}:${RENDER_DEVICE:-/dev/dri/renderD128}"
+    group_add:
+      - "${RENDER_GID}"
+    environment:
+      LIBVA_DRIVERS_PATH: /opt/vtremote-vaapi/lib/dri
+      LIBVA_DRIVER_NAME: "${LIBVA_DRIVER_NAME:-iHD}"
+      VTREMOTE_HOST: "${VTREMOTE_HOST:?set VTREMOTE_HOST to the Mac daemon endpoint}"
+      VTREMOTE_TOKEN: "${VTREMOTE_TOKEN:-}"
+      VTREMOTE_TIMEOUT_MS: "${VTREMOTE_TIMEOUT_MS:-10000}"
+      VTREMOTE_WIRE_COMPRESSION: "${VTREMOTE_WIRE_COMPRESSION:-auto}"
+      VTREMOTE_LOG: "${VTREMOTE_LOG:-1}"

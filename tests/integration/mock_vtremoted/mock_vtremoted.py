@@ -13,6 +13,7 @@ no extra Python packages are required.
 import argparse
 import ctypes
 import ctypes.util
+import pathlib
 import socket
 import struct
 import sys
@@ -217,6 +218,10 @@ def write_configured_filled_msg(
     )
 
 
+def make_error(code: int, message: str) -> bytes:
+    return struct.pack(">I", code) + write_str(message)
+
+
 def read_u16(buf: memoryview, offset: int) -> Tuple[int, int]:
     return struct.unpack_from(">H", buf, offset)[0], offset + 2
 
@@ -404,7 +409,7 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
 
             msg_type, length = read_header(conn)
             if msg_type != MSG_HELLO:
-                write_msg(conn, MSG_ERROR, b"\x00\x00\x00\x03bad first msg")
+                write_msg(conn, MSG_ERROR, make_error(3, "bad first msg"))
                 return
             payload = memoryview(read_exact(conn, length))
             token, off = read_str(payload, 0)
@@ -466,7 +471,7 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                         write_msg(
                             conn,
                             MSG_ERROR,
-                            b"\x00\x00\x00\x03" + f"missing capability {required_cap}".encode("utf-8"),
+                            make_error(3, f"missing capability {required_cap}"),
                         )
                         return
 
@@ -612,11 +617,11 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                     write_msg(conn, MSG_DONE)
                     return
 
-                write_msg(conn, MSG_ERROR, b"\x00\x00\x00\x07unknown msg")
+                write_msg(conn, MSG_ERROR, make_error(7, "unknown msg"))
                 return
         except Exception as exc:  # pragma: no cover - best-effort mock
             try:
-                write_msg(conn, MSG_ERROR, b"\x00\x00\x00\x05" + str(exc).encode("utf-8"))
+                write_msg(conn, MSG_ERROR, make_error(5, str(exc)))
             except Exception:
                 pass
 
@@ -625,7 +630,11 @@ def serve(listen: str, token: str, args: argparse.Namespace) -> None:
     host, port_str = listen.rsplit(":", 1)
     port = int(port_str)
     with socket.create_server((host, port), reuse_port=False) as srv:
-        print(f"mock_vtremoted listening on {listen}", file=sys.stderr)
+        actual_host, actual_port = srv.getsockname()[:2]
+        endpoint = f"{actual_host}:{actual_port}"
+        if args.ready_file:
+            pathlib.Path(args.ready_file).write_text(endpoint, encoding="utf-8")
+        print(f"mock_vtremoted listening on {endpoint}", file=sys.stderr, flush=True)
         while True:
             conn, addr = srv.accept()
             print(f"connection from {addr}", file=sys.stderr)
@@ -639,6 +648,10 @@ def serve(listen: str, token: str, args: argparse.Namespace) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Mock vtremoted for protocol framing tests.")
     parser.add_argument("--listen", default="127.0.0.1:5555", help="host:port to bind (default: 127.0.0.1:5555)")
+    parser.add_argument(
+        "--ready-file",
+        help="Write the bound host:port after listening (supports --listen ...:0)",
+    )
     parser.add_argument("--token", default="", help="expected HELLO token (empty to disable)")
     parser.add_argument("--max-sessions", type=int, default=4, help="max_sessions reported in HELLO_ACK")
     parser.add_argument(

@@ -6,6 +6,8 @@ BINDIR ?= $(PREFIX)/bin
 
 FFMPEG_DIR := ffmpeg
 VTREMOTED_DIR := vtremoted
+VAAPI_DRIVER_DIR := vaapi-driver
+VTREMOTE_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || echo dev)
 
 ifeq ($(IS_DARWIN),Darwin)
 ifeq ($(origin CC),default)
@@ -63,10 +65,10 @@ GITHUB_REPO ?= davelindo/videotoolbox_remote
 # and Codex), sandbox-exec can fail with "Operation not permitted". Allow overriding to re-enable.
 SWIFT_BUILD_SANDBOX_FLAGS ?= --disable-sandbox
 
-.PHONY: build build-ffmpeg build-vtremoted install install-ffmpeg install-vtremoted install-vtremoted-restart verify-vtremoted-install clean clean-ffmpeg clean-vtremoted test-obs-plugin test-obs-plugin-integration sync-github-metadata release-notes release-notes-all
+.PHONY: build build-ffmpeg build-vtremoted build-vaapi-driver test-vaapi-driver package-vaapi-driver install install-ffmpeg install-vtremoted install-vaapi-driver install-vtremoted-restart verify-vtremoted-install clean clean-ffmpeg clean-vtremoted clean-vaapi-driver test-obs-plugin test-obs-plugin-integration sync-github-metadata release-notes release-notes-all
 .SILENT: build-ffmpeg
 
-build: build-ffmpeg build-vtremoted
+build: build-ffmpeg build-vtremoted $(if $(IS_DARWIN),,build-vaapi-driver)
 
 build-ffmpeg:
 	cd $(FFMPEG_DIR) && \
@@ -217,7 +219,29 @@ else
 	@echo "Skipping vtremoted build (not macOS)"
 endif
 
-install: install-ffmpeg install-vtremoted
+build-vaapi-driver:
+ifeq ($(IS_DARWIN),Darwin)
+	@echo "The VA-API driver release target is Linux-only" >&2
+	@exit 1
+else
+	@cmake -S $(VAAPI_DRIVER_DIR) -B $(VAAPI_DRIVER_DIR)/build \
+		-DCMAKE_BUILD_TYPE=Release -DVTREMOTE_VERSION="$(VTREMOTE_VERSION)" \
+		-DVTREMOTE_WARNINGS_AS_ERRORS=ON
+	@cmake --build $(VAAPI_DRIVER_DIR)/build --parallel $(JOBS)
+endif
+
+test-vaapi-driver: build-vaapi-driver
+	@cd $(VAAPI_DRIVER_DIR)/build && ctest --output-on-failure
+
+package-vaapi-driver:
+ifeq ($(IS_DARWIN),Darwin)
+	@echo "The VA-API driver release target is Linux x86_64-only" >&2
+	@exit 1
+else
+	@VERSION="$(VTREMOTE_VERSION)" $(VAAPI_DRIVER_DIR)/scripts/package.sh
+endif
+
+install: install-ffmpeg install-vtremoted $(if $(IS_DARWIN),,install-vaapi-driver)
 
 install-ffmpeg:
 	@install -d "$(BINDIR)"
@@ -234,6 +258,9 @@ ifeq ($(IS_DARWIN),Darwin)
 else
 	@echo "Skipping vtremoted install (not macOS)"
 endif
+
+install-vaapi-driver: test-vaapi-driver
+	@cmake --install $(VAAPI_DRIVER_DIR)/build --prefix /opt/vtremote-vaapi
 
 install-vtremoted-restart: build-vtremoted install-vtremoted verify-vtremoted-install
 
@@ -255,7 +282,7 @@ else
 	@echo "Skipping vtremoted verification (not macOS)"
 endif
 
-clean: clean-ffmpeg clean-vtremoted
+clean: clean-ffmpeg clean-vtremoted clean-vaapi-driver
 
 clean-ffmpeg:
 	@$(MAKE) -C $(FFMPEG_DIR) clean || true
@@ -266,6 +293,9 @@ ifeq ($(IS_DARWIN),Darwin)
 else
 	@echo "Skipping vtremoted clean (not macOS)"
 endif
+
+clean-vaapi-driver:
+	@cmake -E remove_directory $(VAAPI_DRIVER_DIR)/build
 
 test-obs-plugin:
 	@bash tests/integration/run_obs_plugin_client_mock.sh

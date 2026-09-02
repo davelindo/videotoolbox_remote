@@ -115,6 +115,8 @@ tar -xzf ffmpeg-linux-x86_64.tar.gz -C ffmpeg-client
 - \`ffmpeg-macos-arm64.tar.gz\`: FFmpeg client build for Apple Silicon Macs.
 - \`ffmpeg-macos-x86_64.tar.gz\`: FFmpeg client build for Intel Macs.
 - \`ffmpeg-windows-x86_64.tar.gz\`: FFmpeg client build for Windows.
+- \`vtremote-vaapi-linux-x86_64.tar.gz\`: encode-only VA-API driver and experimental static C SDK for Linux/Plex.
+- \`vtremote-vaapi-*-source.tar.gz\`: matching VA-API driver source bundle.
 - \`SHA256SUMS.txt\`: checksums for all release tarballs.
 
 ## Build and upgrade notes
@@ -123,6 +125,7 @@ tar -xzf ffmpeg-linux-x86_64.tar.gz -C ffmpeg-client
 - Linux FFmpeg artifacts are built for \`x86_64\`. If a source build fails in FFmpeg x86 assembly, first install current \`nasm\` and \`yasm\`; as a compatibility fallback, rebuild with \`make build-ffmpeg FFMPEG_DISABLE_X86ASM=1\`.
 - To verify a macOS server upgrade, run \`vtremoted --version\`, \`pgrep -fl vtremoted\`, and \`lsof -nP -iTCP:5555 -sTCP:LISTEN\` on the Mac.
 - Release tarballs are smoke-tested after packaging to confirm the vtremote FFmpeg encoders, decoders, and \`vtremote_transcode\` bitstream filter are present.
+- The VA-API artifact is tested through stock FFmpeg and an unclaimed-server Plex Transcoder smoke; claimed Plex Pass servers can additionally run the PMS playback-policy test.
 EOF
 
   if [[ "${tag}" == "nightly" ]]; then

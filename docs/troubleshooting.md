@@ -30,7 +30,7 @@ Common issues and their solutions.
     - Increase in-flight frames: `-vt_remote_inflight 32`
     - Or let it adapt: `-vt_remote_inflight auto`
     - Use Transcode mode (`-vt_remote_transcode`) to reduce network load.
-- **Compression**: Ensure wire compression is enabled. Default is **LZ4**. Override with `-vt_remote_wire_compression lz4|zstd|none`, or use `auto` to pick based on resolution/FPS.
+- **Compression**: Ensure wire compression is enabled. FFmpeg/OBS default to **LZ4**; the VA-API driver defaults to `auto`. Override FFmpeg with `-vt_remote_wire_compression lz4|zstd|none`, or use `auto` to pick based on resolution/FPS.
 
 ### High Latency
 **Symptom**: Delay in live streaming.
@@ -105,6 +105,21 @@ Common issues and their solutions.
    ```
 
 ## Encoding/Decoding
+
+### VA-API driver does not load
+
+Confirm that `VTREMOTE_HOST` is set, a render node is accessible to the process,
+and the isolated driver path is active:
+
+```bash
+export LIBVA_DRIVERS_PATH=/opt/vtremote-vaapi/lib/dri
+export LIBVA_DRIVER_NAME=vtremote
+/opt/vtremote-vaapi/bin/vtremote-probe --host "$VTREMOTE_HOST" --codec h264
+```
+
+With no physical GPU, load `vgem` on the Linux host and grant the application
+access to its `/dev/dri/renderD*` node. For Plex, do not copy the iHD alias into
+the system DRI directory; keep it in the isolated VTRemote path.
 
 ### Slow HEVC 10-bit Encoding
 **Context**: 10-bit HEVC is compute-intensive. Expect ~200 fps at 1080p and ~60 fps at 4K on Apple Silicon (loopback). Over a real network, throughput depends on bandwidth and latency.

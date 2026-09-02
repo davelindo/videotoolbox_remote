@@ -6,6 +6,7 @@ head_ref="${2:?usage: bash scripts/classify_nightly_changes.sh <base-ref> <head-
 
 ffmpeg=false
 vtremoted=false
+vaapi_driver=false
 obs_plugin=false
 docs=false
 ci=false
@@ -19,6 +20,10 @@ mark_ffmpeg_changed() {
 
 mark_vtremoted_changed() {
     vtremoted=true
+}
+
+mark_vaapi_driver_changed() {
+    vaapi_driver=true
 }
 
 mark_obs_plugin_changed() {
@@ -40,6 +45,7 @@ mark_publishable_changed() {
 mark_build_system_changed() {
     mark_ffmpeg_changed
     mark_vtremoted_changed
+    mark_vaapi_driver_changed
     mark_obs_plugin_changed
     mark_publishable_changed
 }
@@ -48,6 +54,7 @@ mark_bootstrap_change() {
     nightly_exists=false
     mark_ffmpeg_changed
     mark_vtremoted_changed
+    mark_vaapi_driver_changed
     mark_obs_plugin_changed
     mark_docs_changed
     mark_ci_changed
@@ -69,6 +76,10 @@ else
                 ;;
             vtremoted/*)
                 mark_vtremoted_changed
+                mark_publishable_changed
+                ;;
+            vaapi-driver/*)
+                mark_vaapi_driver_changed
                 mark_publishable_changed
                 ;;
             Makefile)
@@ -93,9 +104,14 @@ else
                 mark_ffmpeg_changed
                 mark_obs_plugin_changed
                 ;;
-            tests/integration/obs_plugin_test_stubs/*|tests/integration/mock_vtremoted/mock_vtremoted.py)
+            tests/integration/obs_plugin_test_stubs/*)
                 mark_ffmpeg_changed
                 mark_obs_plugin_changed
+                ;;
+            tests/integration/mock_vtremoted/mock_vtremoted.py)
+                mark_ffmpeg_changed
+                mark_obs_plugin_changed
+                mark_vaapi_driver_changed
                 ;;
             tests/integration/*)
                 mark_ffmpeg_changed
@@ -109,6 +125,7 @@ nightly_exists=${nightly_exists}
 nightly_commit=${nightly_commit}
 ffmpeg=${ffmpeg}
 vtremoted=${vtremoted}
+vaapi_driver=${vaapi_driver}
 obs_plugin=${obs_plugin}
 docs=${docs}
 ci=${ci}

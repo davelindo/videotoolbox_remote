@@ -58,6 +58,7 @@ jobs:
     outputs:
       ffmpeg: ${{ github.event_name == 'schedule' && steps.schedule_changes.outputs.ffmpeg || steps.filter.outputs.ffmpeg }}
       vtremoted: ${{ github.event_name == 'schedule' && steps.schedule_changes.outputs.vtremoted || steps.filter.outputs.vtremoted }}
+      vaapi_driver: ${{ github.event_name == 'schedule' && steps.schedule_changes.outputs.vaapi_driver || steps.filter.outputs.vaapi_driver }}
       obs_plugin: ${{ github.event_name == 'schedule' && steps.schedule_changes.outputs.obs_plugin || steps.filter.outputs.obs_plugin }}
       docs: ${{ github.event_name == 'schedule' && steps.schedule_changes.outputs.docs || steps.filter.outputs.docs }}
       ci: ${{ github.event_name == 'schedule' && steps.schedule_changes.outputs.ci || steps.filter.outputs.ci }}
@@ -126,6 +127,10 @@ jobs:
             vtremoted:
               - 'vtremoted/**'
               - 'Makefile'
+            vaapi_driver:
+              - 'vaapi-driver/**'
+              - 'tests/integration/mock_vtremoted/mock_vtremoted.py'
+              - 'Makefile'
             obs_plugin:
               - 'obs-plugin/**'
               - 'tests/integration/run_obs_plugin_client_mock.sh'
@@ -157,7 +162,7 @@ jobs:
             else
               echo "value=false" >> "$GITHUB_OUTPUT"
             fi
-          elif [ "${{ steps.filter.outputs.ffmpeg }}" = "true" ] || [ "${{ steps.filter.outputs.vtremoted }}" = "true" ]; then
+          elif [ "${{ steps.filter.outputs.ffmpeg }}" = "true" ] || [ "${{ steps.filter.outputs.vtremoted }}" = "true" ] || [ "${{ steps.filter.outputs.vaapi_driver }}" = "true" ]; then
             echo "value=true" >> "$GITHUB_OUTPUT"
           else
             echo "value=false" >> "$GITHUB_OUTPUT"
@@ -528,6 +533,87 @@ jobs:
             ffmpeg-${{ matrix.label }}.tar.gz
             ffmpeg-${{ matrix.label }}.tar.gz.sha256
 
+  vaapi-driver-linux:
+    name: VA-API driver (linux-x86_64)
+    needs: changes
+    if: needs.changes.outputs.release_candidate == 'true' || (github.event_name == 'schedule' && needs.changes.outputs.publishable == 'true') || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || needs.changes.outputs.semver_tag == 'true' || (github.event_name != 'schedule' && (needs.changes.outputs.vaapi_driver == 'true' || needs.changes.outputs.ci == 'true'))
+    runs-on: ubuntu-24.04
+    # Build release binaries before glibc's pthread merge so the package keeps
+    # its advertised GLIBC 2.17 ceiling. libva 2.22 is installed below because
+    # Ubuntu 20.04's packaged headers predate the required VA-API 1.22 ABI.
+    container: ubuntu:20.04
+    timeout-minutes: 15
+    steps:
+      - name: Install build and test dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential gcc-10 cmake pkg-config python3 ffmpeg git binutils curl \
+            meson ninja-build libdrm-dev libx11-dev libxext-dev libxfixes-dev \
+            libx11-xcb-dev libxcb1-dev libxcb-dri3-dev \
+            liblz4-dev libzstd-dev ca-certificates
+      - name: Install libva 2.22
+        run: |
+          curl -fL --retry 3 -o /tmp/libva.tar.gz \
+            https://github.com/intel/libva/archive/refs/tags/2.22.0.tar.gz
+          echo "467c418c2640a178c6baad5be2e00d569842123763b80507721ab87eb7af8735  /tmp/libva.tar.gz" \
+            | sha256sum -c -
+          tar -xzf /tmp/libva.tar.gz -C /tmp
+          meson setup /tmp/libva-build /tmp/libva-2.22.0 \
+            --prefix=/usr/local --libdir=lib \
+            -Dwith_x11=yes -Dwith_glx=no -Dwith_wayland=no -Denable_docs=false
+          ninja -C /tmp/libva-build install
+          ldconfig
+          echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Verify VA-API baseline
+        run: |
+          test "$(uname -m)" = x86_64
+          pkg-config --atleast-version=1.22 libva
+      - name: Build, test, and package
+        run: |
+          version="$(git describe --tags --always --dirty | sed 's/^v//')"
+          make test-vaapi-driver VTREMOTE_VERSION="$version"
+          cmake -S vaapi-driver -B vaapi-driver/build-analyzer \
+            -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=OFF \
+            -DVTREMOTE_WARNINGS_AS_ERRORS=ON -DCMAKE_C_COMPILER=gcc-10 \
+            -DCMAKE_C_FLAGS=-fanalyzer
+          cmake --build vaapi-driver/build-analyzer --parallel
+          cmake -S vaapi-driver -B vaapi-driver/build-sanitized \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DVTREMOTE_WARNINGS_AS_ERRORS=ON \
+            -DVTREMOTE_ENABLE_STOCK_FFMPEG_TEST=OFF \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build vaapi-driver/build-sanitized --parallel
+          (cd vaapi-driver/build-sanitized && \
+            ASAN_OPTIONS=detect_leaks=1 ctest --output-on-failure)
+          make package-vaapi-driver VTREMOTE_VERSION="$version"
+          VERSION="$version" vaapi-driver/scripts/package-source.sh
+      - name: Smoke packaged VA-API artifact
+        run: |
+          bash scripts/smoke_release_artifact.sh vaapi-driver \
+            vaapi-driver/dist/vtremote-vaapi-linux-x86_64.tar.gz
+          tar -tzf vaapi-driver/dist/vtremote-vaapi-*-source.tar.gz \
+            > vaapi-driver-source-contents.txt
+          grep -q '/src/va_driver.c$' vaapi-driver-source-contents.txt
+      - name: Upload VA-API artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: vtremote-vaapi-linux-x86_64
+          path: |
+            vaapi-driver/dist/vtremote-vaapi-linux-x86_64.tar.gz
+            vaapi-driver/dist/vtremote-vaapi-linux-x86_64.tar.gz.sha256
+            vaapi-driver/dist/vtremote-vaapi-*-source.tar.gz
+            vaapi-driver/dist/vtremote-vaapi-*-source.tar.gz.sha256
+
   obs-plugin:
     name: OBS plugin tests (Linux)
     needs: changes
@@ -591,7 +677,7 @@ jobs:
   publish-assets:
     name: Publish nightly / release assets
     runs-on: videotoolbox-remote-runner
-    needs: [changes, swift-macos-arm64, swift-macos-x86_64, ffmpeg-build-linux, ffmpeg-build]
+    needs: [changes, swift-macos-arm64, swift-macos-x86_64, ffmpeg-build-linux, ffmpeg-build, vaapi-driver-linux]
     if: github.event_name != 'pull_request' && ((github.event_name == 'schedule' && needs.changes.outputs.publishable == 'true') || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || needs.changes.outputs.semver_tag == 'true')
     permissions:
       contents: write

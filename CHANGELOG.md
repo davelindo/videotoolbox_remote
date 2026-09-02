@@ -7,6 +7,20 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
+## [v0.8.0] - 2026-09-02
+
+### Added
+
+- Added an in-tree Linux x86_64 VA-API encode driver for H.264 and HEVC,
+  including Main 10/P010, LZ4/Zstandard/automatic wire compression, an
+  experimental static C SDK, release packaging, stock FFmpeg integration tests,
+  a pinned unclaimed-server Plex Transcoder smoke test using vgem, and an
+  optional claimed-server playback-policy acceptance test.
+
+### Changed
+
+- Bumped the packaged `vtremoted --version` output to `0.8.0`.
+
 ## [v0.7.24] - 2026-09-02
 
 ### Changed

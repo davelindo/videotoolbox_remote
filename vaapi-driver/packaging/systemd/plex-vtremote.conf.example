@@ -1,0 +1,7 @@
+[Service]
+Environment=LIBVA_DRIVERS_PATH=/opt/vtremote-vaapi/lib/dri
+Environment=VTREMOTE_HOST=192.168.1.20:5555
+Environment=VTREMOTE_TOKEN=replace-me
+Environment=VTREMOTE_TIMEOUT_MS=10000
+Environment=VTREMOTE_WIRE_COMPRESSION=auto
+Environment=VTREMOTE_LOG=1

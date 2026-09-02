@@ -4,7 +4,7 @@ permalink: /llms.txt
 ---
 # VideoToolbox Remote (`videotoolbox_remote`) Briefing
 
-**Version**: v0.7.24
+**Version**: v0.8.0
 **License**: LGPL v2.1+
 **Goal**: Offload FFmpeg H.264/HEVC encoding/decoding to a remote macOS 13+ machine, including macOS 27, over LAN.
 
@@ -15,6 +15,7 @@ VideoToolbox Remote turns an Apple Silicon or T2 Mac on a LAN into a hardware H.
 - **Server (`vtremoted`)**: Swift daemon on macOS wrapping the VideoToolbox API. Listens on TCP (default 5555).
 - **Client (`ffmpeg`)**: Modified FFmpeg with custom remote codecs in `libavcodec/vtremote_*.c`.
 - **OBS Plugin**: Experimental OBS Studio encoder plugin using the same wire protocol.
+- **VA-API Driver**: Linux encode-only driver for stock VA-API applications and an experimental Plex playback-transcode path.
 
 ## Three Operating Modes
 1. **Remote Encode**: Raw frames (NV12/P010) in, compressed packets (H.264/HEVC) out.
@@ -25,6 +26,7 @@ VideoToolbox Remote turns an Apple Silicon or T2 Mac on a LAN into a hardware H.
 - `/vtremoted`: SwiftPM project (Server). `Sources/VTRemotedCore/` contains core logic.
 - `/ffmpeg`: FFmpeg fork (Client). `libavcodec/vtremote_*` files implement the protocol and codecs.
 - `/obs-plugin`: OBS Studio encoder plugin (C/C++).
+- `/vaapi-driver`: Linux VA-API driver, probe, static C SDK, packaging, and Plex smoke tooling.
 - `/docs`: Jekyll documentation site (architecture, protocol spec, guides).
 - `/tests/integration`: Shell-based integration tests + Python mock server.
 
@@ -60,7 +62,7 @@ make -j$(nproc)
 - **Streaming**: `FRAME` (pixel data) <-> `PACKET` (encoded bytes).
 - **Teardown**: `FLUSH` -> `DONE`.
 - **Framing**: 12-byte header (magic `VTR1`, version, type, length).
-- **Wire compression**: LZ4, Zstd, or none. The FFmpeg/OBS default is LZ4; the macOS server loads LZ4/Zstd at runtime only when a client requests that compression mode.
+- **Wire compression**: LZ4, Zstd, or none. FFmpeg/OBS default to LZ4; the VA-API driver defaults to automatic selection. The macOS server loads LZ4/Zstd at runtime only when requested.
 
 ## Performance (v0.7.0 validation)
 - On a measured 2.5 GbE Linux-to-M2 Air path, remote H.264/HEVC encoding reached 98.8-100.5% of matching local VideoToolbox throughput at 1080p and 4K.

@@ -1,0 +1,29 @@
+# syntax=docker/dockerfile:1
+ARG PLEX_BASE=plexinc/pms-docker:1.43.3.10896-cb3ebc72d@sha256:c708587e4874617961a1bc24db9cffa2413653ff422f1b05dfec013339e6824d
+
+FROM debian:trixie-slim AS vtremote-builder
+ARG VTREMOTE_VERSION=dev
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake pkg-config python3 ffmpeg \
+        libva-dev liblz4-dev libzstd-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY . .
+RUN cmake -S . -B build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/opt/vtremote-vaapi \
+        -DVTREMOTE_VERSION="${VTREMOTE_VERSION}" \
+        -DBUILD_TESTING=OFF \
+        -DVTREMOTE_INSTALL_VGEM_ALIAS=ON \
+        -DVTREMOTE_INSTALL_IHD_ALIAS=ON \
+    && cmake --build build --parallel \
+    && cmake --install build
+
+FROM ${PLEX_BASE}
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        liblz4-1 libzstd1 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=vtremote-builder /opt/vtremote-vaapi /opt/vtremote-vaapi
+ENV LIBVA_DRIVERS_PATH=/opt/vtremote-vaapi/lib/dri \
+    VTREMOTE_TIMEOUT_MS=10000 \
+    VTREMOTE_WIRE_COMPRESSION=auto

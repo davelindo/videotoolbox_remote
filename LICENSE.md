@@ -2,6 +2,9 @@
 
 VideoToolbox Remote Copyright (c) 2026 Dave Lindon (copyright@davelindon.me).
 
+The in-tree VA-API driver and experimental C protocol client are licensed
+under the GNU Lesser General Public License version 2.1 or later.
+
 
 Most files in FFmpeg are under the GNU Lesser General Public License version 2.1
 or later (LGPL v2.1+). Read the file `COPYING.LGPLv2.1` for details. Some other

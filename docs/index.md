@@ -6,7 +6,7 @@ description: "Remote VideoToolbox for FFmpeg: use a Mac or Apple Silicon system 
 <div class="hero">
   <div class="hero-badge">
     <span class="badge-dot"></span>
-    v0.7.11 &middot; Stable protocol v1
+    v0.8.0 &middot; Stable protocol v1
   </div>
   <h1>Remote VideoToolbox for FFmpeg</h1>
   <p>
@@ -93,6 +93,7 @@ See [benchmarks](benchmarks.html) for hardware, network, and reproduction detail
 <a class="doc-card" href="architecture.html"><div class="doc-card-title">Architecture</div><div class="doc-card-desc">System design, data flow, and component overview.</div></a>
 <a class="doc-card" href="protocol.html"><div class="doc-card-title">Protocol</div><div class="doc-card-desc">Wire specification (v1, stable).</div></a>
 <a class="doc-card" href="obs-plugin.html"><div class="doc-card-title">OBS Plugin</div><div class="doc-card-desc">Experimental OBS Studio integration.</div></a>
+<a class="doc-card" href="vaapi-driver.html"><div class="doc-card-title">Linux VA-API Driver</div><div class="doc-card-desc">Encode-only VA-API and Plex integration.</div></a>
 <a class="doc-card" href="security.html"><div class="doc-card-title">Security</div><div class="doc-card-desc">SSH tunnels, VPN, and token authentication.</div></a>
 <a class="doc-card" href="troubleshooting.html"><div class="doc-card-title">Troubleshooting</div><div class="doc-card-desc">Common issues and performance tuning.</div></a>
 <a class="doc-card" href="development.html"><div class="doc-card-title">Development</div><div class="doc-card-desc">Building from source and running tests.</div></a>

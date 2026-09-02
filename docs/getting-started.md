@@ -129,8 +129,16 @@ make test-obs-plugin
 
 This runs a mock-backed smoke test for connect/configure/frame/packet flow.
 
+## Optional: Linux VA-API and Plex
+
+The Linux x86_64 release includes an encode-only VA-API driver for stock
+applications. It accepts software-uploaded NV12/P010 surfaces and supports
+H.264, HEVC Main, and HEVC Main 10. Install the matching release asset and read
+the [VA-API driver guide](vaapi-driver.md) before enabling it in Plex. A vgem
+render node can be used when the Linux host has no physical GPU.
+
 ## Important Notes
 
-- **Compression**: Wire compression defaults to **LZ4** for all remote modes. Override with `-vt_remote_wire_compression lz4|zstd|none`, or use `auto` to choose based on resolution/FPS.
+- **Compression**: FFmpeg and OBS default to **LZ4**. Override FFmpeg with `-vt_remote_wire_compression lz4|zstd|none`, or use `auto` to choose based on resolution/FPS. The VA-API driver defaults to `auto`.
 - **Security**: Token auth is strongly recommended whenever binding beyond loopback. Tokens do not encrypt traffic, so use SSH tunnels or a VPN on untrusted networks. See [Security](security.md) for details.
 - **Optimization**: The server automatically optimizes VideoToolbox settings for batch encoding throughput.
