@@ -3,12 +3,13 @@
 This Linux VA-API encode driver sends raw NV12 or P010 frames to `vtremoted`
 on macOS and returns the H.264 or HEVC access units produced by VideoToolbox.
 It is intended for applications such as Plex that already know how to use a
-VA-API encoder.
+VA-API encoder. The supplied Plex image uses software decode and scaling, so
+the render node is only a libva identity; it does not require Intel decode.
 
 Supported profiles are H.264 Constrained Baseline, Main, and High, plus HEVC
 Main and Main 10. Decode, VA-API video processing, B-frames, and external
 DMA-BUF surfaces are not implemented. Software decode, filtering, and upload
-to the driver are supported.
+to the driver are supported. Rate control supports CBR, VBR, and CQP.
 
 ## Build and test
 

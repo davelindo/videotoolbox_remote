@@ -48,6 +48,9 @@ add_executable(vtremote-probe tools/vtremote-probe.c)
 target_link_libraries(vtremote-probe PRIVATE vtremote_client)
 target_compile_options(vtremote-probe PRIVATE ${VTREMOTE_WARNING_FLAGS})
 
+add_executable(vtremote-plex-transcoder tools/plex-transcoder-wrapper.c)
+target_compile_options(vtremote-plex-transcoder PRIVATE ${VTREMOTE_WARNING_FLAGS})
+
 add_library(vtremote_drv_video MODULE src/va_driver.c)
 target_include_directories(vtremote_drv_video PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -115,6 +118,9 @@ install(TARGETS vtremote_client
 install(TARGETS vtremote-probe
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+install(TARGETS vtremote-plex-transcoder
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 configure_file(cmake/vtremote-client.pc.in vtremote-client.pc @ONLY)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/vtremote-client.pc
@@ -133,11 +139,17 @@ if(BUILD_TESTING)
     target_compile_options(vtremote_protocol_test PRIVATE ${VTREMOTE_WARNING_FLAGS})
     add_test(NAME vtremote_protocol_unit COMMAND vtremote_protocol_test)
 
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME vtremote_plex_transcoder_wrapper_unit
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_plex_transcoder_wrapper.py
+            --wrapper $<TARGET_FILE:vtremote-plex-transcoder>
+    )
+
     set(VTREMOTE_MOCK_PATH
         "${CMAKE_CURRENT_SOURCE_DIR}/../tests/integration/mock_vtremoted/mock_vtremoted.py"
         CACHE FILEPATH "Path to the repository mock vtremoted")
     if(EXISTS "${VTREMOTE_MOCK_PATH}")
-        find_package(Python3 REQUIRED COMPONENTS Interpreter)
         foreach(codec h264 hevc hevc10)
             add_test(NAME vtremote_driver_${codec}_e2e
                 COMMAND ${Python3_EXECUTABLE}

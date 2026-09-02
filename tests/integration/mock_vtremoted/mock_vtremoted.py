@@ -509,6 +509,14 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                         if actual != expected:
                             raise ValueError(f"gop mismatch: expected={expected} actual={actual}")
 
+                    if args.expect_global_quality is not None:
+                        actual = config_options.get("global_quality")
+                        expected = str(args.expect_global_quality)
+                        if actual != expected:
+                            raise ValueError(
+                                f"global_quality mismatch: expected={expected} actual={actual}"
+                            )
+
                     for arg_name, option_name in (
                         ("expect_color_range", "color_range"),
                         ("expect_colorspace", "colorspace"),
@@ -689,6 +697,12 @@ def main() -> int:
         type=int,
         default=None,
         help="Expected CONFIGURE gop value",
+    )
+    parser.add_argument(
+        "--expect-global-quality",
+        type=int,
+        default=None,
+        help="Expected CONFIGURE global_quality value",
     )
     parser.add_argument(
         "--expect-color-range",

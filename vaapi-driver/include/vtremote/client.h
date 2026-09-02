@@ -24,6 +24,7 @@ typedef struct VTRClientConfig {
     uint32_t gop_size;
     uint32_t max_b_frames;
     int profile;             /* FFmpeg AVProfile numeric value, or -1 */
+    uint32_t global_quality; /* VideoToolbox quality, 1 (lowest) to 100 */
     int realtime;
     int constant_bit_rate;
     int timeout_ms;
@@ -38,6 +39,7 @@ typedef struct VTRClient {
     char codec[16];
     uint64_t server_caps;
     VTRWireCompression wire_compression;
+    VTRBuffer parameter_sets;
     VTRBuffer tx;
     VTRBuffer rx;
 } VTRClient;

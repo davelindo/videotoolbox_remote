@@ -105,6 +105,7 @@ typedef struct VTRVAContext {
     uint32_t frame_rate_num;
     uint32_t frame_rate_den;
     uint32_t max_b_frames;
+    uint32_t global_quality;
     int realtime;
     int constant_bit_rate;
     int timeout_ms;
@@ -452,7 +453,7 @@ static VAStatus get_config_attribute_value(VAProfile profile, VAEntrypoint entry
             *value = formats_for_profile(profile);
             break;
         case VAConfigAttribRateControl:
-            *value = VA_RC_CBR | VA_RC_VBR;
+            *value = VA_RC_CBR | VA_RC_VBR | VA_RC_CQP;
             break;
         case VAConfigAttribEncPackedHeaders:
             *value = VA_ENC_PACKED_HEADER_NONE;
@@ -596,7 +597,8 @@ static VAStatus vtrva_create_config(VADriverContextP ctx, VAProfile profile,
                 break;
             case VAConfigAttribRateControl:
                 if (attributes[i].value != VA_RC_CBR &&
-                    attributes[i].value != VA_RC_VBR) {
+                    attributes[i].value != VA_RC_VBR &&
+                    attributes[i].value != VA_RC_CQP) {
                     config->active = false;
                     pthread_mutex_unlock(&driver->lock);
                     return VA_STATUS_ERROR_ATTR_NOT_SUPPORTED;
@@ -884,6 +886,7 @@ static VAStatus vtrva_create_context(VADriverContextP ctx, VAConfigID config_id,
     context->frame_rate_num = env_u32("VTREMOTE_FPS_NUM", 30U, 1U, 100000U);
     context->frame_rate_den = env_u32("VTREMOTE_FPS_DEN", 1U, 1U, 100000U);
     context->max_b_frames = 0; /* synchronous v1; preserve monotonic DTS */
+    context->global_quality = 0;
     context->realtime = env_bool("VTREMOTE_REALTIME", 1);
     context->constant_bit_rate = config->rate_control == VA_RC_CBR;
     context->timeout_ms = (int)env_u32("VTREMOTE_TIMEOUT_MS", 10000U, 100U, 600000U);
@@ -1152,6 +1155,7 @@ static VAStatus handle_picture_parameter_locked(VTRVADriver *driver,
     VABufferID coded_id;
     VTRVABuffer *coded;
     bool force_keyframe;
+    uint32_t picture_qp;
     if (!driver || !context || !config || !buffer || !buffer->data)
         return VA_STATUS_ERROR_INVALID_PARAMETER;
     if (!is_hevc_profile(config->profile)) {
@@ -1160,18 +1164,26 @@ static VAStatus handle_picture_parameter_locked(VTRVADriver *driver,
         picture = (const VAEncPictureParameterBufferH264 *)buffer->data;
         coded_id = picture->coded_buf;
         force_keyframe = picture->pic_fields.bits.idr_pic_flag != 0;
+        picture_qp = picture->pic_init_qp;
     } else {
         const VAEncPictureParameterBufferHEVC *picture;
         if (buffer->size < sizeof(*picture)) return VA_STATUS_ERROR_INVALID_BUFFER;
         picture = (const VAEncPictureParameterBufferHEVC *)buffer->data;
         coded_id = picture->coded_buf;
         force_keyframe = picture->pic_fields.bits.idr_pic_flag != 0;
+        picture_qp = picture->pic_init_qp;
     }
     coded = lookup_buffer_locked(driver, coded_id);
     if (!coded || coded->type != VAEncCodedBufferType ||
         coded->context_id != context->id) return VA_STATUS_ERROR_INVALID_BUFFER;
     context->pending_coded_buffer = coded_id;
     context->force_keyframe = force_keyframe;
+    if (config->rate_control == VA_RC_CQP && context->global_quality == 0U &&
+        picture_qp >= 1U && picture_qp <= 51U) {
+        /* VAAPI QP is inverse to VideoToolbox quality.  Preserve both end
+           points while mapping the 1..51 quantizer range onto 100..1. */
+        context->global_quality = 1U + (51U - picture_qp) * 99U / 50U;
+    }
     return VA_STATUS_SUCCESS;
 }
 
@@ -1337,6 +1349,7 @@ static int ensure_remote_connection(VTRVADriver *driver, VTRVAContext *context,
     client_config.gop_size = context->gop_size;
     client_config.max_b_frames = 0;
     client_config.profile = ffmpeg_profile_for_va_profile(config->profile);
+    client_config.global_quality = context->global_quality;
     client_config.realtime = context->realtime;
     client_config.constant_bit_rate = context->constant_bit_rate;
     client_config.timeout_ms = context->timeout_ms;

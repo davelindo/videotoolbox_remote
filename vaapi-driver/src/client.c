@@ -46,6 +46,154 @@ static uint32_t read_be32(const uint8_t *p) {
            ((uint32_t)p[2] << 8) | p[3];
 }
 
+static int append_annexb_nal(VTRBuffer *out, const uint8_t *data, size_t size) {
+    static const uint8_t start_code[] = {0, 0, 0, 1};
+    int rc;
+
+    if (!out || !data || size == 0) return -EINVAL;
+    if ((rc = vtr_put_bytes(out, start_code, sizeof(start_code))) < 0) return rc;
+    return vtr_put_bytes(out, data, size);
+}
+
+static void parameter_set_flags(const uint8_t *data, size_t size,
+                                const char *codec, unsigned *flags) {
+    size_t offset = 0;
+
+    if (!data || !codec || !flags) return;
+    while (offset + 3 < size) {
+        size_t nal_offset;
+        uint8_t nal_type;
+
+        if (data[offset] != 0 || data[offset + 1] != 0) {
+            ++offset;
+            continue;
+        }
+        if (data[offset + 2] == 1) {
+            nal_offset = offset + 3;
+        } else if (offset + 4 < size && data[offset + 2] == 0 &&
+                   data[offset + 3] == 1) {
+            nal_offset = offset + 4;
+        } else {
+            ++offset;
+            continue;
+        }
+        if (nal_offset >= size) break;
+        if (strcmp(codec, "hevc") == 0) {
+            nal_type = (uint8_t)((data[nal_offset] >> 1) & 0x3fU);
+            if (nal_type == 32) *flags |= 1U;
+            if (nal_type == 33) *flags |= 2U;
+            if (nal_type == 34) *flags |= 4U;
+        } else {
+            nal_type = data[nal_offset] & 0x1fU;
+            if (nal_type == 7) *flags |= 1U;
+            if (nal_type == 8) *flags |= 2U;
+        }
+        offset = nal_offset + 1;
+    }
+}
+
+static int avcc_to_annexb(const uint8_t *data, size_t size, VTRBuffer *out) {
+    size_t offset;
+    unsigned flags = 0;
+    unsigned index;
+    unsigned count;
+    int rc;
+
+    if (!data || size < 7 || data[0] != 1 || !out) return -EPROTO;
+    offset = 5;
+    count = data[offset++] & 0x1fU;
+    for (index = 0; index < count; ++index) {
+        uint16_t nal_size;
+        if (offset + 2 > size) return -EPROTO;
+        nal_size = read_be16(data + offset);
+        offset += 2;
+        if (nal_size == 0 || offset + nal_size > size) return -EPROTO;
+        if ((data[offset] & 0x1fU) == 7) flags |= 1U;
+        if ((rc = append_annexb_nal(out, data + offset, nal_size)) < 0) return rc;
+        offset += nal_size;
+    }
+    if (offset >= size) return -EPROTO;
+    count = data[offset++];
+    for (index = 0; index < count; ++index) {
+        uint16_t nal_size;
+        if (offset + 2 > size) return -EPROTO;
+        nal_size = read_be16(data + offset);
+        offset += 2;
+        if (nal_size == 0 || offset + nal_size > size) return -EPROTO;
+        if ((data[offset] & 0x1fU) == 8) flags |= 2U;
+        if ((rc = append_annexb_nal(out, data + offset, nal_size)) < 0) return rc;
+        offset += nal_size;
+    }
+    return flags == 3U ? 0 : -EPROTO;
+}
+
+static int hvcc_to_annexb(const uint8_t *data, size_t size, VTRBuffer *out) {
+    size_t offset;
+    unsigned flags = 0;
+    unsigned array_index;
+    unsigned array_count;
+
+    if (!data || size < 23 || data[0] != 1 || !out) return -EPROTO;
+    array_count = data[22];
+    offset = 23;
+    for (array_index = 0; array_index < array_count; ++array_index) {
+        uint8_t nal_type;
+        uint16_t nal_count;
+        unsigned nal_index;
+
+        if (offset + 3 > size) return -EPROTO;
+        nal_type = data[offset++] & 0x3fU;
+        nal_count = read_be16(data + offset);
+        offset += 2;
+        for (nal_index = 0; nal_index < nal_count; ++nal_index) {
+            uint16_t nal_size;
+            int rc;
+            if (offset + 2 > size) return -EPROTO;
+            nal_size = read_be16(data + offset);
+            offset += 2;
+            if (nal_size == 0 || offset + nal_size > size) return -EPROTO;
+            if (nal_type >= 32 && nal_type <= 34) {
+                flags |= 1U << (nal_type - 32);
+                rc = append_annexb_nal(out, data + offset, nal_size);
+                if (rc < 0) return rc;
+            }
+            offset += nal_size;
+        }
+    }
+    return flags == 7U ? 0 : -EPROTO;
+}
+
+static int store_parameter_sets(VTRClient *client, const uint8_t *data,
+                                size_t size) {
+    unsigned flags = 0;
+    unsigned required;
+    int rc;
+
+    if (!client) return -EINVAL;
+    vtr_buffer_reset(&client->parameter_sets);
+    if (size == 0) return 0;
+    if (!data) return -EINVAL;
+
+    if (size >= 8 && read_be32(data) == size &&
+        ((memcmp(data + 4, "avcC", 4) == 0) ||
+         (memcmp(data + 4, "hvcC", 4) == 0))) {
+        data += 8;
+        size -= 8;
+    }
+    if (size >= 4 && data[0] == 0 && data[1] == 0 &&
+        (data[2] == 1 || (data[2] == 0 && data[3] == 1))) {
+        parameter_set_flags(data, size, client->codec, &flags);
+        required = strcmp(client->codec, "hevc") == 0 ? 7U : 3U;
+        if ((flags & required) != required) return -EPROTO;
+        return vtr_put_bytes(&client->parameter_sets, data, size);
+    }
+    rc = strcmp(client->codec, "hevc") == 0
+             ? hvcc_to_annexb(data, size, &client->parameter_sets)
+             : avcc_to_annexb(data, size, &client->parameter_sets);
+    if (rc < 0) vtr_buffer_reset(&client->parameter_sets);
+    return rc;
+}
+
 static void write_be16(uint8_t *p, uint16_t v) {
     p[0] = (uint8_t)(v >> 8);
     p[1] = (uint8_t)v;
@@ -371,13 +519,16 @@ static int parse_hello_ack(VTRClient *client, const VTRMessage *message,
     return 0;
 }
 
-static int parse_configure_ack(const VTRMessage *message,
+static int parse_configure_ack(VTRClient *client, const VTRMessage *message,
                                VTRPixelFormat expected_pixel_format,
                                char *error, size_t error_size) {
     Reader r;
     uint8_t status;
     uint16_t extradata_size;
-    if (!message || message->type != VTR_MSG_CONFIGURE_ACK) return -EPROTO;
+    const uint8_t *extradata;
+    int rc;
+    if (!client || !message || message->type != VTR_MSG_CONFIGURE_ACK)
+        return -EPROTO;
     r.data = message->payload;
     r.size = message->payload_size;
     r.pos = 0;
@@ -388,7 +539,14 @@ static int parse_configure_ack(const VTRMessage *message,
     }
     if (reader_u16(&r, &extradata_size) < 0 || r.size - r.pos < extradata_size)
         return -EPROTO;
+    extradata = r.data + r.pos;
     r.pos += extradata_size;
+    rc = store_parameter_sets(client, extradata, extradata_size);
+    if (rc < 0) {
+        set_error(error, error_size, "invalid %s encoder extradata",
+                  client->codec);
+        return rc;
+    }
     /* Published v1 peers may omit the reported format and warning list. */
     if (r.pos == r.size) return 0;
     {
@@ -447,6 +605,7 @@ void vtr_client_init(VTRClient *client) {
     client->fd = -1;
     vtr_buffer_init(&client->tx);
     vtr_buffer_init(&client->rx);
+    vtr_buffer_init(&client->parameter_sets);
 }
 
 void vtr_client_destroy(VTRClient *client) {
@@ -456,14 +615,15 @@ void vtr_client_destroy(VTRClient *client) {
     client->connected = 0;
     vtr_buffer_free(&client->tx);
     vtr_buffer_free(&client->rx);
+    vtr_buffer_free(&client->parameter_sets);
 }
 
 int vtr_client_connect(VTRClient *client, const VTRClientConfig *config,
                        char *error, size_t error_size) {
     VTRMessage message;
-    VTRKeyValue options[9];
+    VTRKeyValue options[10];
     char bit_rate[32], max_rate[32], gop[32], bframes[32], profile[32], realtime[8];
-    char wire_compression[8], constant_bit_rate[8];
+    char global_quality[8], wire_compression[8], constant_bit_rate[8];
     int rc;
 
     if (!client || !config || !config->endpoint || !config->codec ||
@@ -505,6 +665,7 @@ int vtr_client_connect(VTRClient *client, const VTRClientConfig *config,
     snprintf(gop, sizeof(gop), "%u", config->gop_size ? config->gop_size : 60);
     snprintf(bframes, sizeof(bframes), "%u", config->max_b_frames);
     snprintf(profile, sizeof(profile), "%d", config->profile);
+    snprintf(global_quality, sizeof(global_quality), "%u", config->global_quality);
     snprintf(realtime, sizeof(realtime), "%d", config->realtime ? 1 : 0);
     snprintf(wire_compression, sizeof(wire_compression), "%d",
              (int)client->wire_compression);
@@ -519,6 +680,7 @@ int vtr_client_connect(VTRClient *client, const VTRClientConfig *config,
     options[6] = (VTRKeyValue){"realtime", realtime};
     options[7] = (VTRKeyValue){"wire_compression", wire_compression};
     options[8] = (VTRKeyValue){"constant_bit_rate", constant_bit_rate};
+    options[9] = (VTRKeyValue){"global_quality", global_quality};
 
     rc = vtr_build_configure(&client->tx, config->width, config->height,
                              config->pixel_format,
@@ -538,7 +700,7 @@ int vtr_client_connect(VTRClient *client, const VTRClientConfig *config,
         rc = -EIO;
         goto fail;
     }
-    if ((rc = parse_configure_ack(&message, config->pixel_format,
+    if ((rc = parse_configure_ack(client, &message, config->pixel_format,
                                   error, error_size)) < 0) goto fail;
     client->connected = 1;
     return 0;
@@ -591,6 +753,16 @@ int vtr_client_encode(VTRClient *client, const VTRFrame *frame,
         return rc;
     }
     vtr_buffer_reset(packet);
+    if ((view.flags & 1U) != 0 && client->parameter_sets.size != 0) {
+        unsigned flags = 0;
+        unsigned required = strcmp(client->codec, "hevc") == 0 ? 7U : 3U;
+        parameter_set_flags(view.data, view.data_size, client->codec, &flags);
+        if ((flags & required) != required &&
+            (rc = vtr_put_bytes(packet, client->parameter_sets.data,
+                                client->parameter_sets.size)) < 0) {
+            return rc;
+        }
+    }
     if ((rc = vtr_put_bytes(packet, view.data, view.data_size)) < 0) return rc;
     if (packet_pts) *packet_pts = view.pts;
     if (packet_dts) *packet_dts = view.dts;

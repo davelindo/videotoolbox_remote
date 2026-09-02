@@ -1,21 +1,35 @@
 # syntax=docker/dockerfile:1
-ARG PLEX_BASE=plexinc/pms-docker:1.43.3.10896-cb3ebc72d@sha256:c708587e4874617961a1bc24db9cffa2413653ff422f1b05dfec013339e6824d
+ARG PLEX_BASE=plexinc/pms-docker:beta@sha256:8aeb4a982ea564ad309861dd251cd9e218aac3f4e4d3da21375568341be1b16f
+ARG VTREMOTE_BUILD_PLATFORM=linux/amd64
 
-FROM debian:trixie-slim AS vtremote-builder
+FROM --platform=${VTREMOTE_BUILD_PLATFORM} ubuntu:20.04 AS vtremote-builder
 ARG VTREMOTE_VERSION=dev
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential cmake pkg-config python3 ffmpeg \
-        libva-dev liblz4-dev libzstd-dev \
+ARG LIBVA_VERSION=2.22.0
+ARG LIBVA_SHA256=467c418c2640a178c6baad5be2e00d569842123763b80507721ab87eb7af8735
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive \
+    apt-get install -y --no-install-recommends \
+        build-essential cmake pkg-config python3 curl ca-certificates \
+        meson ninja-build libdrm-dev libx11-dev libxext-dev libxfixes-dev \
+        libx11-xcb-dev libxcb1-dev libxcb-dri3-dev liblz4-dev libzstd-dev \
     && rm -rf /var/lib/apt/lists/*
+RUN curl -fL --retry 3 -o /tmp/libva.tar.gz \
+        "https://github.com/intel/libva/archive/refs/tags/${LIBVA_VERSION}.tar.gz" \
+    && echo "${LIBVA_SHA256}  /tmp/libva.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/libva.tar.gz -C /tmp \
+    && meson setup /tmp/libva-build "/tmp/libva-${LIBVA_VERSION}" \
+        --prefix=/usr/local --libdir=lib \
+        -Dwith_x11=yes -Dwith_glx=no -Dwith_wayland=no -Denable_docs=false \
+    && ninja -C /tmp/libva-build install \
+    && rm -rf /tmp/libva-build "/tmp/libva-${LIBVA_VERSION}" /tmp/libva.tar.gz
 WORKDIR /src
 COPY . .
-RUN cmake -S . -B build \
+RUN PKG_CONFIG_PATH=/usr/local/lib/pkgconfig cmake -S . -B build \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/opt/vtremote-vaapi \
         -DVTREMOTE_VERSION="${VTREMOTE_VERSION}" \
         -DBUILD_TESTING=OFF \
         -DVTREMOTE_INSTALL_VGEM_ALIAS=ON \
-        -DVTREMOTE_INSTALL_IHD_ALIAS=ON \
+        -DVTREMOTE_INSTALL_IHD_ALIAS=OFF \
     && cmake --build build --parallel \
     && cmake --install build
 
@@ -24,6 +38,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         liblz4-1 libzstd1 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=vtremote-builder /opt/vtremote-vaapi /opt/vtremote-vaapi
-ENV LIBVA_DRIVERS_PATH=/opt/vtremote-vaapi/lib/dri \
+COPY docker/55-vtremote-plex-transcoder /etc/cont-init.d/55-vtremote-plex-transcoder
+RUN chmod 0755 /etc/cont-init.d/55-vtremote-plex-transcoder
+ENV VTREMOTE_PLEX_SOFTWARE_PIPELINE=1 \
+    VTREMOTE_PLEX_DRIVERS_PATH=/opt/vtremote-vaapi/lib/dri \
+    VTREMOTE_PLEX_RENDER_DEVICE=/dev/dri/renderD128 \
+    VTREMOTE_PLEX_AUDIT_FILE=/dev/shm/plex/vtremote-plex-wrapper.log \
     VTREMOTE_TIMEOUT_MS=10000 \
     VTREMOTE_WIRE_COMPRESSION=auto

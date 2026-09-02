@@ -10,23 +10,30 @@ import subprocess
 import sys
 import tempfile
 import time
+from typing import Optional
 
 
 def run_case(args: argparse.Namespace, codec: str, pixel_format: str,
              muxer: str, expected: bytes, wire: str,
-             automatic_vgem: bool = False) -> None:
+             automatic_vgem: bool = False, qp: Optional[int] = None) -> None:
     with tempfile.TemporaryDirectory(prefix="vtremote-ffmpeg-e2e-") as temp_text:
         temp = pathlib.Path(temp_text)
         ready = temp / "ready"
         node = temp / "renderD128"
         output = temp / ("output.h264" if muxer == "h264" else "output.h265")
         node.touch()
+        server_command = [
+            sys.executable, args.mock, "--listen", "127.0.0.1:0",
+            "--ready-file", str(ready), "--once", "--strict-config-options",
+            "--expect-wire-compression",
+            str({"none": 0, "lz4": 1, "zstd": 2}[wire]),
+            "--packet-data-hex", expected.hex(),
+        ]
+        if qp is not None:
+            quality = 1 + (51 - qp) * 99 // 50
+            server_command.extend(("--expect-global-quality", str(quality)))
         server = subprocess.Popen(
-            [sys.executable, args.mock, "--listen", "127.0.0.1:0",
-             "--ready-file", str(ready), "--once", "--strict-config-options",
-             "--expect-wire-compression",
-             str({"none": 0, "lz4": 1, "zstd": 2}[wire]),
-             "--packet-data-hex", expected.hex()],
+            server_command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -57,6 +64,8 @@ def run_case(args: argparse.Namespace, codec: str, pixel_format: str,
                 env.pop("LIBVA_DRIVER_NAME", None)
             else:
                 env["LIBVA_DRIVER_NAME"] = "vtremote"
+            rate_control = (["-qp", str(qp)] if qp is not None
+                            else ["-b:v", "3M"])
             command = [
                 args.ffmpeg,
                 "-hide_banner",
@@ -68,7 +77,7 @@ def run_case(args: argparse.Namespace, codec: str, pixel_format: str,
                 "-vf", f"format={pixel_format},hwupload",
                 "-frames:v", "3",
                 "-c:v", codec,
-                "-b:v", "3M",
+                *rate_control,
                 "-bf", "0",
                 "-y",
                 "-f", muxer,
@@ -119,6 +128,8 @@ def main() -> int:
             run_case(args, codec, pixel_format, muxer, expected, wire,
                      automatic_vgem=first)
             first = False
+    run_case(args, "h264_vaapi", "nv12", "h264", profiles[0][3],
+             "zstd", qp=20)
     return 0
 
 

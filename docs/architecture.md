@@ -40,8 +40,9 @@ flowchart LR
 
 - **Profiles**: H.264 Baseline/Main/High and HEVC Main/Main 10 encode.
 - **Responsibilities**: Accept software-uploaded NV12/P010 VA surfaces, map
-  libva encoder parameters to protocol v1, compress planes, and publish remote
-  access units as VA coded buffers.
+  libva encoder parameters to protocol v1, compress planes, convert returned
+  codec configuration to Annex-B parameter sets, and publish remote access
+  units as independently decodable VA coded buffers.
 - **Boundary**: No VA-API decode, video processing, or external surfaces.
 
 ## 2. Data Flow (Encode)

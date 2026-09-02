@@ -34,10 +34,16 @@ and LZ4 for higher-throughput streams.
 
 ## Plex
 
-The repository provides a Dockerfile pinned to official Plex Media Server
-`1.43.3.10896-cb3ebc72d` and its amd64 digest, plus a Compose merge example under
-`vaapi-driver/docker/`. The host must pass an accessible render node into the
-container; vgem is sufficient when no physical GPU is present.
+The repository provides a Dockerfile pinned to an official amd64 `pms-docker`
+bootstrap image digest, plus a Compose merge example under
+`vaapi-driver/docker/`. The image installs a narrow Plex Transcoder wrapper.
+For recognized Plex VA-API graphs, it keeps decode and scale in software and
+uses VTRemote only for the final encode. Unknown VA-API graphs pass through to
+Plex's native Transcoder and driver environment unchanged.
+
+The host must pass an accessible render node into the container. The node is a
+libva identity, not a decode dependency; vgem is sufficient when no physical
+GPU is present.
 
 Validate the bundled Plex Transcoder and VA-API stack without claiming the
 server or creating a library:
@@ -52,9 +58,10 @@ This deterministic check encodes generated NV12 and P010 frames as H.264,
 HEVC Main, and HEVC Main 10 through the remote VideoToolbox server. It requires
 no Plex token, downloaded decoder, or Plex Pass entitlement.
 
-Separately, enable hardware encoding in a claimed Plex Pass server while
-keeping decode and video processing on software. Validate PMS hardware-policy
-selection through a real playback request:
+Separately, enable hardware acceleration and hardware encoding in a claimed
+Plex Pass server. Plex requests its normal hardware pipeline and the wrapper
+converts the supported graph to software decode/scale plus remote encode.
+Validate it through a real playback request:
 
 ```bash
 PLEX_URL=http://127.0.0.1:32400 \
@@ -65,9 +72,9 @@ PLEX_CONTAINER=plex \
 ```
 
 The optional claimed-server check requests an HLS playback transcode from PMS,
-downloads a media segment, and requires a new driver connection in the Plex
-logs. It proves PMS selected hardware encoding; the unclaimed-server check
-proves the Plex Transcoder/VA-API integration itself.
+downloads and decodes a media segment, and requires a new wrapper audit entry.
+It proves PMS selected the wrapper and returned playable media; the
+unclaimed-server check proves the Plex Transcoder/VA-API integration itself.
 
 For build, environment, SDK, and architecture details, see
 [`vaapi-driver/README.md`](../vaapi-driver/README.md).

@@ -1,0 +1,16 @@
+#!/bin/sh
+# SPDX-License-Identifier: LGPL-2.1-or-later
+set -eu
+
+wrapper=/opt/vtremote-vaapi/bin/vtremote-plex-transcoder
+target='/usr/lib/plexmediaserver/Plex Transcoder'
+real='/usr/lib/plexmediaserver/Plex Transcoder.real'
+
+if cmp -s "$wrapper" "$target"; then
+    exit 0
+fi
+
+if [ -e "$target" ]; then
+    mv -f "$target" "$real"
+fi
+install -m 0755 "$wrapper" "$target"

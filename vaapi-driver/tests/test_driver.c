@@ -34,6 +34,39 @@ static int has_start_code(const uint8_t *data, size_t size) {
            ((data[2] == 1) || (data[2] == 0 && data[3] == 1));
 }
 
+static int has_parameter_sets(const uint8_t *data, size_t size, int hevc) {
+    size_t offset = 0;
+    unsigned found = 0;
+    unsigned required = hevc ? 7U : 3U;
+
+    while (offset + 3 < size) {
+        size_t nal_offset;
+        unsigned nal_type;
+        if (data[offset] != 0 || data[offset + 1] != 0) {
+            ++offset;
+            continue;
+        }
+        if (data[offset + 2] == 1) {
+            nal_offset = offset + 3;
+        } else if (offset + 4 < size && data[offset + 2] == 0 &&
+                   data[offset + 3] == 1) {
+            nal_offset = offset + 4;
+        } else {
+            ++offset;
+            continue;
+        }
+        if (nal_offset >= size) break;
+        nal_type = hevc ? ((data[nal_offset] >> 1) & 0x3fU)
+                        : (data[nal_offset] & 0x1fU);
+        if (hevc && nal_type >= 32 && nal_type <= 34)
+            found |= 1U << (nal_type - 32);
+        if (!hevc && nal_type == 7) found |= 1U;
+        if (!hevc && nal_type == 8) found |= 2U;
+        offset = nal_offset + 1;
+    }
+    return (found & required) == required;
+}
+
 int main(int argc, char **argv) {
     void *module = NULL;
     VADriverInit init = NULL;
@@ -113,6 +146,14 @@ int main(int argc, char **argv) {
     CHECK_STATUS(vtable.vaQueryConfigProfiles(&context, profiles, &profile_count));
     if (profile_count < 5) {
         fprintf(stderr, "expected at least five advertised profiles\n");
+        goto fail;
+    }
+    config_attributes[0].type = VAConfigAttribRateControl;
+    CHECK_STATUS(vtable.vaGetConfigAttributes(&context, profile,
+                                              VAEntrypointEncSlice,
+                                              config_attributes, 1));
+    if (!(config_attributes[0].value & VA_RC_CQP)) {
+        fprintf(stderr, "driver does not advertise CQP rate control\n");
         goto fail;
     }
 
@@ -201,7 +242,9 @@ int main(int argc, char **argv) {
     CHECK_STATUS(vtable.vaSyncSurface(&context, surface_id));
     CHECK_STATUS(vtable.vaMapBuffer(&context, coded_buffer, (void **)&segment));
     if (!segment || !segment->buf || segment->size == 0 ||
-        !has_start_code((const uint8_t *)segment->buf, segment->size)) {
+        !has_start_code((const uint8_t *)segment->buf, segment->size) ||
+        !has_parameter_sets((const uint8_t *)segment->buf, segment->size,
+                            profile != VAProfileH264High)) {
         fprintf(stderr, "invalid coded buffer returned by driver\n");
         goto fail;
     }

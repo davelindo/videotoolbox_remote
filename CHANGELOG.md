@@ -12,10 +12,18 @@ The non-version `nightly` tag is intentionally excluded.
 ### Added
 
 - Added an in-tree Linux x86_64 VA-API encode driver for H.264 and HEVC,
-  including Main 10/P010, LZ4/Zstandard/automatic wire compression, an
-  experimental static C SDK, release packaging, stock FFmpeg integration tests,
-  a pinned unclaimed-server Plex Transcoder smoke test using vgem, and an
-  optional claimed-server playback-policy acceptance test.
+  including Main 10/P010, CBR/VBR/CQP rate control, LZ4/Zstandard/automatic
+  wire compression, an experimental static C SDK, release packaging, and stock
+  FFmpeg integration tests.
+- Added a Plex image that converts Plex's recognized VA-API pipeline to
+  software decode/scale plus VTRemote encode, with unclaimed-server and claimed
+  playback tests.
+
+### Fixed
+
+- Converted the encoder configuration returned by `vtremoted` to Annex-B
+  parameter sets and included them on keyframes, making VA-API H.264 and HEVC
+  output independently decodable.
 
 ### Changed
 

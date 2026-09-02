@@ -4,7 +4,7 @@ set -euo pipefail
 
 container="${PLEX_CONTAINER:-plex}"
 render_device="${RENDER_DEVICE:-/dev/dri/renderD128}"
-transcoder="/usr/lib/plexmediaserver/Plex Transcoder"
+transcoder="/usr/lib/plexmediaserver/Plex Transcoder.real"
 probe="/opt/vtremote-vaapi/bin/vtremote-probe"
 width=320
 height=180
@@ -46,9 +46,10 @@ run_case() {
   created+=("$input" "$output")
   docker exec "$container" dd if=/dev/zero of="$input" \
     bs="$frame_bytes" count="$frames" status=none
-  docker exec "$container" "$transcoder" \
+  docker exec -e LIBVA_DRIVERS_PATH=/opt/vtremote-vaapi/lib/dri \
+    "$container" "$transcoder" \
     -hide_banner -loglevel warning \
-    -init_hw_device "vaapi=remote:${render_device}" \
+    -init_hw_device "vaapi=remote:${render_device},driver=vtremote" \
     -filter_hw_device remote \
     -f rawvideo -pix_fmt "$pixel_format" \
     -video_size "${width}x${height}" -framerate 30 -i "$input" \

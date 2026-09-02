@@ -22,9 +22,21 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="vtremote-vaapi-test-") as temp:
         ready = pathlib.Path(temp) / "ready"
+        fixture_dir = pathlib.Path(args.mock).parent / "fixtures"
+        if args.codec == "h264":
+            extradata_args = [
+                "--configure-extradata-hex-file",
+                str(fixture_dir / "h264_test_avcc.hex"),
+            ]
+        else:
+            extradata_args = [
+                "--configure-extradata-hex-file",
+                str(fixture_dir / "hevc_main10_bt2020_pq_hvcc.hex"),
+            ]
         server = subprocess.Popen(
             [sys.executable, args.mock, "--listen", "127.0.0.1:0",
-             "--ready-file", str(ready), "--once", "--strict-config-options"],
+             "--ready-file", str(ready), "--once", "--strict-config-options",
+             *extradata_args],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

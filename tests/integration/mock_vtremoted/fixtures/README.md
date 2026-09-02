@@ -4,6 +4,7 @@ These files are golden protocol payloads for the mock `vtremoted` integration te
 
 - `hevc_main10_bt2020_pq_hvcc.hex`: the `hvcC`/extradata blob returned in `CONFIGURE_ACK`
 - `hevc_main10_bt2020_pq_packet.hex`: a single Annex B keyframe packet returned in `PACKET`
+- `h264_test_avcc.hex`: minimal synthetic `avcC` SPS/PPS data for protocol tests
 
 Required properties:
 
