@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<EOF
-Usage: $0 ffmpeg|vtremoted ARTIFACT.tar.gz
+Usage: $0 ffmpeg|vtremoted|vaapi-driver ARTIFACT.tar.gz
 
 Unpacks a packaged release artifact and verifies the expected executable and
 feature surface are present. This intentionally tests the tarball contents,
@@ -104,6 +104,56 @@ case "$kind" in
 
     "$vtremoted_bin" --version | grep -Eq '^vtremoted [0-9]+\.[0-9]+\.[0-9]+'
     "$vtremoted_bin" --help | grep -q -- '--listen HOST:PORT'
+    ;;
+
+  vaapi-driver)
+    prefix="$tmpdir/vtremote-vaapi/opt/vtremote-vaapi"
+    driver="$prefix/lib/dri/vtremote_drv_video.so"
+    probe="$prefix/bin/vtremote-probe"
+    plex_wrapper="$prefix/bin/vtremote-plex-transcoder"
+    plex_bsf="$prefix/lib/vtremote-plex-bsf.so"
+    sdk="$prefix/lib/libvtremote_client.a"
+    header="$prefix/include/vtremote/client.h"
+    [[ -f "$driver" && -x "$probe" && -x "$plex_wrapper" && \
+       -f "$plex_bsf" && -f "$sdk" && -f "$header" ]] || {
+      echo "VA-API, Plex, or static SDK payload missing from $artifact" >&2
+      find "$tmpdir" -maxdepth 6 -type f -print >&2
+      exit 1
+    }
+    [[ -L "$prefix/lib/dri/vgem_drv_video.so" ]] || {
+      echo "vgem driver alias missing from $artifact" >&2
+      exit 1
+    }
+    [[ -L "$prefix/lib/dri/iHD_drv_video.so" ]] || {
+      echo "isolated Plex iHD alias missing from $artifact" >&2
+      exit 1
+    }
+    "$probe" --version | grep -Eq '^vtremote-probe [0-9A-Za-z._+-]+'
+    if readelf -d "$driver" | grep -q 'Shared library: \[libva'; then
+      echo "VA driver must not link to libva" >&2
+      readelf -d "$driver" >&2
+      exit 1
+    fi
+    exports="$(nm -D --defined-only "$driver" | awk '{print $3}' | sed '/^$/d')"
+    if [[ "$exports" != "__vaDriverInit_1_22" ]]; then
+      echo "unexpected VA driver exports:" >&2
+      printf '%s\n' "$exports" >&2
+      exit 1
+    fi
+    plex_exports="$(nm -D --defined-only "$plex_bsf" | awk '{print $3}' | sed '/^$/d')"
+    if [[ "$plex_exports" != "av_bsf_list_parse_str" ]]; then
+      echo "unexpected Plex preload module exports:" >&2
+      printf '%s\n' "$plex_exports" >&2
+      exit 1
+    fi
+    for runtime_binary in "$driver" "$probe" "$plex_wrapper" "$plex_bsf"; do
+      max_glibc="$(readelf --version-info "$runtime_binary" | \
+        sed -n 's/.*Name: GLIBC_\([^[:space:]]*\).*/\1/p' | sort -V | tail -n1)"
+      if [[ -n "$max_glibc" && "$(printf '2.17\n%s\n' "$max_glibc" | sort -V | tail -n1)" != "2.17" ]]; then
+        echo "$(basename "$runtime_binary") requires GLIBC_$max_glibc; release ceiling is GLIBC_2.17" >&2
+        exit 1
+      fi
+    done
     ;;
 
   *)

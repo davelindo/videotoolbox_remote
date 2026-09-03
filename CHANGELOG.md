@@ -7,6 +7,56 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
+## [v0.8.0] - 2026-09-03
+
+### Added
+
+- Added an in-tree Linux x86_64 VA-API encode driver for H.264 and HEVC,
+  including Main 10/P010, CBR/VBR/CQP rate control, LZ4/Zstandard/automatic
+  wire compression, an experimental static C SDK, release packaging, and stock
+  FFmpeg integration tests.
+- Added a Plex-specific FFmpeg 6 bitstream-filter shim and container image that
+  send compressed H.264 or HEVC packets to `vtremoted` for remote decode,
+  scale, and encode. The release includes automated unclaimed-server coverage
+  and an opt-in claimed-server playback smoke. The Plex path does not require
+  a Linux GPU or render node.
+
+### Fixed
+
+- Converted the encoder configuration returned by `vtremoted` to Annex-B
+  parameter sets and included them on keyframes, making VA-API H.264 and HEVC
+  output independently decodable.
+- Released client buffers after failed handshakes so reconnecting through the
+  experimental C SDK does not leak retry allocations.
+- Kept fixed-level HEVC Plex requests on the native path because
+  VideoToolbox exposes only automatic HEVC level selection.
+
+### Changed
+
+- Bumped the packaged `vtremoted --version` output to `0.8.0`.
+- Restricted Plex rewriting to one directly mapped video stream and a tested
+  software-scale/format/upload graph. Ambiguous graphs and unsupported
+  compatibility constraints remain on Plex's native path.
+- Added exact Plex `libavcodec` version and binary fingerprint gates before
+  accessing FFmpeg private internals, with native pass-through for unknown
+  Plex releases.
+- Preserved Plex bitrate, maximum-rate, VBV window, GOP, profile, H.264 level,
+  entropy, rate-control, closed-caption, and periodic keyframe constraints in
+  supported remote transcodes.
+- Expanded CI and end-to-end coverage for the Plex preload module, H.264 and
+  HEVC inputs and outputs, independent HLS segment decoding, reconnects, and
+  packaged stock-FFmpeg artifacts.
+- Included the Plex Transcoder wrapper and preload module in the prebuilt Linux
+  bundle, and made artifact smoke tests reject incomplete Plex payloads.
+- Moved per-context network flushes outside the VA driver's global object lock
+  so one slow teardown cannot stall unrelated contexts.
+- Added shared HELLO, CONFIGURE, compressed FRAME, PACKET side-data, and
+  malformed-length golden vectors for the C SDK and FFmpeg protocol clients.
+- Documented a matched-bitrate HEVC Main10 packet-transcode comparison against
+  Intel VA-API. The remote Apple M2 path was 1.58x faster for HEVC Main10
+  output, while the Intel path was 2.31x faster for H.264 output on the tested
+  1080p-to-720p workload.
+
 ## [v0.7.24] - 2026-09-02
 
 ### Changed

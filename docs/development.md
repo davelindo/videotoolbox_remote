@@ -12,6 +12,7 @@ Notes for contributors working on the client codecs, protocol, or daemon.
 - **`vtremoted/`**: Swift macOS daemon exposing VideoToolbox over TCP.
 - **`ffmpeg/`**: FFmpeg fork containing the remote codec implementations.
 - **`obs-plugin/`**: OBS plugin prototype using the same remote protocol.
+- **`vaapi-driver/`**: Linux VA-API encode driver, static C SDK, packaging, and Plex smoke tooling.
 - **`tests/`**: Integration tests and benchmarks.
 - **`docs/`**: Protocol and architecture documentation.
 
@@ -36,6 +37,11 @@ The `vtremoted` binary must not hard-link Homebrew `liblz4` or `libzstd`; those 
 ### Linux / Windows (Client Only)
 
 Linux CI and release artifacts target `x86_64`. The project does not publish or test 32-bit `i686` Linux builds.
+
+The VA-API driver job runs in Ubuntu 20.04 and builds the pinned libva 2.22 /
+VA-API 1.22 headers from source. This preserves the GLIBC 2.17 release-artifact
+baseline. Locally on Linux, run `make test-vaapi-driver`. The test suite uses
+the shared repository mock and stock FFmpeg's VA-API encoders.
 
 1.  **Install assembler and library dependencies**:
     ```bash

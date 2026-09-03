@@ -14,6 +14,7 @@
 #include "libavutil/log.h"
 #include "libavutil/mem.h"
 #include "libavcodec/vtremote_proto.h"
+#include "../../../vaapi-driver/tests/protocol_golden.h"
 
 static int test_roundtrip(void)
 {
@@ -370,6 +371,67 @@ static int test_parse_hello_ack_caps(void)
     return 0;
 }
 
+static int test_shared_golden_vectors(void)
+{
+    static const VTRemoteKV options[] = {
+        { "bitrate", "2000000" },
+        { "gop", "60" },
+    };
+    static const uint8_t packet_data[] = { 0x00, 0x00, 0x01 };
+    static const uint8_t side_data_0[] = { 0x07, 0x08, 0x09 };
+    static const uint8_t side_data_1[] = { 0x0a, 0x0b };
+    static const VTRemoteSideData side_data[] = {
+        { 42, sizeof(side_data_0), side_data_0 },
+        { 7, sizeof(side_data_1), side_data_1 },
+    };
+    VTRemoteWBuf payload;
+    VTRemoteFrameView frame;
+    VTRemotePacketView packet;
+
+    vtremote_wbuf_init(&payload);
+    av_assert0(vtremote_payload_hello(&payload, "TOKEN", "h264",
+                                      "ffmpeg-client", "build123") == 0);
+    av_assert0(payload.size == sizeof(vtremote_golden_hello));
+    av_assert0(!memcmp(payload.data, vtremote_golden_hello, payload.size));
+
+    av_assert0(vtremote_payload_configure(&payload, 1920, 1080,
+                                          VTREMOTE_PIX_FMT_NV12,
+                                          1, 30, 30, 1, options,
+                                          FF_ARRAY_ELEMS(options), NULL, 0) == 0);
+    av_assert0(payload.size == sizeof(vtremote_golden_configure));
+    av_assert0(!memcmp(payload.data, vtremote_golden_configure, payload.size));
+
+    av_assert0(vtremote_parse_frame(vtremote_golden_lz4_frame,
+                                    sizeof(vtremote_golden_lz4_frame),
+                                    &frame) == 0);
+    av_assert0(frame.pts == 7 && frame.duration == 1 && frame.flags == 1);
+    av_assert0(frame.plane_count == 1 && frame.planes[0].stride == 4);
+    av_assert0(frame.planes[0].height == 4 && frame.planes[0].data_len == 10);
+    av_assert0(frame.side_data_count == 0);
+
+    av_assert0(vtremote_payload_packet_ex(&payload, 11, 10, 3, 1,
+                                          packet_data, sizeof(packet_data),
+                                          side_data,
+                                          FF_ARRAY_ELEMS(side_data)) == 0);
+    av_assert0(payload.size == sizeof(vtremote_golden_packet_side_data));
+    av_assert0(!memcmp(payload.data, vtremote_golden_packet_side_data,
+                       payload.size));
+    av_assert0(vtremote_parse_packet(vtremote_golden_packet_side_data,
+                                     sizeof(vtremote_golden_packet_side_data),
+                                     &packet) == 0);
+    av_assert0(packet.pts == 11 && packet.dts == 10 && packet.duration == 3);
+    av_assert0(packet.side_data_count == 2);
+    av_assert0(vtremote_parse_packet(vtremote_bad_packet_data_length,
+                                     sizeof(vtremote_bad_packet_data_length),
+                                     &packet) < 0);
+    av_assert0(vtremote_parse_packet(vtremote_bad_packet_side_length,
+                                     sizeof(vtremote_bad_packet_side_length),
+                                     &packet) < 0);
+
+    vtremote_wbuf_free(&payload);
+    return 0;
+}
+
 int main(void)
 {
     int ret = 0;
@@ -384,5 +446,6 @@ int main(void)
     ret |= test_frame_and_packet_parse();
     ret |= test_pix_fmt_and_cap_helpers();
     ret |= test_parse_hello_ack_caps();
+    ret |= test_shared_golden_vectors();
     return ret ? 1 : 0;
 }

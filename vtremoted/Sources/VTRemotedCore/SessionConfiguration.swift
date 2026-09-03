@@ -185,6 +185,7 @@ public struct SessionConfiguration: Sendable {
 public struct SessionOptions: Equatable, Sendable {
     public var bitrate: Int
     public var maxRate: Int
+    public var bufferSize: Int
     public var gop: Int
     public var maxBFrames: Int
     public var flags: Int64
@@ -234,6 +235,7 @@ public struct SessionOptions: Equatable, Sendable {
 
         bitrate = int("bitrate", 0)
         maxRate = int("maxrate", 0)
+        bufferSize = int("bufsize", 0)
         gop = int("gop", 0)
         maxBFrames = int("max_b_frames", 0)
         flags = int64("flags", 0)

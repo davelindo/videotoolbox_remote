@@ -45,6 +45,8 @@ Start with the [getting started guide](docs/getting-started.md) for setup, secur
 | `vtremoted-macos-arm64.tar.gz` | macOS server binary for Apple Silicon Macs |
 | `vtremoted-macos-x86_64.tar.gz` | macOS server binary for Intel Macs |
 | `ffmpeg-linux-x86_64.tar.gz` | FFmpeg client build for Linux x86_64 |
+| `vtremote-vaapi-linux-x86_64.tar.gz` | Encode-only VA-API driver, Plex packet shim, and experimental static C SDK for Linux |
+| `vtremote-vaapi-*-source.tar.gz` | Matching VA-API driver source bundle |
 | `ffmpeg-macos-arm64.tar.gz` | FFmpeg client build for Apple Silicon Macs |
 | `ffmpeg-macos-x86_64.tar.gz` | FFmpeg client build for Intel Macs |
 | `ffmpeg-windows-x86_64.tar.gz` | FFmpeg client build for Windows x86_64 |
@@ -67,11 +69,12 @@ Not a good fit:
 
 ## How It Works
 
-The system has three main parts:
+The system has four main parts:
 
 - **Server (`vtremoted`)**: A lightweight Swift daemon on macOS that wraps VideoToolbox.
 - **FFmpeg client**: A patched FFmpeg build with `h264_videotoolbox_remote` and `hevc_videotoolbox_remote` codecs.
 - **OBS plugin (`obs-plugin/`)**: Experimental OBS encoder plugin using the same protocol client.
+- **VA-API driver (`vaapi-driver/`)**: Linux encode driver for stock VA-API applications, including an experimental Plex path.
 
 FFmpeg stays local for files, filters, audio, subtitles, and muxing. The remote codec sends video work over TCP to the Mac and receives encoded packets or decoded frames back.
 
@@ -113,7 +116,8 @@ ffmpeg -i input.mkv \
 ## Performance and Compatibility
 
 - Wired LAN is strongly recommended: 1GbE minimum, 2.5GbE+ for 4K.
-- Wire compression supports LZ4 and Zstd; default clients request LZ4.
+- Wire compression supports LZ4 and Zstd. FFmpeg/OBS request LZ4 by default;
+  the VA-API driver defaults to automatic selection.
 - Current benchmark docs report 1080p H.264 around 230 fps and 4K H.264 around 62 fps on Apple Silicon loopback tests. See [benchmarks](docs/benchmarks.md) for caveats and reproduction commands.
 - The remote codecs aim to preserve local VideoToolbox option behavior where the transport and protocol can represent it.
 
@@ -145,6 +149,15 @@ make build-ffmpeg
 
 The standard build enables VMAF, SSIM/PSNR, and common codec libraries, including AV1. Linux release artifacts and CI builds target `x86_64`; 32-bit `i686` builds are not part of the supported matrix.
 
+### VA-API driver on Linux
+
+For stock VA-API applications, install `vtremote-vaapi-linux-x86_64.tar.gz`
+or run `make test-vaapi-driver`. The driver supports H.264 and HEVC encode,
+including Main 10/P010, with application-side decode and filtering. The Plex
+container uses a separate compressed-packet path so `vtremoted` performs the
+complete video decode, scale, and encode pipeline without a Linux GPU. See the
+[VA-API and Plex guide](docs/vaapi-driver.md).
+
 If a Linux source build fails in FFmpeg x86 assembly after installing current `nasm` and `yasm`, use the diagnostic fallback:
 
 ```bash
@@ -161,6 +174,7 @@ make build-ffmpeg FFMPEG_DISABLE_X86ASM=1
 - [Security](docs/security.md) - Recommended secure deployment.
 - [Troubleshooting](docs/troubleshooting.md) - Common issues and fixes.
 - [OBS plugin](docs/obs-plugin.md) - Experimental plugin build/testing notes.
+- [VA-API driver and Plex](docs/vaapi-driver.md) - Linux driver installation, scope, and playback validation.
 - [Development](docs/development.md) - Build, test, benchmark, and release notes.
 
 ## Contributing and Support

@@ -36,6 +36,15 @@ flowchart LR
     4.  Converts output NALs to **Annex B**.
     5.  Returns packets with PTS/DTS.
 
+### Linux VA-API driver
+
+- **Profiles**: H.264 Baseline/Main/High and HEVC Main/Main 10 encode.
+- **Responsibilities**: Accept software-uploaded NV12/P010 VA surfaces, map
+  libva encoder parameters to protocol v1, compress planes, convert returned
+  codec configuration to Annex-B parameter sets, and publish remote access
+  units as independently decodable VA coded buffers.
+- **Boundary**: No VA-API decode, video processing, or external surfaces.
+
 ## 2. Data Flow (Encode)
 
 1.  **Handshake**: Message `HELLO` exchange.
@@ -83,6 +92,7 @@ CVPixelBuffer references are not treated as cross-host zero-copy objects.
 
 - **`ffmpeg/`**: Forked codebase with `libavcodec/vtremote*`.
 - **`vtremoted/`**: SwiftPM server implementation.
+- **`vaapi-driver/`**: Encode-only Linux VA-API driver and experimental C SDK.
 - **`tests/`**: Integration tests and Python mock server.
 - **`docs/`**: Protocol and Architecture documentation.
 

@@ -1,0 +1,13 @@
+services:
+  plex:
+    build:
+      context: ../..
+      dockerfile: vaapi-driver/docker/Dockerfile.plex
+      args:
+        VTREMOTE_VERSION: "${VTREMOTE_VERSION:-dev}"
+    environment:
+      VTREMOTE_HOST: "${VTREMOTE_HOST:?set VTREMOTE_HOST to the Mac daemon endpoint}"
+      VTREMOTE_TOKEN: "${VTREMOTE_TOKEN:-}"
+      VTREMOTE_PLEX_REMOTE_TRANSCODE: "1"
+      VTREMOTE_TIMEOUT_MS: "${VTREMOTE_TIMEOUT_MS:-10000}"
+      VTREMOTE_LOG: "${VTREMOTE_LOG:-1}"

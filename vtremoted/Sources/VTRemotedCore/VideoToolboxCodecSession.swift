@@ -1363,9 +1363,15 @@
             }
 
             if codec == .h264 || codec == .hevc, config.options.maxRate > 0 {
-                let bytesPerSecond = Int64(config.options.maxRate >> 3)
-                let oneSecond: Int64 = 1
-                let arr = [NSNumber(value: bytesPerSecond), NSNumber(value: oneSecond)] as CFArray
+                let windowBits = config.options.bufferSize > 0
+                    ? config.options.bufferSize : config.options.maxRate
+                let bytesPerWindow = Double(windowBits) / 8.0
+                let windowSeconds = Double(windowBits) /
+                    Double(config.options.maxRate)
+                let arr = [
+                    NSNumber(value: bytesPerWindow),
+                    NSNumber(value: windowSeconds),
+                ] as CFArray
                 let status = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits, value: arr)
                 if status != noErr, codec != .hevc {
                     throw VTRemotedError.ioError(code: Int32(status), message: "set DataRateLimits failed")

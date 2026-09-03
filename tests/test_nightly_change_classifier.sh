@@ -15,9 +15,10 @@ git_init() {
 }
 
 write_base_tree() {
-    mkdir -p ffmpeg vtremoted tests/integration docs .github/workflows
+    mkdir -p ffmpeg vtremoted vaapi-driver tests/integration docs .github/workflows
     printf 'base\n' > ffmpeg/configure
     printf 'base\n' > vtremoted/Package.swift
+    printf 'base\n' > vaapi-driver/CMakeLists.txt
     printf 'base\n' > tests/integration/run_mock_roundtrip.sh
     printf 'base\n' > docs/index.md
     printf 'base\n' > README.md
@@ -70,6 +71,7 @@ git tag nightly
 missing_output="$(bash "${classifier}" nightly-missing HEAD)"
 assert_output "${missing_output}" "nightly_exists" "false"
 assert_output "${missing_output}" "publishable" "true"
+assert_output "${missing_output}" "vaapi_driver" "true"
 
 run_case "docs-only" "docs/index.md" "docs change" \
     "nightly_exists" "true" \
@@ -80,6 +82,7 @@ run_case "makefile-only" "Makefile" "build logic change" \
     "nightly_exists" "true" \
     "ffmpeg" "true" \
     "vtremoted" "true" \
+    "vaapi_driver" "true" \
     "obs_plugin" "true" \
     "publishable" "true"
 
@@ -91,6 +94,11 @@ run_case "ffmpeg-only" "ffmpeg/configure" "ffmpeg change" \
 run_case "vtremoted-only" "vtremoted/Package.swift" "vtremoted change" \
     "nightly_exists" "true" \
     "vtremoted" "true" \
+    "publishable" "true"
+
+run_case "vaapi-only" "vaapi-driver/CMakeLists.txt" "vaapi change" \
+    "nightly_exists" "true" \
+    "vaapi_driver" "true" \
     "publishable" "true"
 
 echo "ok"
