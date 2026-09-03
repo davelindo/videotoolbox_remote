@@ -41,6 +41,23 @@ Apple Silicon loopback testing remains useful as an upper-bound reference: appro
 
 These results use deterministic synthetic sources and short benchmark windows. Natural-video content, concurrent traffic, thermals, codec settings, and client-side filtering can materially change throughput.
 
+## v0.8.0 Packet Transcode vs Intel VA-API
+
+The v0.8.0 packet-transcode path was also compared with the Linux client's local Intel VA-API pipeline. The source was a deterministic 60-second, 1,800-frame, 1920x1080p30 HEVC Main10 stream. Both paths decoded, scaled to 1280x720, and encoded the same source. The local path used an Alder Lake-P GT1 Intel UHD Graphics iGPU; the remote path used an Apple M2 server over 2.5 GbE. Each result is the median of three alternating measured runs after an unmeasured warm-up.
+
+Output bitrate was calibrated from the delivered files instead of comparing nominal encoder settings. Apple required a 6 Mb/s request to deliver approximately 4 Mb/s H.264, while Intel required 4 Mb/s; for the approximately 3 Mb/s HEVC outputs, the requests were 4.5 Mb/s and 3 Mb/s respectively. Both paths used CBR mode, a 60-frame GOP, no B-frames, and matching output profile and pixel format. VMAF used a software-decoded, bicubic-scaled version of the compressed source as its reference.
+
+| Output | Path | Median time | Throughput | Realtime | Delivered bitrate | VMAF | Linux CPU time |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| H.264 High, NV12 | Remote Apple M2 | 6.95 s | 259.0 fps | 8.63x | 4.002 Mb/s | 92.476 | 0.67 s |
+| H.264 High, NV12 | Local Intel VA-API | 3.01 s | 598.0 fps | 19.93x | 4.058 Mb/s | 93.463 | 3.60 s |
+| HEVC Main10, P010 | Remote Apple M2 | 5.75 s | 313.0 fps | 10.43x | 3.002 Mb/s | 92.705 | 0.60 s |
+| HEVC Main10, P010 | Local Intel VA-API | 9.09 s | 198.0 fps | 6.60x | 3.009 Mb/s | 93.208 | 5.45 s |
+
+The result is codec-dependent. For HEVC Main10 output, the remote path was 1.58x as fast as the Intel path while VMAF differed by 0.50 point. For H.264 output, the Intel path was 2.31x as fast and scored 0.99 VMAF point higher. The remote process used approximately 18 MiB maximum resident memory on the Linux client, compared with 96 MiB for local H.264 and 157 MiB for local HEVC. A separate engine-activity sample observed 0% Intel GPU use during the remote HEVC run; the local HEVC run reached 91% Render/3D and 27% Video activity.
+
+All four representative outputs contained 1,800 packets and decoded without errors. These results cover the packet-in/packet-out video path, not audio, subtitles, container delivery, or concurrent Plex sessions. They are a controlled synthetic comparison on a live LAN rather than a general quality ranking or a capacity guarantee.
+
 ## What Affects Results
 
 - **Network mode**: Remote encode sends raw frames and benefits from LZ4/Zstd wire compression. Remote transcode sends compressed packets and can use far less bandwidth.
