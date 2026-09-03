@@ -127,6 +127,10 @@ software-scale/format/hardware-upload graph. A successful remote handshake
 appends `remote-decode-scale-encode` to `VTREMOTE_PLEX_AUDIT_FILE`. If the
 marker does not appear, the wrapper deliberately passed the command through
 unchanged.
+This also happens when Plex's bundled `libavcodec` fingerprint or full
+`avcodec_version()` is not on the tested allowlist, when the command contains
+an encoder constraint that cannot be translated exactly, or when it contains
+multiple video inputs or outputs.
 Tone mapping, deinterlace, subtitle burn-in, unsupported graphs, audio
 transcoding, and container I/O can still consume Linux CPU.
 

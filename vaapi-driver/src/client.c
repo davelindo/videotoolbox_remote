@@ -370,15 +370,18 @@ static int read_all(int fd, uint8_t *data, size_t size) {
 }
 
 static int send_message(VTRClient *client, uint16_t type,
-                        const uint8_t *payload, uint32_t payload_size) {
+                        const uint8_t *payload, size_t payload_size) {
     uint8_t header[VTR_HEADER_SIZE];
+    uint32_t wire_size;
     int rc;
     if (!client || client->fd < 0) return -ENOTCONN;
-    if (vtr_validate_message_size(type, payload_size) < 0) return -EOVERFLOW;
+    if (payload_size > UINT32_MAX) return -EOVERFLOW;
+    wire_size = (uint32_t)payload_size;
+    if (vtr_validate_message_size(type, wire_size) < 0) return -EOVERFLOW;
     write_be32(header, VTR_PROTO_MAGIC);
     write_be16(header + 4, VTR_PROTO_VERSION);
     write_be16(header + 6, type);
-    write_be32(header + 8, payload_size);
+    write_be32(header + 8, wire_size);
     if ((rc = write_all(client->fd, header, sizeof(header))) < 0) return rc;
     if (payload_size) return write_all(client->fd, payload, payload_size);
     return 0;
@@ -647,7 +650,7 @@ int vtr_client_connect(VTRClient *client, const VTRClientConfig *config,
     rc = vtr_build_hello(&client->tx, config->token ? config->token : "",
                          config->codec, "vtremote-vaapi", VTREMOTE_VERSION);
     if (rc < 0 || (rc = send_message(client, VTR_MSG_HELLO, client->tx.data,
-                                     (uint32_t)client->tx.size)) < 0 ||
+                                     client->tx.size)) < 0 ||
         (rc = receive_message(client, &message)) < 0) {
         set_error(error, error_size, "HELLO transport failed: %s", strerror(-rc));
         goto fail;
@@ -690,7 +693,7 @@ int vtr_client_connect(VTRClient *client, const VTRClientConfig *config,
                              config->frame_rate_den ? config->frame_rate_den : 1,
                              options, sizeof(options) / sizeof(options[0]));
     if (rc < 0 || (rc = send_message(client, VTR_MSG_CONFIGURE, client->tx.data,
-                                     (uint32_t)client->tx.size)) < 0 ||
+                                     client->tx.size)) < 0 ||
         (rc = receive_message(client, &message)) < 0) {
         set_error(error, error_size, "CONFIGURE transport failed: %s", strerror(-rc));
         goto fail;
@@ -706,9 +709,8 @@ int vtr_client_connect(VTRClient *client, const VTRClientConfig *config,
     return 0;
 
 fail:
-    if (client->fd >= 0) close(client->fd);
-    client->fd = -1;
-    client->connected = 0;
+    vtr_client_destroy(client);
+    vtr_client_init(client);
     return rc;
 }
 
@@ -723,7 +725,7 @@ int vtr_client_encode(VTRClient *client, const VTRFrame *frame,
     if ((rc = vtr_build_frame(&client->tx, frame,
                               client->wire_compression)) < 0 ||
         (rc = send_message(client, VTR_MSG_FRAME, client->tx.data,
-                           (uint32_t)client->tx.size)) < 0) {
+                           client->tx.size)) < 0) {
         set_error(error, error_size, "FRAME send failed: %s", strerror(-rc));
         return rc;
     }

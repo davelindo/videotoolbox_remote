@@ -10,9 +10,11 @@ The image installs a narrow wrapper in front of Plex Transcoder. It recognizes
 Plex's ordinary software-scale/format/hardware-upload graph and replaces the
 complete video chain with the `vtremote_transcode` packet filter. Unknown
 codecs, multiple hardware graphs, tone mapping, deinterlace, and other
-unrecognized graphs pass through unchanged to Plex's native Transcoder. A
-native fallback can use only devices
-that you separately expose to the container.
+unrecognized graphs pass through unchanged to Plex's native Transcoder. The
+same native fallback applies to multiple video streams, indirect filter labels,
+and compatibility-critical encoder options that cannot be translated exactly.
+A native fallback can use only devices that you separately expose to the
+container.
 
 The image pins an amd64 official `pms-docker` bootstrap digest. Like the
 upstream `beta` image, its init script downloads the configured Plex Media
@@ -29,16 +31,27 @@ Use `docker/docker-compose.plex.yml.example` as a merge fragment. Set
 existing Plex configuration as required by the official image. Do not add a
 render device for the remote path.
 
-The integration builds its injected filter against official FFmpeg 6.1
-headers. At runtime it verifies the libavcodec major before accessing the
-private BSF context layout. This is deliberately tied to Plex's current FFmpeg
-6 family and fails closed after an incompatible Plex upgrade.
+The integration builds its injected filter against official FFmpeg 6.1.1
+headers. Container startup checks the bundled `libavcodec` against an explicit
+allowlist of tested fingerprints before installing the wrapper, and each
+wrapper invocation checks the full runtime `avcodec_version()` before rewriting
+arguments. The preload module repeats the full-version check before accessing
+the private BSF context. Plex Media Server 1.43.3.10896 is covered by an
+unclaimed-server end-to-end test. An unrecognized Plex upgrade fails closed and
+keeps native transcoding.
+
+The recognized path translates bitrate, maximum rate, buffer window,
+GOP/B-frame settings, profile, level, entropy mode, and CBR/VBR/CQP selection.
+The ordinary periodic `force_key_frames` expression becomes a closed GOP based
+on Plex's requested frame rate. Any unsupported value leaves the original
+command intact.
 
 ## Unclaimed-server validation
 
 First validate the bundled Plex Transcoder without claiming a server. The
 script creates a short H.264 source, submits a Plex-shaped hardware graph,
-then requires 24 decoded H.264 frames at the remotely requested dimensions:
+then requires 96 decoded H.264 frames across at least three independently
+decodable, keyframe-aligned segments at the remotely requested dimensions:
 
 ```bash
 PLEX_CONTAINER=plex \

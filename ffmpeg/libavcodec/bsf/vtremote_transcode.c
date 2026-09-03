@@ -85,6 +85,7 @@ typedef struct VTRemoteTranscodeContext {
     int decode_reorder_depth;
     int bitrate;
     int maxrate;
+    int bufsize;
     int gop;
     int max_b_frames;
     int profile;
@@ -109,6 +110,7 @@ typedef struct VTRemoteTranscodeContext {
     int sar_den;
     int a53_cc;
     int64_t flags;
+    int global_quality;
     uint64_t server_caps;
     int warned_packet_side_data_no_cap;
     int fd;
@@ -1032,11 +1034,13 @@ static int vtremote_append_transcode_opts(AVBSFContext *ctx, VTRemoteKV **opts,
     const VTRemoteIntOptSpec encode_int_opts[] = {
         { "bitrate", s->bitrate, 1 },
         { "maxrate", s->maxrate, 1 },
+        { "bufsize", s->bufsize, 1 },
         { "gop", s->gop, 1 },
         { "max_b_frames", s->max_b_frames, 0 },
         { "profile", s->profile, 0 },
         { "level", s->level, 1 },
         { "entropy", s->entropy, 0 },
+        { "global_quality", s->global_quality, 1 },
     };
     const VTRemoteIntOptSpec post_bool_int_opts[] = {
         { "realtime", s->realtime, 0 },
@@ -1749,11 +1753,13 @@ static const AVOption vtremote_transcode_options[] = {
     { "vt_remote_decode_reorder_depth", "decode reorder depth", OFFSET(decode_reorder_depth), AV_OPT_TYPE_INT, { .i64 = 2 }, -1, 64, FLAGS },
     { "vt_remote_bitrate", "target bitrate", OFFSET(bitrate), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },
     { "vt_remote_maxrate", "max bitrate", OFFSET(maxrate), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },
+    { "vt_remote_bufsize", "VBV buffer size in bits", OFFSET(bufsize), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },
     { "vt_remote_gop", "gop size", OFFSET(gop), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },
     { "vt_remote_max_b_frames", "max b-frames", OFFSET(max_b_frames), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 16, FLAGS },
     { "vt_remote_profile", "profile", OFFSET(profile), AV_OPT_TYPE_INT, { .i64 = -99 }, -99, INT_MAX, FLAGS },
     { "vt_remote_level", "level", OFFSET(level), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },
     { "vt_remote_entropy", "entropy", OFFSET(entropy), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 2, FLAGS },
+    { "vt_remote_global_quality", "VideoToolbox quality from 1 to 100", OFFSET(global_quality), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 100, FLAGS },
     { "vt_remote_allow_sw", "allow software encoding", OFFSET(allow_sw), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, FLAGS },
     { "vt_remote_require_sw", "require software encoding", OFFSET(require_sw), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, FLAGS },
     { "vt_remote_realtime", "realtime encode hint", OFFSET(realtime), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, 1, FLAGS },

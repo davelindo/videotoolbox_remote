@@ -51,6 +51,7 @@ target_link_libraries(vtremote-probe PRIVATE vtremote_client)
 target_compile_options(vtremote-probe PRIVATE ${VTREMOTE_WARNING_FLAGS})
 
 add_executable(vtremote-plex-transcoder tools/plex-transcoder-wrapper.c)
+target_link_libraries(vtremote-plex-transcoder PRIVATE ${CMAKE_DL_LIBS})
 target_compile_options(vtremote-plex-transcoder PRIVATE ${VTREMOTE_WARNING_FLAGS})
 
 if(VTREMOTE_PLEX_FFMPEG_SOURCE_DIR)
@@ -77,6 +78,7 @@ if(VTREMOTE_PLEX_FFMPEG_SOURCE_DIR)
         -Wno-missing-field-initializers
     )
     set_target_properties(vtremote_plex_bsf PROPERTIES
+        C_VISIBILITY_PRESET hidden
         PREFIX ""
         OUTPUT_NAME "vtremote-plex-bsf"
     )
@@ -175,12 +177,31 @@ if(BUILD_TESTING)
     target_compile_options(vtremote_protocol_test PRIVATE ${VTREMOTE_WARNING_FLAGS})
     add_test(NAME vtremote_protocol_unit COMMAND vtremote_protocol_test)
 
+    add_executable(vtremote_client_reconnect_test tests/test_client_reconnect.c)
+    target_link_libraries(vtremote_client_reconnect_test PRIVATE vtremote_client)
+    target_compile_options(vtremote_client_reconnect_test PRIVATE ${VTREMOTE_WARNING_FLAGS})
+
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME vtremote_client_reconnect_e2e
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_client_reconnect_e2e.py
+            --test $<TARGET_FILE:vtremote_client_reconnect_test>
+            --mock ${CMAKE_CURRENT_SOURCE_DIR}/../tests/integration/mock_vtremoted/mock_vtremoted.py
+    )
     add_test(NAME vtremote_plex_transcoder_wrapper_unit
         COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_plex_transcoder_wrapper.py
             --wrapper $<TARGET_FILE:vtremote-plex-transcoder>
     )
+
+    add_executable(vtremote_plex_ffmpeg_compat_test
+        tests/test_plex_ffmpeg_compat.c)
+    target_include_directories(vtremote_plex_ffmpeg_compat_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools)
+    target_compile_options(vtremote_plex_ffmpeg_compat_test PRIVATE
+        ${VTREMOTE_WARNING_FLAGS})
+    add_test(NAME vtremote_plex_ffmpeg_compat_unit
+        COMMAND vtremote_plex_ffmpeg_compat_test)
 
     set(VTREMOTE_MOCK_PATH
         "${CMAKE_CURRENT_SOURCE_DIR}/../tests/integration/mock_vtremoted/mock_vtremoted.py"

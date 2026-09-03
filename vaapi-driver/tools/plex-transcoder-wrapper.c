@@ -1,15 +1,23 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #define _POSIX_C_SOURCE 200809L
 
+#include <dlfcn.h>
 #include <errno.h>
+#include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
+
+#include "plex-ffmpeg-compat.h"
 
 #define DEFAULT_REAL_TRANSCODER "/usr/lib/plexmediaserver/Plex Transcoder.real"
 #define DEFAULT_BSF_LIBRARY "/opt/vtremote-vaapi/lib/vtremote-plex-bsf.so"
+#define DEFAULT_AVCODEC_LIBRARY "/usr/lib/plexmediaserver/lib/libavcodec.so.60"
+
+typedef unsigned (*avcodec_version_fn)(void);
 
 typedef struct RemoteGraph {
     int option_index;
@@ -18,6 +26,17 @@ typedef struct RemoteGraph {
     unsigned width;
     unsigned height;
 } RemoteGraph;
+
+typedef struct RemoteEncoderOptions {
+    char profile[16];
+    char level[16];
+    char entropy[8];
+    char gop[32];
+    char global_quality[16];
+    bool constant_bit_rate;
+    bool a53_cc;
+    bool closed_gop;
+} RemoteEncoderOptions;
 
 static bool env_enabled(const char *name)
 {
@@ -29,6 +48,71 @@ static bool has_environment_value(const char *name)
 {
     const char *value = getenv(name);
     return value != NULL && *value != '\0';
+}
+
+static bool parse_version_component(const char **cursor, unsigned *value,
+                                    bool final)
+{
+    char *end = NULL;
+    unsigned long parsed;
+
+    errno = 0;
+    parsed = strtoul(*cursor, &end, 10);
+    if (errno != 0 || end == *cursor || parsed > 255 ||
+        (final ? *end != '\0' : *end != '.')) {
+        return false;
+    }
+    *value = (unsigned)parsed;
+    *cursor = final ? end : end + 1;
+    return true;
+}
+
+static bool parse_avcodec_version(const char *text, uint32_t *version)
+{
+    const char *cursor = text;
+    unsigned major;
+    unsigned minor;
+    unsigned micro;
+
+    if (text == NULL || version == NULL ||
+        !parse_version_component(&cursor, &major, false) ||
+        !parse_version_component(&cursor, &minor, false) ||
+        !parse_version_component(&cursor, &micro, true)) {
+        return false;
+    }
+    *version = VTREMOTE_AV_VERSION_INT(major, minor, micro);
+    return true;
+}
+
+static bool plex_runtime_supported(bool test_mode)
+{
+    const char *library = getenv("VTREMOTE_PLEX_AVCODEC_LIBRARY");
+    uint32_t version;
+    void *handle;
+    void *symbol;
+    avcodec_version_fn version_function = NULL;
+
+    if (test_mode) {
+        return parse_avcodec_version(
+                   getenv("VTREMOTE_PLEX_TEST_AVCODEC_VERSION"), &version) &&
+               vtremote_plex_avcodec_version_supported(version);
+    }
+    if (library == NULL || *library == '\0') {
+        library = DEFAULT_AVCODEC_LIBRARY;
+    }
+    handle = dlopen(library, RTLD_NOW | RTLD_LOCAL);
+    if (handle == NULL) {
+        return false;
+    }
+    symbol = dlsym(handle, "avcodec_version");
+    memcpy(&version_function, &symbol, sizeof(version_function));
+    if (version_function == NULL) {
+        (void)dlclose(handle);
+        return false;
+    }
+    version = version_function();
+    (void)dlclose(handle);
+    return vtremote_plex_avcodec_version_supported(version);
 }
 
 static char *copy_range(const char *start, const char *end)
@@ -49,6 +133,26 @@ static bool labels_match(const char *first, size_t first_length,
 {
     return first_length == second_length &&
            memcmp(first, second, first_length) == 0;
+}
+
+static bool is_direct_stream_specifier(const char *start, const char *end)
+{
+    const char *cursor = start;
+
+    if (start == NULL || end == NULL || start >= end) {
+        return false;
+    }
+    while (cursor < end && *cursor >= '0' && *cursor <= '9') {
+        ++cursor;
+    }
+    if (cursor == start || cursor >= end || *cursor++ != ':') {
+        return false;
+    }
+    start = cursor;
+    while (cursor < end && *cursor >= '0' && *cursor <= '9') {
+        ++cursor;
+    }
+    return cursor == end && cursor != start;
 }
 
 static bool parse_positive_uint(const char *text, size_t length,
@@ -147,6 +251,9 @@ static bool parse_remote_graph(const char *graph, RemoteGraph *parsed)
     input_label = graph + 1;
     input_close = strchr(input_label, ']');
     if (input_close == NULL) {
+        return false;
+    }
+    if (!is_direct_stream_specifier(input_label, input_close)) {
         return false;
     }
     if (strncmp(input_close + 1, scale_prefix, strlen(scale_prefix)) != 0) {
@@ -291,32 +398,41 @@ static bool is_codec_option(const char *argument)
     return is_option(argument, "-codec") || is_option(argument, "-c");
 }
 
-static int find_vaapi_encoder(int argc, char *const argv[])
+static int find_unique_vaapi_encoder(int argc, char *const argv[])
 {
+    int found = -1;
     int index;
 
     for (index = 2; index < argc; ++index) {
         if ((strcmp(argv[index], "h264_vaapi") == 0 ||
              strcmp(argv[index], "hevc_vaapi") == 0) &&
             is_codec_option(argv[index - 1])) {
-            return index;
+            if (found >= 0) {
+                return -1;
+            }
+            found = index;
         }
     }
-    return -1;
+    return found;
 }
 
-static int find_supported_input_codec(char *const argv[], int encoder_index)
+static int find_unique_supported_input_codec(char *const argv[],
+                                             int encoder_index)
 {
+    int found = -1;
     int index;
 
     for (index = 2; index < encoder_index; ++index) {
         if ((strcmp(argv[index], "h264") == 0 ||
              strcmp(argv[index], "hevc") == 0) &&
             is_codec_option(argv[index - 1])) {
-            return index;
+            if (found >= 0) {
+                return -1;
+            }
+            found = index;
         }
     }
-    return -1;
+    return found;
 }
 
 static bool map_matches(const char *argument, const char *label)
@@ -330,6 +446,20 @@ static bool map_matches(const char *argument, const char *label)
     return strlen(argument) == length + 2 &&
            memcmp(argument + 1, label, length) == 0 &&
            argument[length + 1] == ']';
+}
+
+static int mapped_output_count(int argc, char *const argv[], const char *label)
+{
+    int count = 0;
+    int index;
+
+    for (index = 1; index + 1 < argc; ++index) {
+        if (strcmp(argv[index], "-map") == 0 &&
+            map_matches(argv[index + 1], label)) {
+            ++count;
+        }
+    }
+    return count;
 }
 
 static const char *last_stream_option(int argc, char *const argv[],
@@ -353,6 +483,318 @@ static bool safe_option_value(const char *value)
            strspn(value, "0123456789.kKmMgG-") == strlen(value);
 }
 
+static bool parse_unsigned_value(const char *text, unsigned maximum,
+                                 unsigned *value)
+{
+    char *end = NULL;
+    unsigned long parsed;
+
+    if (text == NULL || *text == '\0' || value == NULL) {
+        return false;
+    }
+    errno = 0;
+    parsed = strtoul(text, &end, 10);
+    if (errno != 0 || *end != '\0' || parsed > maximum) {
+        return false;
+    }
+    *value = (unsigned)parsed;
+    return true;
+}
+
+static bool parse_rate_value(const char *text, unsigned *value)
+{
+    char *end = NULL;
+    double parsed;
+    double multiplier = 1.0;
+
+    if (text == NULL || *text == '\0' || value == NULL) {
+        return false;
+    }
+    errno = 0;
+    parsed = strtod(text, &end);
+    if (errno != 0 || end == text || parsed < 0.0) {
+        return false;
+    }
+    if (*end != '\0') {
+        if (end[1] != '\0') {
+            return false;
+        }
+        switch (*end) {
+        case 'k':
+        case 'K':
+            multiplier = 1000.0;
+            break;
+        case 'm':
+        case 'M':
+            multiplier = 1000000.0;
+            break;
+        case 'g':
+        case 'G':
+            multiplier = 1000000000.0;
+            break;
+        default:
+            return false;
+        }
+    }
+    parsed *= multiplier;
+    if (parsed > 2147483647.0) {
+        return false;
+    }
+    *value = (unsigned)(parsed + 0.5);
+    return true;
+}
+
+static bool translate_profile(const char *encoder, const char *value,
+                              char *translated, size_t size)
+{
+    static const struct {
+        const char *name;
+        unsigned h264;
+        unsigned hevc;
+    } profiles[] = {
+        {"baseline", 66, 0},
+        {"constrained_baseline", 578, 0},
+        {"main", 77, 1},
+        {"high", 100, 0},
+        {"constrained_high", 612, 0},
+        {"main10", 0, 2},
+    };
+    bool hevc = strcmp(encoder, "hevc_vaapi") == 0;
+    unsigned numeric;
+    size_t index;
+
+    if (value == NULL) {
+        translated[0] = '\0';
+        return true;
+    }
+    if (parse_unsigned_value(value, 65535, &numeric)) {
+        if ((hevc && numeric != 1 && numeric != 2) ||
+            (!hevc && numeric != 66 && numeric != 77 && numeric != 100 &&
+             numeric != 578 && numeric != 612)) {
+            return false;
+        }
+        (void)snprintf(translated, size, "%u", numeric);
+        return true;
+    }
+    for (index = 0; index < sizeof(profiles) / sizeof(profiles[0]); ++index) {
+        numeric = hevc ? profiles[index].hevc : profiles[index].h264;
+        if (numeric != 0 && strcasecmp(value, profiles[index].name) == 0) {
+            (void)snprintf(translated, size, "%u", numeric);
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool translate_level(const char *value, char *translated, size_t size)
+{
+    char *end = NULL;
+    double parsed;
+    unsigned numeric;
+
+    if (value == NULL || strcmp(value, "0") == 0 ||
+        strcasecmp(value, "auto") == 0) {
+        translated[0] = '\0';
+        return true;
+    }
+    errno = 0;
+    parsed = strtod(value, &end);
+    if (errno != 0 || end == value || *end != '\0' || parsed <= 0.0 ||
+        parsed > 255.0) {
+        return false;
+    }
+    numeric = strchr(value, '.') != NULL
+                  ? (unsigned)(parsed * 10.0 + 0.5)
+                  : (unsigned)(parsed + 0.5);
+    if (numeric != 13 && (numeric < 30 || numeric > 52)) {
+        return false;
+    }
+    (void)snprintf(translated, size, "%u", numeric);
+    return true;
+}
+
+static bool translate_entropy(const char *encoder, const char *value,
+                              char *translated, size_t size)
+{
+    if (value == NULL) {
+        translated[0] = '\0';
+        return true;
+    }
+    if (strcmp(encoder, "h264_vaapi") != 0) {
+        return false;
+    }
+    if (strcasecmp(value, "cabac") == 0 || strcasecmp(value, "ac") == 0 ||
+        strcmp(value, "1") == 0) {
+        (void)snprintf(translated, size, "2");
+        return true;
+    }
+    if (strcasecmp(value, "cavlc") == 0 || strcasecmp(value, "vlc") == 0 ||
+        strcmp(value, "0") == 0) {
+        (void)snprintf(translated, size, "1");
+        return true;
+    }
+    return false;
+}
+
+static bool translate_force_keyframes(const char *value, const char *rate,
+                                      char *translated, size_t size)
+{
+    static const char prefix[] = "expr:gte(t,n_forced*";
+    const char *seconds_text;
+    char *seconds_end = NULL;
+    char *rate_end = NULL;
+    double seconds;
+    double frames_per_second;
+    unsigned frames;
+
+    if (value == NULL) {
+        translated[0] = '\0';
+        return true;
+    }
+    if (*value == '\0' || strncmp(value, prefix, sizeof(prefix) - 1) != 0 ||
+        value[strlen(value) - 1] != ')' || rate == NULL) {
+        return false;
+    }
+    seconds_text = value + sizeof(prefix) - 1;
+    errno = 0;
+    seconds = strtod(seconds_text, &seconds_end);
+    if (errno != 0 || seconds_end == seconds_text ||
+        strcmp(seconds_end, ")") != 0 || seconds <= 0.0) {
+        return false;
+    }
+    errno = 0;
+    frames_per_second = strtod(rate, &rate_end);
+    if (errno != 0 || rate_end == rate || *rate_end != '\0' ||
+        frames_per_second <= 0.0) {
+        return false;
+    }
+    if (seconds * frames_per_second > 100000.0) {
+        return false;
+    }
+    frames = (unsigned)(seconds * frames_per_second + 0.5);
+    if (frames == 0) {
+        return false;
+    }
+    (void)snprintf(translated, size, "%u", frames);
+    return true;
+}
+
+static bool translate_encoder_options(int argc, char *const argv[],
+                                      const char *encoder,
+                                      const char *codec_option,
+                                      RemoteEncoderOptions *translated)
+{
+    const char *rc_mode = last_stream_option(argc, argv, "-rc_mode",
+                                             codec_option);
+    const char *qp = last_stream_option(argc, argv, "-qp", codec_option);
+    const char *quality = last_stream_option(argc, argv, "-quality",
+                                             codec_option);
+    const char *force_keyframes = last_stream_option(
+        argc, argv, "-force_key_frames", codec_option);
+    const char *gop = last_stream_option(argc, argv, "-g", codec_option);
+    const char *rate = last_stream_option(argc, argv, "-r", codec_option);
+    const char *coder = last_stream_option(argc, argv, "-coder", codec_option);
+    const char *sei = last_stream_option(argc, argv, "-sei", codec_option);
+    const char *pixel_format = last_stream_option(argc, argv, "-pix_fmt",
+                                                  codec_option);
+    const char *bitrate = last_stream_option(argc, argv, "-b", codec_option);
+    const char *maxrate = last_stream_option(argc, argv, "-maxrate",
+                                             codec_option);
+    const char *bufsize = last_stream_option(argc, argv, "-bufsize",
+                                             codec_option);
+    const char *bframes = last_stream_option(argc, argv, "-bf", codec_option);
+    const char *unsupported_names[] = {
+        "-low_power", "-idr_interval", "-b_depth", "-async_depth",
+        "-max_frame_size", "-aud",
+    };
+    unsigned parsed;
+    unsigned parsed_bitrate = 0;
+    unsigned parsed_maxrate = 0;
+    unsigned ignored_rate;
+    size_t index;
+
+    memset(translated, 0, sizeof(*translated));
+    if ((bitrate != NULL && !parse_rate_value(bitrate, &parsed_bitrate)) ||
+        (maxrate != NULL && !parse_rate_value(maxrate, &parsed_maxrate)) ||
+        (bufsize != NULL && !parse_rate_value(bufsize, &ignored_rate)) ||
+        (bframes != NULL &&
+         (!parse_unsigned_value(bframes, 16, &parsed)))) {
+        return false;
+    }
+    if (!translate_profile(encoder,
+                           last_stream_option(argc, argv, "-profile",
+                                              codec_option),
+                           translated->profile,
+                           sizeof(translated->profile)) ||
+        !translate_level(last_stream_option(argc, argv, "-level",
+                                            codec_option),
+                         translated->level, sizeof(translated->level)) ||
+        !translate_entropy(encoder, coder, translated->entropy,
+                           sizeof(translated->entropy))) {
+        return false;
+    }
+    if (pixel_format != NULL && strcmp(pixel_format, "nv12") != 0) {
+        return false;
+    }
+    if (quality != NULL && strcmp(quality, "4") != 0) {
+        return false;
+    }
+    if (rc_mode == NULL || strcasecmp(rc_mode, "auto") == 0 ||
+        strcasecmp(rc_mode, "VBR") == 0) {
+        if (qp != NULL) {
+            return false;
+        }
+        if ((rc_mode == NULL || strcasecmp(rc_mode, "auto") == 0) &&
+            bitrate != NULL && maxrate != NULL &&
+            parsed_bitrate == parsed_maxrate) {
+            translated->constant_bit_rate = true;
+        }
+    } else if (strcasecmp(rc_mode, "CBR") == 0) {
+        if (qp != NULL) {
+            return false;
+        }
+        translated->constant_bit_rate = true;
+    } else if (strcasecmp(rc_mode, "CQP") == 0) {
+        if (!parse_unsigned_value(qp, 51, &parsed)) {
+            return false;
+        }
+        parsed = 1U + (51U - parsed) * 99U / 50U;
+        (void)snprintf(translated->global_quality,
+                       sizeof(translated->global_quality), "%u", parsed);
+    } else {
+        return false;
+    }
+    if (!translate_force_keyframes(force_keyframes, rate, translated->gop,
+                                   sizeof(translated->gop))) {
+        return false;
+    }
+    translated->closed_gop = force_keyframes != NULL;
+    if (translated->gop[0] == '\0' && gop != NULL) {
+        if (!parse_unsigned_value(gop, 100000, &parsed) || parsed == 0) {
+            return false;
+        }
+        (void)snprintf(translated->gop, sizeof(translated->gop), "%u", parsed);
+    } else if (translated->gop[0] != '\0' && gop != NULL &&
+               strcmp(translated->gop, gop) != 0) {
+        return false;
+    }
+    if (sei != NULL) {
+        if (strcmp(encoder, "h264_vaapi") != 0 ||
+            strcasecmp(sei, "a53_cc") != 0) {
+            return false;
+        }
+        translated->a53_cc = true;
+    }
+    for (index = 0; index < sizeof(unsupported_names) /
+                                sizeof(unsupported_names[0]); ++index) {
+        if (last_stream_option(argc, argv, unsupported_names[index],
+                               codec_option) != NULL) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static int append_filter_option(char *buffer, size_t size, size_t *used,
                                 const char *name, const char *value)
 {
@@ -372,7 +814,8 @@ static int append_filter_option(char *buffer, size_t size, size_t *used,
 static char *make_filter_argument(int argc, char *const argv[],
                                   const RemoteGraph *graph,
                                   const char *encoder,
-                                  const char *codec_option)
+                                  const char *codec_option,
+                                  const RemoteEncoderOptions *options)
 {
     char *argument = malloc(1024);
     const char *output_codec = strcmp(encoder, "hevc_vaapi") == 0
@@ -402,12 +845,32 @@ static char *make_filter_argument(int argc, char *const argv[],
         append_filter_option(argument, 1024, &used, "vt_remote_maxrate",
                              last_stream_option(argc, argv, "-maxrate",
                                                 codec_option)) < 0 ||
-        append_filter_option(argument, 1024, &used, "vt_remote_gop",
-                             last_stream_option(argc, argv, "-g",
+        append_filter_option(argument, 1024, &used, "vt_remote_bufsize",
+                             last_stream_option(argc, argv, "-bufsize",
                                                 codec_option)) < 0 ||
+        append_filter_option(argument, 1024, &used, "vt_remote_gop",
+                             options->gop) < 0 ||
         append_filter_option(argument, 1024, &used, "vt_remote_max_b_frames",
                              last_stream_option(argc, argv, "-bf",
-                                                codec_option)) < 0) {
+                                                codec_option)) < 0 ||
+        append_filter_option(argument, 1024, &used, "vt_remote_profile",
+                             options->profile) < 0 ||
+        append_filter_option(argument, 1024, &used, "vt_remote_level",
+                             options->level) < 0 ||
+        append_filter_option(argument, 1024, &used, "vt_remote_entropy",
+                             options->entropy) < 0 ||
+        append_filter_option(argument, 1024, &used,
+                             "vt_remote_global_quality",
+                             options->global_quality) < 0 ||
+        (options->constant_bit_rate &&
+         append_filter_option(argument, 1024, &used,
+                              "vt_remote_constant_bit_rate", "1") < 0) ||
+        (options->a53_cc &&
+         append_filter_option(argument, 1024, &used,
+                              "vt_remote_a53_cc", "1") < 0) ||
+        (options->closed_gop &&
+         append_filter_option(argument, 1024, &used,
+                              "vt_remote_flags", "2147483648") < 0)) {
         free(argument);
         return NULL;
     }
@@ -466,6 +929,7 @@ int main(int argc, char *argv[])
     bool transformed = false;
     bool unsupported_graph = false;
     RemoteGraph graph = {.option_index = -1};
+    RemoteEncoderOptions encoder_options;
     char *filter_argument = NULL;
     char *bsf_option = NULL;
 
@@ -481,11 +945,12 @@ int main(int argc, char *argv[])
         return 70;
     }
 
-    encoder_index = find_vaapi_encoder(argc, argv);
-    input_codec_index = find_supported_input_codec(argv, encoder_index);
+    encoder_index = find_unique_vaapi_encoder(argc, argv);
+    input_codec_index = find_unique_supported_input_codec(argv, encoder_index);
     if (env_enabled("VTREMOTE_PLEX_REMOTE_TRANSCODE") &&
         has_environment_value("VTREMOTE_HOST") &&
         (test_mode || access(bsf_library, R_OK) == 0) &&
+        plex_runtime_supported(test_mode) &&
         encoder_index > 0 && input_codec_index > 0) {
         for (input_index = 1; input_index + 1 < argc; ++input_index) {
             if (strcmp(argv[input_index], "-filter_complex") != 0) {
@@ -513,10 +978,15 @@ int main(int argc, char *argv[])
                 break;
             }
         }
-        if (!unsupported_graph && graph.option_index >= 0) {
+        if (!unsupported_graph && graph.option_index >= 0 &&
+            mapped_output_count(argc, argv, graph.output_map) == 1 &&
+            translate_encoder_options(argc, argv, argv[encoder_index],
+                                      argv[encoder_index - 1],
+                                      &encoder_options)) {
             filter_argument = make_filter_argument(argc, argv, &graph,
                                                    argv[encoder_index],
-                                                   argv[encoder_index - 1]);
+                                                   argv[encoder_index - 1],
+                                                   &encoder_options);
             bsf_option = make_bsf_option(argv[encoder_index - 1]);
             if (filter_argument != NULL && bsf_option != NULL) {
                 transformed = true;

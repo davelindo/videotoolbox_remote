@@ -53,6 +53,17 @@ final class SessionConfigurationTests: XCTestCase {
         XCTAssertEqual(config.maxFrameBytes, 6144)
     }
 
+    func testParsesVBVBufferSize() throws {
+        var request = makeRequest()
+        request.options["bitrate"] = "1500000"
+        request.options["bufsize"] = "3000000"
+
+        let config = try SessionConfiguration(codec: .h264, request: request)
+
+        XCTAssertEqual(config.options.bitrate, 1_500_000)
+        XCTAssertEqual(config.options.bufferSize, 3_000_000)
+    }
+
     func testOddNV12HeightIncludesRoundedUpChromaRows() throws {
         var request = makeRequest()
         request.width = 4

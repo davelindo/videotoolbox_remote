@@ -16,6 +16,8 @@
 #include "libavutil/error.h"
 #include "libavutil/opt.h"
 
+#include "plex-ffmpeg-compat.h"
+
 extern const FFBitStreamFilter ff_vtremote_transcode_bsf;
 
 typedef int (*parse_bsf_fn)(const char *, AVBSFContext **);
@@ -126,6 +128,7 @@ static int apply_environment_options(AVBSFContext *context)
     return 0;
 }
 
+__attribute__((visibility("default")))
 int av_bsf_list_parse_str(const char *filters, AVBSFContext **context)
 {
     static const char filter_name[] = "vtremote_transcode";
@@ -146,7 +149,7 @@ int av_bsf_list_parse_str(const char *filters, AVBSFContext **context)
     if (context == NULL) {
         return AVERROR(EINVAL);
     }
-    if (avcodec_version() >> 16 != LIBAVCODEC_VERSION_MAJOR) {
+    if (!vtremote_plex_avcodec_version_supported(avcodec_version())) {
         return AVERROR(ENOTSUP);
     }
     *context = NULL;

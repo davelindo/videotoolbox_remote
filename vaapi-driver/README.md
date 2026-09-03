@@ -16,6 +16,8 @@ to the driver are supported. Rate control supports CBR, VBR, and CQP.
 
 The build requires a C11 compiler, CMake, pkg-config, libva 2.22 headers
 (VA-API 1.22), liblz4, libzstd, pthreads, and Python 3 for repository E2E tests.
+The libva 2.22 release intentionally reports `1.22.x` through pkg-config, so
+the CMake requirement is `libva>=1.22`.
 
 ```bash
 cd vaapi-driver # omit this line inside the standalone source archive

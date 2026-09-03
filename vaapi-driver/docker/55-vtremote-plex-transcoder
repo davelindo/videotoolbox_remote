@@ -7,6 +7,30 @@ target='/usr/lib/plexmediaserver/Plex Transcoder'
 real='/usr/lib/plexmediaserver/Plex Transcoder.real'
 audit=${VTREMOTE_PLEX_AUDIT_FILE:-/dev/shm/plex/vtremote-plex-wrapper.log}
 audit_dir=${audit%/*}
+avcodec=${VTREMOTE_PLEX_AVCODEC_LIBRARY:-/usr/lib/plexmediaserver/lib/libavcodec.so.60}
+tested_avcodec_sha256=${VTREMOTE_PLEX_AVCODEC_SHA256:-}
+approved=false
+
+if [ -f "$avcodec" ]; then
+    actual_avcodec_sha256=$(sha256sum "$avcodec" | awk '{print $1}')
+    case "$actual_avcodec_sha256" in
+        fe4517d7e4596e8a984dfe02ed5fae2acdc989bcbdb1b04aadf5d9bda48ff1a7|9d391832fd366be96be64f33336d6dc8260bfb2ac5df669d677e5d17821dfc4e)
+            approved=true
+            ;;
+    esac
+    if [ -n "$tested_avcodec_sha256" ] &&
+       [ "$actual_avcodec_sha256" = "$tested_avcodec_sha256" ]; then
+        approved=true
+    fi
+fi
+
+if [ "$approved" != true ]; then
+    echo "vtremote Plex wrapper: bundled libavcodec is not an approved build; keeping native transcoding" >&2
+    if cmp -s "$wrapper" "$target" && [ -e "$real" ]; then
+        mv -f "$real" "$target"
+    fi
+    exit 0
+fi
 
 if [ "$audit_dir" != "$audit" ]; then
     install -d -o plex -g plex -m 0755 "$audit_dir"
