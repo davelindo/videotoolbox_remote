@@ -43,7 +43,7 @@ def main():
         "-init_hw_device", "vaapi=vaapi:/dev/dri/renderD128,driver=iHD",
         "-filter_hw_device", "vaapi",
         "-filter_complex",
-        "[0:0]hwupload[0];[0]scale_vaapi=w=720:h=300:format=nv12[1];[1]hwupload[2]",
+        "[0:0]scale=w=720:h=300:force_divisible_by=4[0];[0]format=pix_fmts=nv12[1];[1]hwupload[2]",
         "-map", "[2]",
         "-codec:0", "h264_vaapi",
         "-b:0", "1527000",
@@ -53,6 +53,7 @@ def main():
         "-bf:0", "0",
         "-rc_mode:0", "VBR",
         "-quality:0", "4",
+        "-force_key_frames:0", "expr:gte(t,n_forced*3)",
         "-filter_complex", "[0:1]aresample=async=1[3]",
         "-map", "[3]",
         "-b:1", "128000",
@@ -101,7 +102,7 @@ def main():
         "-codec:0", "av1",
         "-hwaccel:0", "vaapi",
         "-filter_complex",
-        "[0:0]hwupload[0];[0]scale_vaapi=w=720:h=300:format=nv12[1];[1]hwupload[2]",
+        "[0:0]scale=w=720:h=300:force_divisible_by=4[0];[0]format=pix_fmts=nv12[1];[1]hwupload[2]",
         "-codec:0", "h264_vaapi",
     ]
     code, output, error = run(args.wrapper, unsupported_input)

@@ -54,7 +54,7 @@ docker exec "$container" "$transcoder" \
   -init_hw_device vaapi=vaapi:/dev/dri/renderD128,driver=iHD \
   -filter_hw_device vaapi \
   -filter_complex \
-    "[0:0]hwupload[0];[0]scale_vaapi=w=160:h=90:format=nv12[1];[1]hwupload[2]" \
+    "[0:0]scale=w=160:h=90:force_divisible_by=4[0];[0]format=pix_fmts=nv12[1];[1]hwupload[2]" \
   -map '[2]' -codec:0 h264_vaapi -b:0 500000 -maxrate:0 600000 \
   -bufsize:0 1200000 -g:0 24 -bf:0 0 -an -y -f mpegts \
   "$container_output"

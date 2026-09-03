@@ -78,13 +78,13 @@ static bool parse_positive_uint(const char *text, size_t length,
     return true;
 }
 
-static bool parse_scale_options(const char *start, const char *end,
-                                unsigned *width, unsigned *height)
+static bool parse_software_scale_options(const char *start, const char *end,
+                                         unsigned *width, unsigned *height)
 {
     const char *cursor = start;
     bool saw_width = false;
     bool saw_height = false;
-    bool saw_format = false;
+    bool saw_divisibility = false;
 
     while (cursor < end) {
         const char *separator = memchr(cursor, ':', (size_t)(end - cursor));
@@ -103,40 +103,41 @@ static bool parse_scale_options(const char *start, const char *end,
                 return false;
             }
             saw_height = true;
-        } else if (token_length == strlen("format=nv12") &&
-                   strncmp(cursor, "format=nv12", token_length) == 0) {
-            if (saw_format) {
+        } else if (token_length == strlen("force_divisible_by=4") &&
+                   strncmp(cursor, "force_divisible_by=4",
+                           token_length) == 0) {
+            if (saw_divisibility) {
                 return false;
             }
-            saw_format = true;
+            saw_divisibility = true;
         } else {
             return false;
         }
         cursor = separator != NULL ? separator + 1 : end;
     }
-    return saw_width && saw_height && saw_format;
+    return saw_width && saw_height && saw_divisibility;
 }
 
-/* Plex 1.43 emits this exact graph for its ordinary VA-API resize path:
- *   [input]hwupload[a];[a]scale_vaapi=w=W:h=H:format=nv12[b];[b]hwupload[out]
+/* Plex 1.43 emits this exact graph for its ordinary VA-API transcode path:
+ *   [input]scale=w=W:h=H:force_divisible_by=4[a];
+ *   [a]format=pix_fmts=nv12[b];[b]hwupload[out]
  * The packet filter replaces the whole graph, so retain only its source map
  * and requested output geometry. */
 static bool parse_remote_graph(const char *graph, RemoteGraph *parsed)
 {
     const char *input_label;
     const char *input_close;
-    const char *first_upload;
-    const char *first_label;
-    const char *first_close;
-    const char *scale_label;
-    const char *scale_label_close;
-    const char *scale_prefix = "scale_vaapi=";
+    const char *scale_prefix = "scale=";
     const char *options;
     const char *options_end;
-    const char *second_label;
-    const char *second_close;
-    const char *second_upload_label;
-    const char *second_upload_close;
+    const char *scale_output;
+    const char *scale_output_close;
+    const char *format_input;
+    const char *format_input_close;
+    const char *format_output;
+    const char *format_output_close;
+    const char *upload_input;
+    const char *upload_input_close;
     const char *output_label;
     const char *output_close;
 
@@ -148,46 +149,50 @@ static bool parse_remote_graph(const char *graph, RemoteGraph *parsed)
     if (input_close == NULL) {
         return false;
     }
-    first_upload = input_close + 1;
-    if (strncmp(first_upload, "hwupload[", strlen("hwupload[")) != 0) {
+    if (strncmp(input_close + 1, scale_prefix, strlen(scale_prefix)) != 0) {
         return false;
     }
-    first_label = first_upload + strlen("hwupload[");
-    first_close = strchr(first_label, ']');
-    if (first_close == NULL || first_close[1] != ';' || first_close[2] != '[') {
-        return false;
-    }
-    scale_label = first_close + 3;
-    scale_label_close = strchr(scale_label, ']');
-    if (scale_label_close == NULL ||
-        !labels_match(first_label, (size_t)(first_close - first_label),
-                      scale_label, (size_t)(scale_label_close - scale_label)) ||
-        strncmp(scale_label_close + 1, scale_prefix, strlen(scale_prefix)) != 0) {
-        return false;
-    }
-    options = scale_label_close + 1 + strlen(scale_prefix);
+    options = input_close + 1 + strlen(scale_prefix);
     options_end = strchr(options, '[');
     if (options_end == NULL ||
-        !parse_scale_options(options, options_end,
-                             &parsed->width, &parsed->height)) {
+        !parse_software_scale_options(options, options_end,
+                                      &parsed->width, &parsed->height)) {
         return false;
     }
-    second_label = options_end + 1;
-    second_close = strchr(second_label, ']');
-    if (second_close == NULL || second_close[1] != ';' ||
-        second_close[2] != '[') {
+    scale_output = options_end + 1;
+    scale_output_close = strchr(scale_output, ']');
+    if (scale_output_close == NULL || scale_output_close[1] != ';' ||
+        scale_output_close[2] != '[') {
         return false;
     }
-    second_upload_label = second_close + 3;
-    second_upload_close = strchr(second_upload_label, ']');
-    if (second_upload_close == NULL ||
-        !labels_match(second_label, (size_t)(second_close - second_label),
-                      second_upload_label,
-                      (size_t)(second_upload_close - second_upload_label)) ||
-        strncmp(second_upload_close + 1, "hwupload[", strlen("hwupload[")) != 0) {
+    format_input = scale_output_close + 3;
+    format_input_close = strchr(format_input, ']');
+    if (format_input_close == NULL ||
+        !labels_match(scale_output,
+                      (size_t)(scale_output_close - scale_output),
+                      format_input,
+                      (size_t)(format_input_close - format_input)) ||
+        strncmp(format_input_close + 1, "format=pix_fmts=nv12[",
+                strlen("format=pix_fmts=nv12[")) != 0) {
         return false;
     }
-    output_label = second_upload_close + 1 + strlen("hwupload[");
+    format_output = format_input_close + 1 + strlen("format=pix_fmts=nv12[");
+    format_output_close = strchr(format_output, ']');
+    if (format_output_close == NULL || format_output_close[1] != ';' ||
+        format_output_close[2] != '[') {
+        return false;
+    }
+    upload_input = format_output_close + 3;
+    upload_input_close = strchr(upload_input, ']');
+    if (upload_input_close == NULL ||
+        !labels_match(format_output,
+                      (size_t)(format_output_close - format_output),
+                      upload_input,
+                      (size_t)(upload_input_close - upload_input)) ||
+        strncmp(upload_input_close + 1, "hwupload[", strlen("hwupload[")) != 0) {
+        return false;
+    }
+    output_label = upload_input_close + 1 + strlen("hwupload[");
     output_close = strchr(output_label, ']');
     if (output_close == NULL || output_close[1] != '\0') {
         return false;
@@ -269,7 +274,7 @@ static bool is_video_encoder_option(const char *argument,
         "-b", "-maxrate", "-bufsize", "-g", "-bf", "-pix_fmt",
         "-low_power", "-idr_interval", "-b_depth", "-async_depth",
         "-max_frame_size", "-rc_mode", "-qp", "-quality", "-coder",
-        "-aud", "-sei", "-profile", "-level",
+        "-aud", "-sei", "-profile", "-level", "-force_key_frames",
     };
     size_t index;
 

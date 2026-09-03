@@ -123,9 +123,10 @@ The Plex packet-transcode image does not use libva and needs no render node.
 ### Plex transcode still uses substantial Linux CPU
 
 Confirm that the input is H.264 or HEVC and that Plex emitted the supported
-VA-API upload/scale graph. A successful remote handshake appends
-`remote-decode-scale-encode` to `VTREMOTE_PLEX_AUDIT_FILE`. If the marker does
-not appear, the wrapper deliberately passed the command through unchanged.
+software-scale/format/hardware-upload graph. A successful remote handshake
+appends `remote-decode-scale-encode` to `VTREMOTE_PLEX_AUDIT_FILE`. If the
+marker does not appear, the wrapper deliberately passed the command through
+unchanged.
 Tone mapping, deinterlace, subtitle burn-in, unsupported graphs, audio
 transcoding, and container I/O can still consume Linux CPU.
 

@@ -37,9 +37,10 @@ and LZ4 for higher-throughput streams.
 The repository provides a Dockerfile pinned to an official amd64 `pms-docker`
 bootstrap image digest, plus a Compose merge example under
 `vaapi-driver/docker/`. Its narrow Plex Transcoder wrapper recognizes Plex's
-ordinary H.264/HEVC VA-API scale graph and replaces that video chain with the
-`vtremote_transcode` packet filter. Compressed input packets go to the Mac;
-decoded or scaled frames never cross the network or consume Linux CPU.
+ordinary H.264/HEVC software-scale/format/hardware-upload graph and replaces
+that video chain with the `vtremote_transcode` packet filter. Compressed input
+packets go to the Mac; decoded or scaled frames never cross the network or
+consume Linux CPU.
 
 This Plex path does not use the VA-API driver and needs no render node. Linux
 continues to demux, process audio and subtitles, and mux the returned video.

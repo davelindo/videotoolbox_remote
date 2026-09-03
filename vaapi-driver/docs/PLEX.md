@@ -7,10 +7,11 @@ frames do not cross the network, and the Linux host needs no GPU or DRM render
 node.
 
 The image installs a narrow wrapper in front of Plex Transcoder. It recognizes
-Plex's ordinary VA-API upload/scale graph and replaces the complete video chain
-with the `vtremote_transcode` packet filter. Unknown codecs, multiple hardware
-graphs, tone mapping, deinterlace, and other unrecognized graphs pass through
-unchanged to Plex's native Transcoder. A native fallback can use only devices
+Plex's ordinary software-scale/format/hardware-upload graph and replaces the
+complete video chain with the `vtremote_transcode` packet filter. Unknown
+codecs, multiple hardware graphs, tone mapping, deinterlace, and other
+unrecognized graphs pass through unchanged to Plex's native Transcoder. A
+native fallback can use only devices
 that you separately expose to the container.
 
 The image pins an amd64 official `pms-docker` bootstrap digest. Like the
