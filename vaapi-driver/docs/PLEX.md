@@ -41,17 +41,20 @@ unclaimed-server end-to-end test. An unrecognized Plex upgrade fails closed and
 keeps native transcoding.
 
 The recognized path translates bitrate, maximum rate, buffer window,
-GOP/B-frame settings, profile, level, entropy mode, and CBR/VBR/CQP selection.
-The ordinary periodic `force_key_frames` expression becomes a closed GOP based
-on Plex's requested frame rate. Any unsupported value leaves the original
-command intact.
+GOP/B-frame settings, profile, H.264 level, entropy mode, and CBR/VBR/CQP
+selection. The ordinary periodic `force_key_frames` expression becomes a
+keyframe interval and closed-GOP request based on Plex's requested frame rate.
+VideoToolbox exposes only automatic HEVC level selection, so a fixed HEVC level
+request leaves the original command intact. The same applies to any other
+unsupported value.
 
 ## Unclaimed-server validation
 
 First validate the bundled Plex Transcoder without claiming a server. The
-script creates a short H.264 source, submits a Plex-shaped hardware graph,
-then requires 96 decoded H.264 frames across at least three independently
-decodable, keyframe-aligned segments at the remotely requested dimensions:
+script covers H.264 encode, HEVC Main10 decode to H.264, and HEVC encode with
+Plex-shaped hardware graphs. Each case must return 96 frames across at least
+three independently decodable, keyframe-aligned segments at the remotely
+requested dimensions and profile:
 
 ```bash
 PLEX_CONTAINER=plex \

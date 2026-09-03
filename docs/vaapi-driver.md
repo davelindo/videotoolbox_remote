@@ -53,10 +53,12 @@ the library fingerprint, and the wrapper checks the full runtime
 runtime keeps Plex on its native path.
 
 For recognized commands, the wrapper translates bitrate, maximum rate, VBV
-window, GOP/B-frame settings, profile, level, entropy mode, and CBR/VBR/CQP
-selection. Plex's periodic `force_key_frames` expression is converted to a
-closed GOP using the requested output frame rate. Unsupported values, multiple
-video inputs or outputs, and indirect filter labels pass through unchanged.
+window, GOP/B-frame settings, profile, H.264 level, entropy mode, and
+CBR/VBR/CQP selection. Plex's periodic `force_key_frames` expression is
+converted to a keyframe interval and closed-GOP request using the requested
+output frame rate. VideoToolbox does not expose a fixed HEVC level, so a command
+requesting one remains on the native path. Other unsupported values, multiple
+video inputs or outputs, and indirect filter labels also pass through unchanged.
 
 Validate the bundled Plex Transcoder and VA-API stack without claiming the
 server or creating a library:
@@ -66,11 +68,11 @@ PLEX_CONTAINER=plex \
   vaapi-driver/scripts/plex-transcoder-remote-smoke.sh
 ```
 
-This deterministic check creates a small H.264 source, invokes Plex's bundled
-Transcoder with a Plex-shaped VA-API command, and verifies several consecutive
-remotely decoded, scaled, and encoded segments. Every segment must begin with a
-keyframe and decode independently. The check requires no Plex token, library,
-or Plex Pass.
+This deterministic check covers H.264 encode, HEVC Main10 decode to H.264, and
+HEVC encode. It invokes Plex's bundled Transcoder with Plex-shaped VA-API
+commands and verifies several consecutive remotely decoded, scaled, and
+encoded segments for every case. Every segment must begin with a keyframe and
+decode independently. The check requires no Plex token, library, or Plex Pass.
 
 Separately, enable hardware acceleration and hardware encoding in a claimed
 Plex Pass server. Plex requests its normal hardware pipeline and the wrapper

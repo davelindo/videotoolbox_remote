@@ -586,7 +586,8 @@ static bool translate_profile(const char *encoder, const char *value,
     return false;
 }
 
-static bool translate_level(const char *value, char *translated, size_t size)
+static bool translate_level(const char *encoder, const char *value,
+                            char *translated, size_t size)
 {
     char *end = NULL;
     double parsed;
@@ -596,6 +597,11 @@ static bool translate_level(const char *value, char *translated, size_t size)
         strcasecmp(value, "auto") == 0) {
         translated[0] = '\0';
         return true;
+    }
+    /* VideoToolbox exposes only automatic HEVC level selection. Preserve a
+     * requested fixed level by leaving that command on Plex's native path. */
+    if (strcmp(encoder, "hevc_vaapi") == 0) {
+        return false;
     }
     errno = 0;
     parsed = strtod(value, &end);
@@ -726,7 +732,8 @@ static bool translate_encoder_options(int argc, char *const argv[],
                                               codec_option),
                            translated->profile,
                            sizeof(translated->profile)) ||
-        !translate_level(last_stream_option(argc, argv, "-level",
+        !translate_level(encoder,
+                         last_stream_option(argc, argv, "-level",
                                             codec_option),
                          translated->level, sizeof(translated->level)) ||
         !translate_entropy(encoder, coder, translated->entropy,

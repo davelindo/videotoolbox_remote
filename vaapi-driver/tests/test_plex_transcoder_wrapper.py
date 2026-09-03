@@ -170,6 +170,26 @@ def main():
     assert code == 2, (code, output, error)
     assert output == ["/real/Plex Transcoder", *unsupported_profile], output
 
+    hevc_output = list(plex_arguments)
+    hevc_output[hevc_output.index("h264_vaapi")] = "hevc_vaapi"
+    hevc_output[hevc_output.index("high")] = "main"
+    for option in ("-coder:0", "-sei:0"):
+        option_index = hevc_output.index(option)
+        del hevc_output[option_index:option_index + 2]
+    code, output, error = run(args.wrapper, hevc_output)
+    assert code == 2, (code, output, error)
+    assert output == ["/real/Plex Transcoder", *hevc_output], output
+
+    hevc_auto_level = list(hevc_output)
+    level_index = hevc_auto_level.index("-level:0") + 1
+    hevc_auto_level[level_index] = "auto"
+    code, output, error = run(args.wrapper, hevc_auto_level)
+    assert code == 0, (code, output, error)
+    hevc_filter = output[output.index("-bsf:0") + 1]
+    assert "vt_remote_out_codec=hevc" in hevc_filter, output
+    assert ":vt_remote_profile=1" in hevc_filter, output
+    assert ":vt_remote_level=" not in hevc_filter, output
+
     indirect_graph = list(plex_arguments)
     graph_index = indirect_graph.index("-filter_complex") + 1
     indirect_graph[graph_index] = indirect_graph[graph_index].replace(
