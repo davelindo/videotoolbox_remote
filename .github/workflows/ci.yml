@@ -576,6 +576,16 @@ jobs:
         run: |
           test "$(uname -m)" = x86_64
           pkg-config --atleast-version=1.22 libva
+      - name: Prepare Plex FFmpeg headers
+        run: |
+          curl -fL --retry 3 -o /tmp/ffmpeg.tar.xz \
+            https://ffmpeg.org/releases/ffmpeg-6.1.1.tar.xz
+          echo "8684f4b00f94b85461884c3719382f1261f0d9eb3d59640a1f4ac0873616f968  /tmp/ffmpeg.tar.xz" \
+            | sha256sum -c -
+          tar -xJf /tmp/ffmpeg.tar.xz -C /tmp
+          cd /tmp/ffmpeg-6.1.1
+          ./configure --disable-everything --disable-x86asm --disable-doc
+          make libavutil/ffversion.h
       - name: Build, test, and package
         run: |
           version="$(git describe --tags --always --dirty | sed 's/^v//')"
@@ -595,30 +605,9 @@ jobs:
           cmake --build vaapi-driver/build-sanitized --parallel
           (cd vaapi-driver/build-sanitized && \
             ASAN_OPTIONS=detect_leaks=1 ctest --output-on-failure)
-          make package-vaapi-driver VTREMOTE_VERSION="$version"
+          make package-vaapi-driver VTREMOTE_VERSION="$version" \
+            VTREMOTE_PLEX_FFMPEG_SOURCE_DIR=/tmp/ffmpeg-6.1.1
           VERSION="$version" vaapi-driver/scripts/package-source.sh
-      - name: Build and inspect Plex preload module
-        run: |
-          curl -fL --retry 3 -o /tmp/ffmpeg.tar.xz \
-            https://ffmpeg.org/releases/ffmpeg-6.1.1.tar.xz
-          echo "8684f4b00f94b85461884c3719382f1261f0d9eb3d59640a1f4ac0873616f968  /tmp/ffmpeg.tar.xz" \
-            | sha256sum -c -
-          tar -xJf /tmp/ffmpeg.tar.xz -C /tmp
-          cd /tmp/ffmpeg-6.1.1
-          ./configure --disable-everything --disable-x86asm --disable-doc
-          make libavutil/ffversion.h
-          cd "$GITHUB_WORKSPACE"
-          cmake -S vaapi-driver -B vaapi-driver/build-plex-module \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_TESTING=OFF \
-            -DVTREMOTE_WARNINGS_AS_ERRORS=ON \
-            -DVTREMOTE_PLEX_FFMPEG_SOURCE_DIR=/tmp/ffmpeg-6.1.1
-          cmake --build vaapi-driver/build-plex-module --parallel \
-            --target vtremote_plex_bsf vtremote-plex-transcoder
-          exports="$(nm -D --defined-only \
-            vaapi-driver/build-plex-module/vtremote-plex-bsf.so \
-            | awk '{print $3}' | sed '/^$/d')"
-          test "$exports" = "av_bsf_list_parse_str"
       - name: Smoke packaged VA-API artifact
         run: |
           bash scripts/smoke_release_artifact.sh vaapi-driver \

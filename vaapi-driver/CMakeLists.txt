@@ -188,6 +188,18 @@ if(BUILD_TESTING)
             --test $<TARGET_FILE:vtremote_client_reconnect_test>
             --mock ${CMAKE_CURRENT_SOURCE_DIR}/../tests/integration/mock_vtremoted/mock_vtremoted.py
     )
+
+    add_executable(vtremote_teardown_lock_test tests/test_teardown_lock.c)
+    target_include_directories(vtremote_teardown_lock_test SYSTEM PRIVATE
+        ${LIBVA_INCLUDE_DIRS})
+    target_link_libraries(vtremote_teardown_lock_test PRIVATE
+        vtremote_client
+        ${CMAKE_DL_LIBS}
+        Threads::Threads
+    )
+    target_compile_options(vtremote_teardown_lock_test PRIVATE
+        ${VTREMOTE_WARNING_FLAGS})
+    add_test(NAME vtremote_teardown_lock_unit COMMAND vtremote_teardown_lock_test)
     add_test(NAME vtremote_plex_transcoder_wrapper_unit
         COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_plex_transcoder_wrapper.py

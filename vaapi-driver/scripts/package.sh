@@ -20,6 +20,10 @@ if [ "$architecture" != x86_64 ]; then
     echo "release bundles support Linux x86_64 only (found $architecture)" >&2
     exit 1
 fi
+if [ -z "${VTREMOTE_PLEX_FFMPEG_SOURCE_DIR:-}" ]; then
+    echo "VTREMOTE_PLEX_FFMPEG_SOURCE_DIR is required for complete release bundles" >&2
+    exit 1
+fi
 out_dir=${OUT_DIR:-$source_dir/dist}
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/vtremote-vaapi-package.XXXXXX")
 trap 'rm -rf "$work_dir"' EXIT INT TERM
@@ -33,7 +37,8 @@ cmake -S "$source_dir" -B "$build_dir" \
     -DVTREMOTE_VERSION="$version" \
     -DVTREMOTE_WARNINGS_AS_ERRORS=ON \
     -DVTREMOTE_INSTALL_VGEM_ALIAS=ON \
-    -DVTREMOTE_INSTALL_IHD_ALIAS=ON
+    -DVTREMOTE_INSTALL_IHD_ALIAS=ON \
+    -DVTREMOTE_PLEX_FFMPEG_SOURCE_DIR="$VTREMOTE_PLEX_FFMPEG_SOURCE_DIR"
 cmake --build "$build_dir" --parallel
 (cd "$build_dir" && ctest --output-on-failure)
 DESTDIR="$stage" cmake --install "$build_dir"

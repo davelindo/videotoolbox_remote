@@ -238,7 +238,9 @@ ifeq ($(IS_DARWIN),Darwin)
 	@echo "The VA-API driver release target is Linux x86_64-only" >&2
 	@exit 1
 else
-	@VERSION="$(VTREMOTE_VERSION)" $(VAAPI_DRIVER_DIR)/scripts/package.sh
+	@VERSION="$(VTREMOTE_VERSION)" \
+		VTREMOTE_PLEX_FFMPEG_SOURCE_DIR="$(VTREMOTE_PLEX_FFMPEG_SOURCE_DIR)" \
+		$(VAAPI_DRIVER_DIR)/scripts/package.sh
 endif
 
 install: install-ffmpeg install-vtremoted $(if $(IS_DARWIN),,install-vaapi-driver)

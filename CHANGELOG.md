@@ -46,6 +46,12 @@ The non-version `nightly` tag is intentionally excluded.
 - Expanded CI and end-to-end coverage for the Plex preload module, H.264 and
   HEVC inputs and outputs, independent HLS segment decoding, reconnects, and
   packaged stock-FFmpeg artifacts.
+- Included the Plex Transcoder wrapper and preload module in the prebuilt Linux
+  bundle, and made artifact smoke tests reject incomplete Plex payloads.
+- Moved per-context network flushes outside the VA driver's global object lock
+  so one slow teardown cannot stall unrelated contexts.
+- Added shared HELLO, CONFIGURE, compressed FRAME, PACKET side-data, and
+  malformed-length golden vectors for the C SDK and FFmpeg protocol clients.
 - Documented a matched-bitrate HEVC Main10 packet-transcode comparison against
   Intel VA-API. The remote Apple M2 path was 1.58x faster for HEVC Main10
   output, while the Intel path was 2.31x faster for H.264 output on the tested

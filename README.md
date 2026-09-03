@@ -45,7 +45,7 @@ Start with the [getting started guide](docs/getting-started.md) for setup, secur
 | `vtremoted-macos-arm64.tar.gz` | macOS server binary for Apple Silicon Macs |
 | `vtremoted-macos-x86_64.tar.gz` | macOS server binary for Intel Macs |
 | `ffmpeg-linux-x86_64.tar.gz` | FFmpeg client build for Linux x86_64 |
-| `vtremote-vaapi-linux-x86_64.tar.gz` | Encode-only VA-API driver and experimental static C SDK for Linux/Plex |
+| `vtremote-vaapi-linux-x86_64.tar.gz` | Encode-only VA-API driver, Plex packet shim, and experimental static C SDK for Linux |
 | `vtremote-vaapi-*-source.tar.gz` | Matching VA-API driver source bundle |
 | `ffmpeg-macos-arm64.tar.gz` | FFmpeg client build for Apple Silicon Macs |
 | `ffmpeg-macos-x86_64.tar.gz` | FFmpeg client build for Intel Macs |

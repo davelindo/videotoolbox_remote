@@ -90,6 +90,7 @@ typedef struct VTRVAImageObject {
 
 typedef struct VTRVAContext {
     bool active;
+    bool destroying;
     VAContextID id;
     VAConfigID config_id;
     int width;
@@ -304,6 +305,7 @@ static VTRVAContext *lookup_context_locked(VTRVADriver *driver, VAContextID id) 
     if (!driver || id <= VTRVA_CONTEXT_BASE) return NULL;
     slot = id - VTRVA_CONTEXT_BASE - 1U;
     if (slot >= VTRVA_MAX_CONTEXTS || !driver->contexts[slot].active ||
+        driver->contexts[slot].destroying ||
         driver->contexts[slot].id != id) return NULL;
     return &driver->contexts[slot];
 }
@@ -432,14 +434,16 @@ static void disconnect_context(VTRVAContext *context) {
     }
 }
 
-static void release_context_locked(VTRVAContext *context) {
+static void release_context_io(VTRVAContext *context) {
     if (!context) return;
+    if (context->io_lock_initialized)
+        pthread_mutex_lock(&context->io_lock);
     disconnect_context(context);
     if (context->io_lock_initialized) {
+        pthread_mutex_unlock(&context->io_lock);
         pthread_mutex_destroy(&context->io_lock);
         context->io_lock_initialized = false;
     }
-    memset(context, 0, sizeof(*context));
 }
 
 static VAStatus get_config_attribute_value(VAProfile profile, VAEntrypoint entrypoint,
@@ -493,9 +497,20 @@ static VAStatus vtrva_terminate(VADriverContextP ctx) {
     VTRVADriver *driver = driver_data(ctx);
     size_t i;
     if (!driver) return VA_STATUS_ERROR_INVALID_DISPLAY;
+    if (driver->lock_initialized) {
+        pthread_mutex_lock(&driver->lock);
+        for (i = 0; i < ARRAY_SIZE(driver->contexts); ++i)
+            if (driver->contexts[i].active)
+                driver->contexts[i].destroying = true;
+        pthread_mutex_unlock(&driver->lock);
+    }
+    for (i = 0; i < ARRAY_SIZE(driver->contexts); ++i)
+        if (driver->contexts[i].destroying)
+            release_context_io(&driver->contexts[i]);
     if (driver->lock_initialized) pthread_mutex_lock(&driver->lock);
     for (i = 0; i < ARRAY_SIZE(driver->contexts); ++i)
-        if (driver->contexts[i].active) release_context_locked(&driver->contexts[i]);
+        if (driver->contexts[i].active)
+            memset(&driver->contexts[i], 0, sizeof(driver->contexts[i]));
     for (i = 0; i < ARRAY_SIZE(driver->buffers); ++i)
         if (driver->buffers[i].active) release_buffer_locked(&driver->buffers[i]);
     for (i = 0; i < ARRAY_SIZE(driver->surfaces); ++i)
@@ -926,9 +941,15 @@ static VAStatus vtrva_destroy_context(VADriverContextP ctx,
         pthread_mutex_unlock(&driver->lock);
         return VA_STATUS_ERROR_INVALID_CONTEXT;
     }
-    /* VA applications do not destroy an active context concurrently with
-       vaEndPicture.  Keep teardown simple and deterministic for v1. */
-    release_context_locked(context);
+    /* Keep the slot reserved and reject new work while teardown waits for any
+       existing context I/O.  Network flush must not hold the driver mutex. */
+    context->destroying = true;
+    pthread_mutex_unlock(&driver->lock);
+
+    release_context_io(context);
+
+    pthread_mutex_lock(&driver->lock);
+    memset(context, 0, sizeof(*context));
     pthread_mutex_unlock(&driver->lock);
     return VA_STATUS_SUCCESS;
 }

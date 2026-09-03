@@ -83,6 +83,12 @@ frame rate before the remote session starts. Changing them after the first
 frame is rejected because protocol v1 does not define mid-session reconfigure.
 A network failure is terminal for that VA context.
 
+## Packaged Plex components
+
+The prebuilt Linux bundle also includes `vtremote-plex-transcoder` and
+`vtremote-plex-bsf.so`. The supplied Plex container installs these components
+as a matched pair after validating Plex's bundled FFmpeg runtime.
+
 ## Experimental C SDK
 
 The release bundle includes `libvtremote_client.a`, public headers, and

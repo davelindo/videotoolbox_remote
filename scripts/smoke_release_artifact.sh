@@ -110,10 +110,13 @@ case "$kind" in
     prefix="$tmpdir/vtremote-vaapi/opt/vtremote-vaapi"
     driver="$prefix/lib/dri/vtremote_drv_video.so"
     probe="$prefix/bin/vtremote-probe"
+    plex_wrapper="$prefix/bin/vtremote-plex-transcoder"
+    plex_bsf="$prefix/lib/vtremote-plex-bsf.so"
     sdk="$prefix/lib/libvtremote_client.a"
     header="$prefix/include/vtremote/client.h"
-    [[ -f "$driver" && -x "$probe" && -f "$sdk" && -f "$header" ]] || {
-      echo "VA-API runtime or static SDK payload missing from $artifact" >&2
+    [[ -f "$driver" && -x "$probe" && -x "$plex_wrapper" && \
+       -f "$plex_bsf" && -f "$sdk" && -f "$header" ]] || {
+      echo "VA-API, Plex, or static SDK payload missing from $artifact" >&2
       find "$tmpdir" -maxdepth 6 -type f -print >&2
       exit 1
     }
@@ -137,7 +140,13 @@ case "$kind" in
       printf '%s\n' "$exports" >&2
       exit 1
     fi
-    for runtime_binary in "$driver" "$probe"; do
+    plex_exports="$(nm -D --defined-only "$plex_bsf" | awk '{print $3}' | sed '/^$/d')"
+    if [[ "$plex_exports" != "av_bsf_list_parse_str" ]]; then
+      echo "unexpected Plex preload module exports:" >&2
+      printf '%s\n' "$plex_exports" >&2
+      exit 1
+    fi
+    for runtime_binary in "$driver" "$probe" "$plex_wrapper" "$plex_bsf"; do
       max_glibc="$(readelf --version-info "$runtime_binary" | \
         sed -n 's/.*Name: GLIBC_\([^[:space:]]*\).*/\1/p' | sort -V | tail -n1)"
       if [[ -n "$max_glibc" && "$(printf '2.17\n%s\n' "$max_glibc" | sort -V | tail -n1)" != "2.17" ]]; then

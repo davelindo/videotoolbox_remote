@@ -115,7 +115,7 @@ tar -xzf ffmpeg-linux-x86_64.tar.gz -C ffmpeg-client
 - \`ffmpeg-macos-arm64.tar.gz\`: FFmpeg client build for Apple Silicon Macs.
 - \`ffmpeg-macos-x86_64.tar.gz\`: FFmpeg client build for Intel Macs.
 - \`ffmpeg-windows-x86_64.tar.gz\`: FFmpeg client build for Windows.
-- \`vtremote-vaapi-linux-x86_64.tar.gz\`: encode-only VA-API driver and experimental static C SDK for Linux/Plex.
+- \`vtremote-vaapi-linux-x86_64.tar.gz\`: encode-only VA-API driver, Plex packet shim, and experimental static C SDK for Linux.
 - \`vtremote-vaapi-*-source.tar.gz\`: matching VA-API driver source bundle.
 - \`SHA256SUMS.txt\`: checksums for all release tarballs.
 

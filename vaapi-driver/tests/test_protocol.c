@@ -8,6 +8,8 @@
 #include <string.h>
 #include <zstd.h>
 
+#include "protocol_golden.h"
+
 static uint32_t read_be32(const uint8_t *p) {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
            ((uint32_t)p[2] << 8) | p[3];
@@ -60,6 +62,59 @@ static int check_frame_mode(VTRWireCompression compression) {
     return 0;
 }
 
+static int check_golden_vectors(void) {
+    static const uint8_t plane[16] = {
+        0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,
+        0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,
+    };
+    static const VTRKeyValue options[] = {
+        {"bitrate", "2000000"},
+        {"gop", "60"},
+    };
+    VTRFrame frame;
+    VTRPacketView packet;
+    VTRBuffer buffer;
+
+    vtr_buffer_init(&buffer);
+    if (vtr_build_hello(&buffer, "TOKEN", "h264", "ffmpeg-client",
+                        "build123") < 0 ||
+        buffer.size != sizeof(vtremote_golden_hello) ||
+        memcmp(buffer.data, vtremote_golden_hello, buffer.size))
+        return 1;
+
+    if (vtr_build_configure(&buffer, 1920, 1080, VTR_PIXFMT_NV12,
+                            1, 30, 30, 1, options, 2) < 0 ||
+        buffer.size != sizeof(vtremote_golden_configure) ||
+        memcmp(buffer.data, vtremote_golden_configure, buffer.size))
+        return 1;
+
+    memset(&frame, 0, sizeof(frame));
+    frame.pts = 7;
+    frame.duration = 1;
+    frame.flags = 1;
+    frame.plane_count = 1;
+    frame.planes[0] = (VTRFramePlane){plane, 4, 4, sizeof(plane)};
+    if (vtr_build_frame(&buffer, &frame, VTR_WIRE_COMPRESSION_LZ4) < 0 ||
+        buffer.size != sizeof(vtremote_golden_lz4_frame) ||
+        memcmp(buffer.data, vtremote_golden_lz4_frame, buffer.size))
+        return 1;
+
+    if (vtr_parse_packet(vtremote_golden_packet_side_data,
+                         sizeof(vtremote_golden_packet_side_data), &packet) < 0 ||
+        packet.pts != 11 || packet.dts != 10 || packet.duration != 3 ||
+        packet.flags != 1 || packet.data_size != 3 ||
+        memcmp(packet.data, "\0\0\1", 3))
+        return 1;
+    if (vtr_parse_packet(vtremote_bad_packet_data_length,
+                         sizeof(vtremote_bad_packet_data_length), &packet) == 0 ||
+        vtr_parse_packet(vtremote_bad_packet_side_length,
+                         sizeof(vtremote_bad_packet_side_length), &packet) == 0)
+        return 1;
+
+    vtr_buffer_free(&buffer);
+    return 0;
+}
+
 int main(void) {
     VTRBuffer buffer;
     VTRPacketView packet;
@@ -97,7 +152,8 @@ int main(void) {
         return 1;
     if (check_frame_mode(VTR_WIRE_COMPRESSION_NONE) ||
         check_frame_mode(VTR_WIRE_COMPRESSION_LZ4) ||
-        check_frame_mode(VTR_WIRE_COMPRESSION_ZSTD)) return 1;
+        check_frame_mode(VTR_WIRE_COMPRESSION_ZSTD) ||
+        check_golden_vectors()) return 1;
     puts("ok");
     return 0;
 }
