@@ -85,6 +85,34 @@ def main():
     ], output
     assert error == "LD_PRELOAD=/opt/test/vtremote-plex-bsf.so\n", error
 
+    claimed_server_arguments = list(plex_arguments)
+    graph_index = claimed_server_arguments.index("-filter_complex") + 1
+    claimed_server_arguments[graph_index] = (
+        "[0:0]hwupload[0];"
+        "[0]scale_vaapi=w=720:h=388:format=nv12[1];"
+        "[1]hwupload[2]"
+    )
+    sei_index = claimed_server_arguments.index("-sei:0") + 1
+    claimed_server_arguments[sei_index] = "-a53_cc"
+    code, output, error = run(args.wrapper, claimed_server_arguments)
+    assert code == 0, (code, output, error)
+    claimed_filter = output[output.index("-bsf:0") + 1]
+    assert ":vt_remote_out_width=720:vt_remote_out_height=388" in claimed_filter
+    assert ":vt_remote_a53_cc=" not in claimed_filter
+
+    claimed_hdr_arguments = list(claimed_server_arguments)
+    claimed_hdr_arguments[graph_index] = (
+        "[0:0]hwupload[0];"
+        "[0]scale_vaapi=w=720:h=306:format=p010[1];"
+        "[1]hwmap=derive_device=opencl[2];"
+        "[2]tonemap_opencl=tonemap=hable:format=nv12:m=bt709:p=bt709:r=tv[3];"
+        "[3]hwmap=derive_device=vaapi:reverse=1[4];"
+        "[4]hwupload[5]"
+    )
+    code, output, error = run(args.wrapper, claimed_hdr_arguments)
+    assert code == 2, (code, output, error)
+    assert output == ["/real/Plex Transcoder", *claimed_hdr_arguments], output
+
     cbr_arguments = ["CBR" if value == "VBR" else value
                      for value in plex_arguments]
     code, cbr_output, error = run(args.wrapper, cbr_arguments)
@@ -189,6 +217,18 @@ def main():
     assert "vt_remote_out_codec=hevc" in hevc_filter, output
     assert ":vt_remote_profile=1" in hevc_filter, output
     assert ":vt_remote_level=" not in hevc_filter, output
+
+    claimed_hevc_output = list(claimed_server_arguments)
+    claimed_hevc_output[claimed_hevc_output.index("h264_vaapi")] = "hevc_vaapi"
+    claimed_hevc_output[claimed_hevc_output.index("high")] = "main"
+    for option in ("-level:0", "-coder:0"):
+        option_index = claimed_hevc_output.index(option)
+        del claimed_hevc_output[option_index:option_index + 2]
+    code, output, error = run(args.wrapper, claimed_hevc_output)
+    assert code == 0, (code, output, error)
+    claimed_hevc_filter = output[output.index("-bsf:0") + 1]
+    assert "vt_remote_out_codec=hevc" in claimed_hevc_filter
+    assert ":vt_remote_a53_cc=" not in claimed_hevc_filter
 
     indirect_graph = list(plex_arguments)
     graph_index = indirect_graph.index("-filter_complex") + 1

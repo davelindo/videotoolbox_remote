@@ -7,6 +7,7 @@ target='/usr/lib/plexmediaserver/Plex Transcoder'
 real='/usr/lib/plexmediaserver/Plex Transcoder.real'
 audit=${VTREMOTE_PLEX_AUDIT_FILE:-/dev/shm/plex/vtremote-plex-wrapper.log}
 audit_dir=${audit%/*}
+decision_audit=${audit}.decision
 avcodec=${VTREMOTE_PLEX_AVCODEC_LIBRARY:-/usr/lib/plexmediaserver/lib/libavcodec.so.60}
 tested_avcodec_sha256=${VTREMOTE_PLEX_AVCODEC_SHA256:-}
 approved=false
@@ -35,6 +36,12 @@ fi
 if [ "$audit_dir" != "$audit" ]; then
     install -d -o plex -g plex -m 0755 "$audit_dir"
 fi
+touch "$audit"
+chown plex:plex "$audit"
+chmod 0600 "$audit"
+touch "$decision_audit"
+chown plex:plex "$decision_audit"
+chmod 0600 "$decision_audit"
 
 if cmp -s "$wrapper" "$target"; then
     exit 0

@@ -7,7 +7,8 @@ frames do not cross the network, and the Linux host needs no GPU or DRM render
 node.
 
 The image installs a narrow wrapper in front of Plex Transcoder. It recognizes
-Plex's ordinary software-scale/format/hardware-upload graph and replaces the
+Plex's ordinary software-scale/format/hardware-upload graph and the SDR
+VA-API upload/scale/upload graph emitted by Plex 1.43.4, then replaces the
 complete video chain with the `vtremote_transcode` packet filter. Unknown
 codecs, multiple hardware graphs, tone mapping, deinterlace, and other
 unrecognized graphs pass through unchanged to Plex's native Transcoder. The
@@ -84,5 +85,7 @@ new successful-handshake audit marker, and stops only its own session.
 
 A marker in `VTREMOTE_PLEX_AUDIT_FILE` proves that remote decode/scale/encode
 started; its absence means Plex used a native or unsupported path. A valid
-segment plus a new marker proves media returned through the remote path. Check
-Linux process CPU and `vtremoted` logs separately when validating performance.
+segment in the expected codec plus a new marker proves media returned through
+the remote path. The playback smoke uses Plex's Chrome profile and therefore
+expects H.264 output. Check Linux process CPU and `vtremoted` logs separately
+when validating performance.

@@ -7,12 +7,7 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
-## [v0.7.25] - 2026-09-04
-
-### Changed
-- Rebased the vendored `ffmpeg/` subtree to upstream `master` snapshot `818e5d965be9` (from `9fc8c785e274`).
-
-## [v0.8.0] - 2026-09-03
+## [v0.8.0] - 2026-09-04
 
 ### Added
 
@@ -28,6 +23,11 @@ The non-version `nightly` tag is intentionally excluded.
 
 ### Fixed
 
+- Recognized the SDR VA-API upload/scale/upload graph emitted by Plex 1.43.4,
+  including H.264 and HEVC output, while leaving unsupported HDR tone-mapping
+  graphs on Plex's native path.
+- Treated Plex's disabled A53 closed-caption option as a no-op instead of
+  rejecting an otherwise supported remote transcode.
 - Converted the encoder configuration returned by `vtremoted` to Annex-B
   parameter sets and included them on keyframes, making VA-API H.264 and HEVC
   output independently decodable.
@@ -61,6 +61,11 @@ The non-version `nightly` tag is intentionally excluded.
   Intel VA-API. The remote Apple M2 path was 1.58x faster for HEVC Main10
   output, while the Intel path was 2.31x faster for H.264 output on the tested
   1080p-to-720p workload.
+
+## [v0.7.25] - 2026-09-04
+
+### Changed
+- Rebased the vendored `ffmpeg/` subtree to upstream `master` snapshot `818e5d965be9` (from `9fc8c785e274`).
 
 ## [v0.7.24] - 2026-09-02
 

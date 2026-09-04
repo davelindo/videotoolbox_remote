@@ -50,6 +50,46 @@ static bool has_environment_value(const char *name)
     return value != NULL && *value != '\0';
 }
 
+static void audit_decision(bool remote_enabled, bool host_available,
+                           bool bsf_available, bool runtime_supported,
+                           int encoder_index, int input_codec_index,
+                           int graph_index, bool unsupported_graph,
+                           int mapped_outputs, bool options_checked,
+                           bool options_supported, bool transformed)
+{
+    const char *audit = getenv("VTREMOTE_PLEX_AUDIT_FILE");
+    char *path;
+    FILE *file;
+    size_t required;
+
+    if (audit == NULL || *audit == '\0') {
+        return;
+    }
+    required = strlen(audit) + strlen(".decision") + 1;
+    path = malloc(required);
+    if (path == NULL) {
+        return;
+    }
+    (void)snprintf(path, required, "%s.decision", audit);
+    file = fopen(path, "a");
+    free(path);
+    if (file == NULL) {
+        return;
+    }
+    (void)fprintf(file,
+                  "pid=%ld remote_enabled=%d host_available=%d "
+                  "bsf_available=%d runtime_supported=%d encoder_index=%d "
+                  "input_codec_index=%d graph_index=%d unsupported_graph=%d "
+                  "mapped_outputs=%d options_checked=%d "
+                  "options_supported=%d transformed=%d\n",
+                  (long)getpid(), remote_enabled, host_available,
+                  bsf_available, runtime_supported, encoder_index,
+                  input_codec_index, graph_index, unsupported_graph,
+                  mapped_outputs, options_checked, options_supported,
+                  transformed);
+    (void)fclose(file);
+}
+
 static bool parse_version_component(const char **cursor, unsigned *value,
                                     bool final)
 {
@@ -227,7 +267,7 @@ static bool parse_software_scale_options(const char *start, const char *end,
  *   [a]format=pix_fmts=nv12[b];[b]hwupload[out]
  * The packet filter replaces the whole graph, so retain only its source map
  * and requested output geometry. */
-static bool parse_remote_graph(const char *graph, RemoteGraph *parsed)
+static bool parse_software_remote_graph(const char *graph, RemoteGraph *parsed)
 {
     const char *input_label;
     const char *input_close;
@@ -315,6 +355,142 @@ static bool parse_remote_graph(const char *graph, RemoteGraph *parsed)
         return false;
     }
     return true;
+}
+
+static bool parse_vaapi_scale_options(const char *start, const char *end,
+                                      unsigned *width, unsigned *height)
+{
+    const char *cursor = start;
+    bool saw_width = false;
+    bool saw_height = false;
+    bool saw_format = false;
+
+    while (cursor < end) {
+        const char *separator = memchr(cursor, ':', (size_t)(end - cursor));
+        const char *token_end = separator != NULL ? separator : end;
+        size_t token_length = (size_t)(token_end - cursor);
+
+        if (token_length > 2 && strncmp(cursor, "w=", 2) == 0) {
+            if (saw_width ||
+                !parse_positive_uint(cursor + 2, token_length - 2, width)) {
+                return false;
+            }
+            saw_width = true;
+        } else if (token_length > 2 && strncmp(cursor, "h=", 2) == 0) {
+            if (saw_height ||
+                !parse_positive_uint(cursor + 2, token_length - 2, height)) {
+                return false;
+            }
+            saw_height = true;
+        } else if (token_length == strlen("format=nv12") &&
+                   strncmp(cursor, "format=nv12", token_length) == 0) {
+            if (saw_format) {
+                return false;
+            }
+            saw_format = true;
+        } else {
+            return false;
+        }
+        cursor = separator != NULL ? separator + 1 : end;
+    }
+    return saw_width && saw_height && saw_format;
+}
+
+/* Plex 1.43.4 emits this graph for an SDR VA-API decode/scale/encode path:
+ *   [input]hwupload[a];
+ *   [a]scale_vaapi=w=W:h=H:format=nv12[b];[b]hwupload[out]
+ * The packet filter replaces the complete hardware graph, so only its direct
+ * source map and requested output geometry need to be retained. */
+static bool parse_vaapi_remote_graph(const char *graph, RemoteGraph *parsed)
+{
+    const char *input_label;
+    const char *input_close;
+    const char *upload_output;
+    const char *upload_output_close;
+    const char *scale_input;
+    const char *scale_input_close;
+    const char *options;
+    const char *options_end;
+    const char *scale_output;
+    const char *scale_output_close;
+    const char *final_upload_input;
+    const char *final_upload_input_close;
+    const char *output_label;
+    const char *output_close;
+
+    if (graph == NULL || parsed == NULL || graph[0] != '[') {
+        return false;
+    }
+    input_label = graph + 1;
+    input_close = strchr(input_label, ']');
+    if (input_close == NULL ||
+        !is_direct_stream_specifier(input_label, input_close) ||
+        strncmp(input_close + 1, "hwupload[", strlen("hwupload[")) != 0) {
+        return false;
+    }
+    upload_output = input_close + 1 + strlen("hwupload[");
+    upload_output_close = strchr(upload_output, ']');
+    if (upload_output_close == NULL || upload_output_close[1] != ';' ||
+        upload_output_close[2] != '[') {
+        return false;
+    }
+    scale_input = upload_output_close + 3;
+    scale_input_close = strchr(scale_input, ']');
+    if (scale_input_close == NULL ||
+        !labels_match(upload_output,
+                      (size_t)(upload_output_close - upload_output),
+                      scale_input,
+                      (size_t)(scale_input_close - scale_input)) ||
+        strncmp(scale_input_close + 1, "scale_vaapi=",
+                strlen("scale_vaapi=")) != 0) {
+        return false;
+    }
+    options = scale_input_close + 1 + strlen("scale_vaapi=");
+    options_end = strchr(options, '[');
+    if (options_end == NULL ||
+        !parse_vaapi_scale_options(options, options_end,
+                                   &parsed->width, &parsed->height)) {
+        return false;
+    }
+    scale_output = options_end + 1;
+    scale_output_close = strchr(scale_output, ']');
+    if (scale_output_close == NULL || scale_output_close[1] != ';' ||
+        scale_output_close[2] != '[') {
+        return false;
+    }
+    final_upload_input = scale_output_close + 3;
+    final_upload_input_close = strchr(final_upload_input, ']');
+    if (final_upload_input_close == NULL ||
+        !labels_match(scale_output,
+                      (size_t)(scale_output_close - scale_output),
+                      final_upload_input,
+                      (size_t)(final_upload_input_close - final_upload_input)) ||
+        strncmp(final_upload_input_close + 1, "hwupload[",
+                strlen("hwupload[")) != 0) {
+        return false;
+    }
+    output_label = final_upload_input_close + 1 + strlen("hwupload[");
+    output_close = strchr(output_label, ']');
+    if (output_close == NULL || output_close[1] != '\0') {
+        return false;
+    }
+
+    parsed->input_map = copy_range(input_label, input_close);
+    parsed->output_map = copy_range(output_label, output_close);
+    if (parsed->input_map == NULL || parsed->output_map == NULL) {
+        free(parsed->input_map);
+        free(parsed->output_map);
+        parsed->input_map = NULL;
+        parsed->output_map = NULL;
+        return false;
+    }
+    return true;
+}
+
+static bool parse_remote_graph(const char *graph, RemoteGraph *parsed)
+{
+    return parse_software_remote_graph(graph, parsed) ||
+           parse_vaapi_remote_graph(graph, parsed);
 }
 
 static void free_remote_graph(RemoteGraph *graph)
@@ -786,11 +962,14 @@ static bool translate_encoder_options(int argc, char *const argv[],
         return false;
     }
     if (sei != NULL) {
-        if (strcmp(encoder, "h264_vaapi") != 0 ||
-            strcasecmp(sei, "a53_cc") != 0) {
+        if (strcasecmp(sei, "-a53_cc") == 0) {
+            translated->a53_cc = false;
+        } else if (strcmp(encoder, "h264_vaapi") == 0 &&
+                   strcasecmp(sei, "a53_cc") == 0) {
+            translated->a53_cc = true;
+        } else {
             return false;
         }
-        translated->a53_cc = true;
     }
     for (index = 0; index < sizeof(unsupported_names) /
                                 sizeof(unsupported_names[0]); ++index) {
@@ -928,6 +1107,10 @@ int main(int argc, char *argv[])
     const char *real_transcoder = getenv("VTREMOTE_PLEX_TRANSCODER_REAL");
     const char *bsf_library = getenv("VTREMOTE_PLEX_BSF_LIBRARY");
     bool test_mode = env_enabled("VTREMOTE_PLEX_WRAPPER_TEST");
+    bool remote_enabled = env_enabled("VTREMOTE_PLEX_REMOTE_TRANSCODE");
+    bool host_available = has_environment_value("VTREMOTE_HOST");
+    bool bsf_available;
+    bool runtime_supported;
     char **rewritten_argv;
     int output_index = 0;
     int encoder_index;
@@ -935,6 +1118,9 @@ int main(int argc, char *argv[])
     int input_index;
     bool transformed = false;
     bool unsupported_graph = false;
+    int mapped_outputs = -1;
+    bool options_checked = false;
+    bool options_supported = false;
     RemoteGraph graph = {.option_index = -1};
     RemoteEncoderOptions encoder_options;
     char *filter_argument = NULL;
@@ -954,10 +1140,10 @@ int main(int argc, char *argv[])
 
     encoder_index = find_unique_vaapi_encoder(argc, argv);
     input_codec_index = find_unique_supported_input_codec(argv, encoder_index);
-    if (env_enabled("VTREMOTE_PLEX_REMOTE_TRANSCODE") &&
-        has_environment_value("VTREMOTE_HOST") &&
-        (test_mode || access(bsf_library, R_OK) == 0) &&
-        plex_runtime_supported(test_mode) &&
+    bsf_available = test_mode || access(bsf_library, R_OK) == 0;
+    runtime_supported = bsf_available && plex_runtime_supported(test_mode);
+    if (remote_enabled && host_available && bsf_available &&
+        runtime_supported &&
         encoder_index > 0 && input_codec_index > 0) {
         for (input_index = 1; input_index + 1 < argc; ++input_index) {
             if (strcmp(argv[input_index], "-filter_complex") != 0) {
@@ -985,11 +1171,18 @@ int main(int argc, char *argv[])
                 break;
             }
         }
+        if (!unsupported_graph && graph.option_index >= 0) {
+            mapped_outputs = mapped_output_count(argc, argv, graph.output_map);
+        }
         if (!unsupported_graph && graph.option_index >= 0 &&
-            mapped_output_count(argc, argv, graph.output_map) == 1 &&
-            translate_encoder_options(argc, argv, argv[encoder_index],
-                                      argv[encoder_index - 1],
-                                      &encoder_options)) {
+            mapped_outputs == 1) {
+            options_checked = true;
+            options_supported = translate_encoder_options(
+                argc, argv, argv[encoder_index], argv[encoder_index - 1],
+                &encoder_options);
+        }
+        if (!unsupported_graph && graph.option_index >= 0 &&
+            mapped_outputs == 1 && options_supported) {
             filter_argument = make_filter_argument(argc, argv, &graph,
                                                    argv[encoder_index],
                                                    argv[encoder_index - 1],
@@ -1057,6 +1250,13 @@ int main(int argc, char *argv[])
         free(bsf_option);
         free(rewritten_argv);
         return 70;
+    }
+
+    if (!test_mode && remote_enabled) {
+        audit_decision(remote_enabled, host_available, bsf_available,
+                       runtime_supported, encoder_index, input_codec_index,
+                       graph.option_index, unsupported_graph, mapped_outputs,
+                       options_checked, options_supported, transformed);
     }
 
     if (test_mode) {
