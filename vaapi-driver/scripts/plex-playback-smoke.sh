@@ -92,6 +92,13 @@ if [[ -z "$decoded_frames" ]] || (( decoded_frames < 1 )); then
   echo "Plex returned a segment without decodable video frames" >&2
   exit 1
 fi
+output_codec=$(ffprobe -v error -select_streams v:0 \
+  -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 \
+  "$segment" | sed -n '1p')
+if [[ "$output_codec" != h264 ]]; then
+  echo "Plex returned ${output_codec:-unknown} video; expected h264" >&2
+  exit 1
+fi
 
 after=$(wrapper_audit_count)
 if (( after <= before )); then
@@ -99,5 +106,5 @@ if (( after <= before )); then
   exit 1
 fi
 
-printf 'OK: Plex playback transcode session=%s segment_bytes=%s decoded_frames=%s wrapper_uses=%s\n' \
-  "$session" "$size" "$decoded_frames" "$((after - before))"
+printf 'OK: Plex playback transcode session=%s segment_bytes=%s decoded_frames=%s codec=%s wrapper_uses=%s\n' \
+  "$session" "$size" "$decoded_frames" "$output_codec" "$((after - before))"
