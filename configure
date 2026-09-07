@@ -4996,13 +4996,8 @@ case "$toolchain" in
         esac
     ;;
     msvc)
-        cl_major_ver=$(cl.exe 2>&1 | sed -n 's/.*Version \([[:digit:]]\{1,\}\)\..*/\1/p')
-        if [ -z "$cl_major_ver" ] || [ $cl_major_ver -ge 18 ]; then
-            cc_default="cl.exe"
-            cxx_default="cl.exe"
-        else
-            die "Unsupported MSVC version (2013 or newer required)"
-        fi
+        cc_default="cl.exe"
+        cxx_default="cl.exe"
         ld_default="$source_path/compat/windows/mslink"
         windres_default="$source_path/compat/windows/mswindres"
         nm_default="dumpbin.exe -symbols"
@@ -6460,10 +6455,6 @@ probe_libc(){
     # MinGW64 is backwards compatible with MinGW32, so check for it first.
     elif test_${pfx}cpp_condition _mingw.h "defined __MINGW64_VERSION_MAJOR"; then
         eval ${pfx}libc_type=mingw64
-        if test_${pfx}cpp_condition _mingw.h "__MINGW64_VERSION_MAJOR < 3"; then
-            add_compat msvcrt/snprintf.o
-            add_allcflags "-include $source_path/compat/msvcrt/snprintf.h"
-        fi
         add_${pfx}cflags -U__STRICT_ANSI__
         if ! test_${pfx}cpp_condition crtdefs.h "defined(_UCRT)"; then
             add_${pfx}cppflags -D__USE_MINGW_ANSI_STDIO=1
@@ -6488,23 +6479,9 @@ probe_libc(){
         add_${pfx}cppflags -D_POSIX_C_SOURCE=200112 -D_XOPEN_SOURCE=600
     elif test_${pfx}cpp_condition crtversion.h "defined _VC_CRT_MAJOR_VERSION"; then
         eval ${pfx}libc_type=msvcrt
-        if test_${pfx}cpp_condition crtversion.h "_VC_CRT_MAJOR_VERSION < 14"; then
-            if [ "$pfx" = host_ ]; then
-                add_host_cppflags -Dsnprintf=_snprintf
-            else
-                add_compat strtod.o strtod=avpriv_strtod
-                add_compat msvcrt/snprintf.o snprintf=avpriv_snprintf   \
-                                             _snprintf=avpriv_snprintf  \
-                                             vsnprintf=avpriv_vsnprintf
-            fi
-        fi
         add_${pfx}cppflags -D_USE_MATH_DEFINES -D_CRT_SECURE_NO_WARNINGS -D_CRT_NONSTDC_NO_WARNINGS
         test_${pfx}cpp_condition windows.h "!defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0601" &&
             add_${pfx}cppflags -D_WIN32_WINNT=0x0601
-        if [ "$pfx" = "" ]; then
-            check_func strtoll || add_allcflags -Dstrtoll=_strtoi64
-            check_func strtoull || add_allcflags -Dstrtoull=_strtoui64
-        fi
     elif test_${pfx}cpp_condition stddef.h "defined __KLIBC__"; then
         eval ${pfx}libc_type=klibc
     elif test_${pfx}cpp_condition sys/cdefs.h "defined __BIONIC__"; then
@@ -6514,7 +6491,7 @@ probe_libc(){
         add_${pfx}cppflags -D__EXTENSIONS__ -D_XOPEN_SOURCE=600
     elif test_${pfx}cpp_condition sys/version.h "defined __DJGPP__"; then
         eval ${pfx}libc_type=djgpp
-        add_cppflags -U__STRICT_ANSI__
+        add_${pfx}cppflags -U__STRICT_ANSI__
         add_allcflags "-include $source_path/compat/djgpp/math.h"
         add_compat djgpp/math.o
     fi
@@ -8217,26 +8194,9 @@ elif enabled_any msvc icl; then
             disable ebx_available
         fi
     fi
-    # msvcrt10 x64 incorrectly enables log2, only msvcrt12 (MSVC 2013) onwards actually has log2.
-    check_cpp_condition log2 crtversion.h "_VC_CRT_MAJOR_VERSION >= 12"
-    # the new SSA optimizer in VS2015 U3 is mis-optimizing some parts of the code
-    # Issue has been fixed in MSVC v19.00.24218.
-    test_cpp_condition windows.h "_MSC_FULL_VER >= 190024218" ||
-        check_cflags -d2SSAOptimizer-
-    # enable utf-8 source processing on VS2015 U2 and newer
-    test_cpp_condition windows.h "_MSC_FULL_VER >= 190023918" &&
-        add_cflags -utf-8
+    # enable utf-8 source processing
+    check_cflags -utf-8
 fi
-
-for pfx in "" host_; do
-    varname=${pfx%_}cc_type
-    eval "type=\$$varname"
-    if [ "$type" = "msvc" ]; then
-        test_${pfx}cc <<EOF || add_${pfx}cflags -Dinline=__inline
-static inline int foo(int a) { return a; }
-EOF
-    fi
-done
 
 case $as_type in
     clang)
