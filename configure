@@ -1717,7 +1717,7 @@ check_pkg_config_cxx(){
 }
 
 check_pkg_config_header_only(){
-    log check_pkg_config_cpp "$@"
+    log check_pkg_config_header_only "$@"
     name="$1"
     test_pkg_config_cpp "$@" &&
         eval add_cflags \$${name}_incflags
@@ -2637,13 +2637,11 @@ TOOLCHAIN_FEATURES="
     as_func
     as_object_arch
     asm_mod_q
-    blocks_extension
     ebx_available
     gnu_as
     gnu_windres
     ibm_asm
     inline_asm_direct_symbol_refs
-    inline_asm_labels
     inline_asm_nonlocal_labels
     pragma_deprecated
     rsync_contimeout
@@ -5202,18 +5200,6 @@ armasm_flags(){
    done
 }
 
-cparser_flags(){
-    for flag; do
-        case $flag in
-            -Wno-switch)             echo -Wno-switch-enum ;;
-            -Wno-format-zero-length) ;;
-            -Wdisabled-optimization) ;;
-            -Wno-pointer-sign)       echo -Wno-other ;;
-            *)                       echo $flag ;;
-        esac
-    done
-}
-
 msvc_common_flags(){
     for flag; do
         case $flag in
@@ -5337,7 +5323,6 @@ suncc_flags(){
 probe_cc(){
     pfx=$1
     _cc=$2
-    first=$3
 
     unset _type _ident _cc_c _cc_e _cc_o _flags _cflags _cxxflags
     unset _ld_o _ldflags _ld_lib _ld_path
@@ -5346,13 +5331,6 @@ probe_cc(){
 
     if $_cc --version 2>&1 | grep -q '^GNU assembler'; then
         true # no-op to avoid reading stdin in following checks
-    elif $_cc -v 2>&1 | grep -q '^gcc.*LLVM'; then
-        _type=llvm_gcc
-        gcc_extra_ver=$(expr "$($_cc --version 2>/dev/null | head -n1)" : '.*\((.*)\)')
-        _ident="llvm-gcc $($_cc -dumpversion 2>/dev/null) $gcc_extra_ver"
-        _depflags='-MMD -MF $(@:.o=.d) -MT $@'
-        _cflags_speed='-O3'
-        _cflags_size='-Os'
     elif $_cc -v 2>&1 | grep -qi ^gcc; then
         _type=gcc
         gcc_version=$($_cc --version | head -n1)
@@ -5360,17 +5338,7 @@ probe_cc(){
         gcc_pkg_ver=$(expr "$gcc_version" : '[^ ]* \(([^)]*)\)')
         gcc_ext_ver=$(expr "$gcc_version" : ".*$gcc_pkg_ver $gcc_basever \\(.*\\)")
         _ident=$(cleanws "gcc $gcc_basever $gcc_pkg_ver $gcc_ext_ver")
-        case $gcc_basever in
-            2) ;;
-            2.*) ;;
-            *) _depflags='-MMD -MF $(@:.o=.d) -MT $@' ;;
-        esac
-        if [ "$first" = true ]; then
-            case $gcc_basever in
-                4.2*)
-                warn "gcc 4.2 is outdated and may miscompile FFmpeg. Please use a newer compiler." ;;
-            esac
-        fi
+        _depflags='-MMD -MF $(@:.o=.d) -MT $@'
         _cflags_speed='-O3'
         _cflags_size='-Os'
     elif $_cc --version 2>/dev/null | grep -q ^icc; then
@@ -5385,22 +5353,6 @@ probe_cc(){
         _ident=$($_cc -qversion 2>/dev/null | head -n1)
         _cflags_speed='-O5'
         _cflags_size='-O5 -qcompact'
-    elif $_cc --vsn 2>/dev/null | grep -Eq "ARM (C/C\+\+ )?Compiler"; then
-        test -d "$sysroot" || die "No valid sysroot specified."
-        _type=armcc
-        _ident=$($_cc --vsn | grep -i build | head -n1 | sed 's/.*: //')
-        armcc_conf="$PWD/armcc.conf"
-        $_cc --arm_linux_configure                 \
-             --arm_linux_config_file="$armcc_conf" \
-             --configure_sysroot="$sysroot"        \
-             --configure_cpp_headers="$sysinclude" >>$logfile 2>&1 ||
-             die "Error creating armcc configuration file."
-        $_cc --vsn | grep -q RVCT && armcc_opt=rvct || armcc_opt=armcc
-        _flags="--arm_linux_config_file=$armcc_conf --translate_gcc"
-        as_default="${cross_prefix}gcc"
-        _depflags='-MMD'
-        _cflags_speed='-O3'
-        _cflags_size='-Os'
     elif $_cc -v 2>&1 | grep -q clang && ! $_cc -? > /dev/null 2>&1; then
         _type=clang
         _ident=$($_cc --version 2>/dev/null | head -n1)
@@ -5416,20 +5368,6 @@ probe_cc(){
         _cflags_speed='-O5'
         _cflags_size='-O5 -xspace'
         _flags_filter=suncc_flags
-    elif $_cc -v 2>&1 | grep -q 'PathScale\|Path64'; then
-        _type=pathscale
-        _ident=$($_cc -v 2>&1 | head -n1 | tr -d :)
-        _depflags='-MMD -MF $(@:.o=.d) -MT $@'
-        _cflags_speed='-O2'
-        _cflags_size='-Os'
-        _flags_filter='filter_out -Wdisabled-optimization'
-    elif $_cc -v 2>&1 | grep -q Open64; then
-        _type=open64
-        _ident=$($_cc -v 2>&1 | head -n1 | tr -d :)
-        _depflags='-MMD -MF $(@:.o=.d) -MT $@'
-        _cflags_speed='-O2'
-        _cflags_size='-Os'
-        _flags_filter='filter_out -Wdisabled-optimization|-Wtype-limits|-fno-signed-zeros'
     elif $_cc 2>&1 | grep -q 'Microsoft.*ARM.*Assembler'; then
         _type=armasm
         _ident=$($_cc | head -n1)
@@ -5506,13 +5444,6 @@ probe_cc(){
         _flags='-nologo'
         _cxxflags='-Zc:__cplusplus -EHsc'
         disable stripping
-    elif $_cc --version 2>/dev/null | grep -q ^cparser; then
-        _type=cparser
-        _ident=$($_cc --version | head -n1)
-        _depflags='-MMD'
-        _cflags_speed='-O4'
-        _cflags_size='-O2'
-        _flags_filter=cparser_flags
     fi
 
     eval ${pfx}_type=\$_type
@@ -5533,7 +5464,7 @@ set_ccvars(){
     fi
 }
 
-probe_cc cc "$cc" "true"
+probe_cc cc "$cc"
 cflags_filter=$_flags_filter
 cflags_speed=$_cflags_speed
 cflags_size=$_cflags_size
@@ -5617,7 +5548,7 @@ add_asflags $extra_cflags
 
 if test -n "$sysroot"; then
     case "$cc_type" in
-        gcc|llvm_gcc|clang)
+        gcc|clang)
             add_cppflags --sysroot="$sysroot"
             add_ldflags --sysroot="$sysroot"
         ;;
@@ -5629,7 +5560,7 @@ if test "$cpu" = host; then
         warn "--cpu=host makes no sense when cross-compiling."
 
     case "$cc_type" in
-        gcc|llvm_gcc)
+        gcc)
             check_native(){
                 : > $TMPC
                 $cc $1=native -v -c -o $TMPO $TMPC >$TMPE 2>&1 || return
@@ -6607,8 +6538,6 @@ if enabled_any arm aarch64 || enabled_all ppc altivec && enabled asm; then
     check_as as_func ".func test
                       .endfunc"
 fi
-
-check_inline_asm inline_asm_labels '"1:\n"'
 
 check_inline_asm inline_asm_nonlocal_labels '"Label:\n"'
 
@@ -7978,10 +7907,6 @@ check_disable_warning_headers(){
 check_disable_warning_headers -Wno-deprecated-declarations
 check_disable_warning_headers -Wno-unused-variable
 
-test_cc <<EOF && enable blocks_extension
-void (^block)(void);
-EOF
-
 # add some linker flags
 check_ldflags -Wl,-rpath-link=:libswresample:libswscale:libavfilter:libavdevice:libavformat:libavcodec:libavutil
 enabled rpath && add_ldexeflags -Wl,-rpath,$libdir && add_ldsoflags -Wl,-rpath,$libdir
@@ -8093,9 +8018,7 @@ if enabled icc; then
     # The test above does not test linking
     [ -n "$lto" ] && disable symver_asm_label
     if enabled x86_32; then
-        icc_version=$($cc -dumpversion)
-        test ${icc_version%%.*} -ge 11 &&
-            check_cppflags -falign-stack=maintain-16-byte ||
+        check_cppflags -falign-stack=maintain-16-byte ||
             disable aligned_stack
     fi
 elif enabled gcc; then
@@ -8137,8 +8060,6 @@ elif enabled gcc; then
             ;;
         esac
     fi
-elif enabled llvm_gcc; then
-    check_allcflags -mllvm -stack-alignment=16
 elif enabled clang; then
     if enabled x86_32; then
         # Clang doesn't support maintaining alignment without assuming the
@@ -8163,22 +8084,6 @@ elif enabled clang; then
     check_allcflags -Werror=implicit-function-declaration
     check_allcflags -Werror=missing-prototypes
     check_allcflags -Werror=return-type
-elif enabled cparser; then
-    add_cflags -Wno-missing-variable-declarations
-    add_cflags -Wno-empty-statement
-elif enabled armcc; then
-    add_cflags -W${armcc_opt},--diag_suppress=4343 # hardfp compat
-    add_cflags -W${armcc_opt},--diag_suppress=3036 # using . as system include dir
-    # 2523: use of inline assembly is deprecated
-    add_cflags -W${armcc_opt},--diag_suppress=2523
-    add_cflags -W${armcc_opt},--diag_suppress=1207
-    add_cflags -W${armcc_opt},--diag_suppress=1293 # assignment in condition
-    add_cflags -W${armcc_opt},--diag_suppress=3343 # hardfp compat
-    add_cflags -W${armcc_opt},--diag_suppress=167  # pointer sign
-    add_cflags -W${armcc_opt},--diag_suppress=513  # pointer sign
-elif enabled pathscale; then
-    add_cflags -fstrict-overflow -OPT:wrap_around_unsafe_opt=OFF
-    disable inline_asm
 elif enabled_any msvc icl; then
     enabled x86_32 && disable aligned_stack
     enabled_all x86_32 debug && add_cflags -Oy-
