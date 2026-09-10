@@ -588,7 +588,11 @@ jobs:
           make libavutil/ffversion.h
       - name: Build, test, and package
         run: |
-          version="$(git describe --tags --always --dirty | sed 's/^v//')"
+          case "${GITHUB_REF:-}" in
+            refs/tags/v*) version="${GITHUB_REF#refs/tags/v}" ;;
+            *) version="$(printf '%.12s' "${GITHUB_SHA:?}")" ;;
+          esac
+          test -n "$version"
           make test-vaapi-driver VTREMOTE_VERSION="$version"
           cmake -S vaapi-driver -B vaapi-driver/build-analyzer \
             -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=OFF \
@@ -608,6 +612,7 @@ jobs:
           make package-vaapi-driver VTREMOTE_VERSION="$version" \
             VTREMOTE_PLEX_FFMPEG_SOURCE_DIR=/tmp/ffmpeg-6.1.1
           VERSION="$version" vaapi-driver/scripts/package-source.sh
+          test -s "vaapi-driver/dist/vtremote-vaapi-${version}-source.tar.gz"
       - name: Smoke packaged VA-API artifact
         run: |
           bash scripts/smoke_release_artifact.sh vaapi-driver \
