@@ -3,11 +3,13 @@
 #include <dlfcn.h>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "vtremoted-protocol.h"
@@ -26,6 +28,9 @@ struct Args {
   int keyint_sec = 2;
   int updated_keyint_sec = 3;
   int wire_compression = VTR_WIRE_LZ4;
+  bool expect_encode_error = false;
+  int error_wait_ms = 500;
+  std::string error_contains;
 };
 
 [[noreturn]] void fail(const std::string &message) {
@@ -107,6 +112,12 @@ Args parse_args(int argc, char **argv) {
       args.updated_keyint_sec = std::stoi(require_value("--updated-keyint-sec"));
     } else if (arg == "--expected-extradata-hex") {
       args.expected_extradata_hex = require_value("--expected-extradata-hex");
+    } else if (arg == "--expect-encode-error") {
+      args.expect_encode_error = true;
+    } else if (arg == "--error-wait-ms") {
+      args.error_wait_ms = std::stoi(require_value("--error-wait-ms"));
+    } else if (arg == "--error-contains") {
+      args.error_contains = require_value("--error-contains");
     } else {
       fail("unknown argument: " + arg);
     }
@@ -119,6 +130,8 @@ Args parse_args(int argc, char **argv) {
   require(args.updated_bitrate > 0, "--updated-bitrate must be positive");
   require(args.keyint_sec >= 0, "--keyint-sec must be non-negative");
   require(args.updated_keyint_sec >= 0, "--updated-keyint-sec must be non-negative");
+  require(args.error_wait_ms >= 0 && args.error_wait_ms <= 6000,
+          "--error-wait-ms must be between 0 and 6000");
 
   return args;
 }
@@ -214,8 +227,6 @@ void validate_defaults() {
           "unexpected default keyint_sec");
   require(obs_data_get_int(defaults.ptr, "wire_compression") == VTR_WIRE_LZ4,
           "unexpected default wire_compression");
-  require(std::string(obs_data_get_string(defaults.ptr, "codec")) == "h264",
-          "unexpected default codec");
 }
 
 void validate_properties() {
@@ -251,21 +262,7 @@ void validate_properties() {
 
   obs_property_t *codec =
       obs_properties_get(props.ptr, "codec");
-  require(codec != nullptr, "codec property missing");
-  require(obs_property_get_type(codec) == OBS_PROPERTY_LIST,
-          "codec property type mismatch");
-  require(obs_property_list_format(codec) == OBS_COMBO_FORMAT_STRING,
-          "codec list format mismatch");
-  require(obs_property_list_item_count(codec) == 2,
-          "codec item count mismatch");
-  require(std::string(obs_property_list_item_name(codec, 0)) == "H.264 (AVC)",
-          "codec item 0 name mismatch");
-  require(std::string(obs_property_list_item_string(codec, 0)) == "h264",
-          "codec item 0 value mismatch");
-  require(std::string(obs_property_list_item_name(codec, 1)) == "HEVC (H.265)",
-          "codec item 1 name mismatch");
-  require(std::string(obs_property_list_item_string(codec, 1)) == "hevc",
-          "codec item 1 value mismatch");
+  require(codec == nullptr, "codec selection must use OBS encoder identity");
 }
 
 const struct obs_encoder_info *load_encoder_info(obs_module_t *module) {
@@ -359,15 +356,17 @@ int run(const Args &args) {
   require(display_name != nullptr,
           "obs_encoder_get_display_name returned null");
   require(std::string(display_name) ==
-              "VideoToolbox Remote",
+              "VideoToolbox Remote H.264",
           "encoder display name mismatch");
+  require(std::string(obs_get_encoder_codec("vtremoted_hevc_encoder")) == "hevc",
+          "HEVC encoder codec mismatch");
 
   validate_defaults();
   validate_properties();
 
   ObsDataHandle settings{obs_data_create()};
   require(settings.ptr != nullptr, "obs_data_create failed");
-  fill_encoder_settings(settings.ptr, args, args.bitrate, args.keyint_sec);
+  fill_encoder_settings(settings.ptr, args, args.updated_bitrate, args.updated_keyint_sec);
 
   ObsEncoderHandle encoder{obs_video_encoder_create(
       "vtremoted_encoder", "vtremoted-integration", settings.ptr, nullptr)};
@@ -397,16 +396,6 @@ int run(const Args &args) {
   EncoderDataHandle data{info, info->create(settings.ptr, encoder.ptr)};
   require(data.ptr != nullptr, "encoder create callback failed");
 
-  if (args.updated_bitrate != args.bitrate ||
-      args.updated_keyint_sec != args.keyint_sec) {
-    require(info->update != nullptr, "encoder update callback missing");
-    ObsDataHandle updated{obs_data_create()};
-    require(updated.ptr != nullptr, "updated obs_data_create failed");
-    fill_encoder_settings(updated.ptr, args, args.updated_bitrate,
-                          args.updated_keyint_sec);
-    require(info->update(data.ptr, updated.ptr), "encoder update callback failed");
-  }
-
   struct video_scale_info video_info = {};
   info->get_video_info(data.ptr, &video_info);
   require(video_info.format == VIDEO_FORMAT_NV12,
@@ -424,6 +413,34 @@ int run(const Args &args) {
   frame.linesize[0] = kWidth;
   frame.linesize[1] = kWidth;
 
+  if (args.expect_encode_error) {
+    const auto started = std::chrono::steady_clock::now();
+    bool failed = false;
+    for (int i = 0; i < 2; ++i) {
+      frame.pts = 1000 + i * 1000;
+      struct encoder_packet packet = {};
+      bool received = false;
+      if (!info->encode(data.ptr, &frame, &packet, &received)) {
+        failed = true;
+        break;
+      }
+      if (i == 0)
+        std::this_thread::sleep_for(std::chrono::milliseconds(args.error_wait_ms));
+    }
+    require(failed, "terminal peer failure was hidden by encode callback");
+    const char *error = obs_encoder_get_last_error(encoder.ptr);
+    require(error && *error, "encode callback omitted error detail");
+    require(std::string(error).find(args.error_contains) != std::string::npos,
+            "encode callback lost expected server error detail");
+    require(std::chrono::steady_clock::now() - started < std::chrono::seconds(7),
+            "encode failure exceeded timeout plus scheduling margin");
+    data.reset();
+    encoder.reset();
+    video.reset();
+    return 0;
+  }
+
+  int received_count = 0;
   for (int i = 0; i < 2; ++i) {
     frame.pts = 1000 + (i * 1000);
     struct encoder_packet packet = {};
@@ -431,12 +448,13 @@ int run(const Args &args) {
 
     require(info->encode(data.ptr, &frame, &packet, &received_packet),
             "encoder encode callback failed");
-    require(received_packet, "encoder did not return a packet");
-    validate_packet(packet, frame.pts);
+    if (received_packet) validate_packet(packet, 1000 + 1000 * received_count++);
 
     if (i == 0)
       validate_extradata(info, data.ptr, expected_extradata);
   }
+
+  require(received_count == 2, "encoder left packets queued before normal stop");
 
   data.reset();
   encoder.reset();

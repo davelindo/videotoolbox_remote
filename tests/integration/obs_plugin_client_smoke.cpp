@@ -158,15 +158,15 @@ int main(int argc, char **argv) {
   int64_t dts = 0;
   bool keyframe = true;
 
-  const bool received = vtremoted_client_receive_packet(
+  const VTRReceiveResult received = vtremoted_client_receive_packet(
       client,
       &packet_data,
       &packet_size,
       &pts,
       &dts,
-      &keyframe);
+      &keyframe, 5000);
 
-  if (!received) {
+  if (received != VTR_RECEIVE_PACKET) {
     std::fprintf(stderr, "receive_packet failed\n");
     vtremoted_client_destroy(client);
     return 1;

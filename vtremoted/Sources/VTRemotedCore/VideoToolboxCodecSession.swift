@@ -9,6 +9,23 @@
     final class VideoToolboxCodecSession: CodecSession, StreamingCodecSession {
         private let send: MessageSender
         private let logger = Logger.shared
+        private let failure = SessionFailure()
+        private let decodeStages = DecodeStageStats()
+        private let decodeBuffers = RawBufferPool()
+
+        private func fail(_ error: Error) {
+            guard failure.record(error) else { return }
+            logger.error("fatal codec error: \(error)")
+            let body = ErrorResponse(code: 2, message: "codec failed: \(error)").encode()
+            do { try send(.error, [body]) }
+            catch { logger.error("terminal error send failed: \(error)") }
+        }
+
+        private func checkStatus(_ status: OSStatus, _ operation: String) throws {
+            guard status == noErr else {
+                throw VTRemotedError.ioError(code: Int32(status), message: "\(operation) failed")
+            }
+        }
 
         private var config: SessionConfiguration?
 
@@ -145,7 +162,6 @@
             let sideData: [WireSideData]
         }
         private let inputBufferPool = BufferPool()
-        private let outputBufferPool = BufferPool()
 
         init(sender: @escaping MessageSender) {
             send = sender
@@ -180,20 +196,6 @@
                 return ZstdCodec.decompressRaw(source, into: destination, expectedSize: expectedSize)
             default:
                 return false
-            }
-        }
-
-        private static func compressWirePayload(mode: Int, data: Data) -> Data? {
-            switch mode {
-            case 0:
-                return data
-            case 1:
-                return LZ4Codec.compress(data)
-            case 2:
-                return ZstdCodec.compress(data)
-            default:
-                assertionFailure("unsupported wire compression mode \(mode)")
-                return nil
             }
         }
 
@@ -428,6 +430,7 @@
         }
 
         func handleFrameMessage(_ payload: Data) throws {
+            try failure.check()
             guard let config else { throw VTRemotedError.protocolViolation("FRAME before CONFIGURE") }
             guard config.mode == .encode else { return }
             guard let session = compressionSession else { throw VTRemotedError.videoToolboxUnavailable }
@@ -633,6 +636,7 @@
         }
 
         func handleFrameStream(streamIO: VTRStreamIO, length: Int) throws {
+            try failure.check()
             guard let config else { throw VTRemotedError.protocolViolation("FRAME before CONFIGURE") }
             guard config.mode == .encode else {
                 try streamIO.skip(length: length)
@@ -913,6 +917,7 @@
         }
 
         func handlePacketMessage(_ payload: Data) throws {
+            try failure.check()
             guard let config else { throw VTRemotedError.protocolViolation("PACKET before CONFIGURE") }
             guard config.mode == .decode || config.mode == .transcode else { return }
             guard let session = decompressionSession, let fmt = formatDescription else {
@@ -944,17 +949,20 @@
                 flags: 0,
                 blockBufferOut: &block
             )
-            guard status == noErr, let bufferBlock = block else { return }
+            try checkStatus(status, "CMBlockBufferCreateWithMemoryBlock")
+            guard let bufferBlock = block else { throw VTRemotedError.protocolViolation("missing decode block buffer") }
 
             lengthPrefixed.withUnsafeBytes { ptr in
                 guard let base = ptr.baseAddress else { return }
-                _ = CMBlockBufferReplaceDataBytes(
+                status = CMBlockBufferReplaceDataBytes(
                     with: base,
                     blockBuffer: bufferBlock,
                     offsetIntoDestination: 0,
                     dataLength: dataCount
                 )
             }
+
+            try checkStatus(status, "CMBlockBufferReplaceDataBytes")
 
             var timing = CMSampleTimingInfo(
                 duration: durTicks > 0 ? cmTime(fromTicks: durTicks, timebase: config.timebase) : .invalid,
@@ -974,7 +982,8 @@
                 sampleSizeArray: [dataCount],
                 sampleBufferOut: &sample
             )
-            guard status == noErr, let sampleBuffer = sample else { return }
+            try checkStatus(status, "CMSampleBufferCreateReady")
+            guard let sampleBuffer = sample else { throw VTRemotedError.protocolViolation("missing decode sample buffer") }
 
             var decodeFlags: VTDecodeFrameFlags = []
             if decodeAsyncEnabled {
@@ -990,55 +999,50 @@
                 throw VTRemotedError.ioError(code: Int32(status), message: "VTDecompressionSessionDecodeFrame failed")
             }
             if !decodeAsyncEnabled {
-                _ = VTDecompressionSessionWaitForAsynchronousFrames(session)
+                try checkStatus(VTDecompressionSessionWaitForAsynchronousFrames(session), "wait for decode")
             }
+            try failure.check()
         }
 
         func flush() throws {
+            try failure.check()
             // In transcode mode, the decoder can hold a small reorder buffer (especially with
             // B-frames) and only release the final frames on EOS flush. Those decoded frames must be
             // submitted to the encoder before we call VTCompressionSessionCompleteFrames, otherwise
             // the last frames can be silently dropped.
             if config?.mode == .transcode {
-                if let session = decompressionSession {
-                    _ = VTDecompressionSessionFinishDelayedFrames(session)
-                    _ = VTDecompressionSessionWaitForAsynchronousFrames(session)
-                    flushDecodedFrames()
-                }
-                if let session = compressionSession {
-                    VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
-                    callbackLock.lock()
-                    if encodeReorderBySeq {
-                        drainEncodePacketsLocked()
-                    } else if let reorder = encodeDtsReorderBuffer {
-                        let pkts = reorder.flush()
-                        for pkt in pkts {
-                            emitEncodedPacketLocked(pkt)
-                        }
-                    }
-                    callbackLock.unlock()
-                }
-                return
+                try flushDecoder()
+                try flushEncoder()
+            } else {
+                try flushEncoder()
+                try flushDecoder()
             }
+            try failure.check()
+        }
 
-            if let session = compressionSession {
-                VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
-                callbackLock.lock()
-                if encodeReorderBySeq {
-                    drainEncodePacketsLocked()
-                } else if let reorder = encodeDtsReorderBuffer {
-                    let pkts = reorder.flush()
-                    for pkt in pkts {
-                        emitEncodedPacketLocked(pkt)
-                    }
+        private func flushEncoder() throws {
+            guard let session = compressionSession else { return }
+            try checkStatus(
+                VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid),
+                "complete encode"
+            )
+            callbackLock.lock()
+            defer { callbackLock.unlock() }
+            if encodeReorderBySeq {
+                drainEncodePacketsLocked()
+            } else if let reorder = encodeDtsReorderBuffer {
+                let packets = reorder.flush()
+                for packet in packets {
+                    emitEncodedPacketLocked(packet)
                 }
-                callbackLock.unlock()
             }
-            if let session = decompressionSession {
-                _ = VTDecompressionSessionFinishDelayedFrames(session)
-                _ = VTDecompressionSessionWaitForAsynchronousFrames(session)
-                flushDecodedFrames()
-            }
+        }
+
+        private func flushDecoder() throws {
+            guard let session = decompressionSession else { return }
+            try checkStatus(VTDecompressionSessionFinishDelayedFrames(session), "finish delayed decode")
+            try checkStatus(VTDecompressionSessionWaitForAsynchronousFrames(session), "wait for decode")
+            flushDecodedFrames()
         }
 
         func shutdown() {
@@ -1047,6 +1051,11 @@
             }
             if let session = decompressionSession {
                 VTDecompressionSessionInvalidate(session)
+            }
+            if config?.mode == .decode {
+                logger.info(decodeStages.summary())
+                let buffers = decodeBuffers.snapshot
+                logger.info("DECODE_BUFFERS allocations=\(buffers.allocations) retained_bytes=\(buffers.retainedBytes)")
             }
             transcodeTransferSession = nil
             transcodeOutputPool = nil
@@ -1641,6 +1650,9 @@
         }
 
         private func handleEncodeFrameDropped(context: FrameContext, status: OSStatus, infoFlags: VTEncodeInfoFlags) {
+            if status != noErr || !context.isWarmup {
+                fail(VTRemotedError.ioError(code: Int32(status), message: "encoder dropped frame seq=\(context.seq) flags=\(infoFlags.rawValue)"))
+            }
             callbackLock.lock()
             defer { callbackLock.unlock() }
             if context.isWarmup {
@@ -1708,7 +1720,7 @@
                     try send(.packet, [meta.data, pkt.annex, sideDataBlob])
                 }
             } catch {
-                logger.error("send packet failed: \(error)")
+                fail(error)
             }
         }
 
@@ -1760,7 +1772,7 @@
             if !CMSampleBufferDataIsReady(sbuf) {
                 let makeStatus = CMSampleBufferMakeDataReady(sbuf)
                 if makeStatus != noErr {
-                    logger.error("encode sample buffer not ready; MakeDataReady failed status=\(makeStatus)")
+                    fail(VTRemotedError.ioError(code: Int32(makeStatus), message: "encode sample buffer not ready"))
                     if encodeReorderBySeq, let context {
                         encodeDroppedSeqs.insert(context.seq)
                         drainEncodePacketsLocked()
@@ -1769,7 +1781,7 @@
                 }
             }
             guard let block = CMSampleBufferGetDataBuffer(sbuf) else {
-                logger.error("encode sample buffer missing CMBlockBuffer")
+                fail(VTRemotedError.protocolViolation("encode sample buffer missing CMBlockBuffer"))
                 if encodeReorderBySeq, let context {
                     encodeDroppedSeqs.insert(context.seq)
                     drainEncodePacketsLocked()
@@ -1782,7 +1794,7 @@
             let sampleLen = CMSampleBufferGetTotalSampleSize(sbuf)
             let annex = convertToAnnexB(block: block, sampleLen: sampleLen, nalLengthField: nalLengthField)
             if annex.isEmpty {
-                logger.error("encode produced empty Annex-B payload (sampleLen=\(sampleLen))")
+                fail(VTRemotedError.protocolViolation("encode produced empty Annex-B payload (sampleLen=\(sampleLen))"))
                 if encodeReorderBySeq, let context {
                     encodeDroppedSeqs.insert(context.seq)
                     drainEncodePacketsLocked()
@@ -1834,21 +1846,20 @@
 
             if encodeReorderBySeq {
                 guard let context else {
-                    logger.error("encode packet missing context in seq-reorder mode")
-                    emitEncodedPacketLocked(pkt)
+                    fail(VTRemotedError.protocolViolation("encode packet missing context in seq-reorder mode"))
                     return
                 }
                 let seq = context.seq
                 if seq < encodeSeqExpected {
-                    logger.info("WARN late encode packet seq=\(seq) expected=\(encodeSeqExpected); dropping")
+                    fail(VTRemotedError.protocolViolation("late encode packet seq=\(seq) expected=\(encodeSeqExpected)"))
                     return
                 }
                 if encodeDroppedSeqs.contains(seq) {
-                    logger.info("WARN encode packet arrived after drop seq=\(seq); dropping")
+                    fail(VTRemotedError.protocolViolation("encode packet arrived after drop seq=\(seq)"))
                     return
                 }
                 if encodePendingPackets[seq] != nil {
-                    logger.info("WARN duplicate encode packet seq=\(seq); dropping")
+                    fail(VTRemotedError.protocolViolation("duplicate encode packet seq=\(seq)"))
                     return
                 }
                 encodePendingPackets[seq] = pkt
@@ -1858,8 +1869,7 @@
 
             if let reorder = encodeDtsReorderBuffer {
                 guard let context else {
-                    logger.error("encode packet missing context in dts-reorder mode")
-                    emitEncodedPacketLocked(pkt)
+                    fail(VTRemotedError.protocolViolation("encode packet missing context in dts-reorder mode"))
                     return
                 }
                 let seq = context.seq
@@ -2035,11 +2045,10 @@
                     &buffer
                 )
                 guard createStatus == kCVReturnSuccess else {
-                    logger.error("warmup CVPixelBufferCreate failed status=\(createStatus)")
-                    return
+                    throw VTRemotedError.ioError(code: createStatus, message: "warmup CVPixelBufferCreate failed")
                 }
             }
-            guard let pixelBuffer = buffer else { return }
+            guard let pixelBuffer = buffer else { throw VTRemotedError.videoToolboxUnavailable }
 
             CVPixelBufferLockBaseAddress(pixelBuffer, [])
             let planeCount = CVPixelBufferGetPlaneCount(pixelBuffer)
@@ -2133,7 +2142,7 @@
                 do {
                     try send(.frame, chunks)
                 } catch {
-                    logger.error("send frame failed: \(error)")
+                    fail(error)
                 }
             }
         }
@@ -2169,7 +2178,8 @@
                     duration = .invalid
                 }
                 guard let outputBuffer = prepareTranscodePixelBuffer(frame.payload.pixelBuffer, config: config) else {
-                    continue
+                    fail(VTRemotedError.protocolViolation("transcode pixel transfer failed"))
+                    return
                 }
                 encodePixelBuffer(
                     outputBuffer,
@@ -2372,9 +2382,13 @@
 
             var callback = VTDecompressionOutputCallbackRecord(
                 decompressionOutputCallback: { refCon, _, status, _, imageBuffer, pts, duration in
-                    guard status == noErr, let img = imageBuffer else { return }
                     let unmanaged = Unmanaged<VideoToolboxCodecSession>.fromOpaque(refCon!)
-                    unmanaged.takeUnretainedValue().handleDecodedFrame(pixelBuffer: img, pts: pts, duration: duration)
+                    let session = unmanaged.takeUnretainedValue()
+                    guard status == noErr, let img = imageBuffer else {
+                        session.fail(VTRemotedError.ioError(code: Int32(status), message: "decoder callback produced no frame"))
+                        return
+                    }
+                    session.handleDecodedFrame(pixelBuffer: img, pts: pts, duration: duration)
                 },
                 decompressionOutputRefCon: UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
             )
@@ -2409,16 +2423,24 @@
         }
 
         private func handleDecodedFrame(pixelBuffer: CVPixelBuffer, pts: CMTime, duration: CMTime) {
+            guard !failure.hasFailed else { return }
             guard let config else { return }
             if config.mode == .transcode {
                 enqueueTranscodeFrame(pixelBuffer: pixelBuffer, pts: pts, duration: duration)
                 return
             }
 
-            CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+            let lockStatus = CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+            guard lockStatus == kCVReturnSuccess else {
+                fail(VTRemotedError.ioError(code: lockStatus, message: "decoded pixel buffer lock failed"))
+                return
+            }
             defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
 
-            guard CVPixelBufferGetPlaneCount(pixelBuffer) >= 2 else { return }
+            guard CVPixelBufferGetPlaneCount(pixelBuffer) >= 2 else {
+                fail(VTRemotedError.unsupported("decoded frame requires a semiplanar output format"))
+                return
+            }
 
             let ptsTicks = ticksOrNoPts(from: pts, timebase: config.timebase)
             let durTicks: Int64 = if duration.isNumeric {
@@ -2449,26 +2471,31 @@
                 planeMeta.writeBE(UInt32(stride))
                 planeMeta.writeBE(UInt32(height))
                 
-                // Always copy to system memory first to avoid reading from WC memory during compression
-                var raw = self.outputBufferPool.get(capacity: len)
-                defer { self.outputBufferPool.return(raw) }
-                
-                if let base = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, plane), len > 0 {
-                    raw.count = len
-                    raw.withUnsafeMutableBytes { dstPtr in
-                        guard let dst = dstPtr.baseAddress else { return }
-                        _ = memcpy(dst, base, len)
+                // Keep the staging copy: compression must read cached system memory.
+                let copyStart = DispatchTime.now().uptimeNanoseconds
+                guard let base = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, plane), len > 0 else { return nil }
+                var compressStart = copyStart
+                let output: Data?
+                if config.options.wireCompression == 0 {
+                    output = self.decodeBuffers.data(capacity: len) { destination in
+                        memcpy(destination.baseAddress!, base, len)
+                        compressStart = DispatchTime.now().uptimeNanoseconds
+                        return len
                     }
                 } else {
-                    raw.count = len
+                    output = self.decodeBuffers.withBuffer(capacity: len) { raw in
+                        memcpy(raw.baseAddress!, base, len)
+                        compressStart = DispatchTime.now().uptimeNanoseconds
+                        if config.options.wireCompression == 1 {
+                            return LZ4Codec.compress(UnsafeRawBufferPointer(raw), pool: self.decodeBuffers)
+                        }
+                        return ZstdCodec.compress(UnsafeRawBufferPointer(raw), pool: self.decodeBuffers)
+                    }
                 }
-                
-                guard let compressed = Self.compressWirePayload(
-                    mode: config.options.wireCompression,
-                    data: raw
-                ) else {
-                    return nil
-                }
+                guard let compressed = output else { return nil }
+                self.decodeStages.record(copy: compressStart - copyStart,
+                                         compress: DispatchTime.now().uptimeNanoseconds - compressStart,
+                                         bytes: len)
                 
                 planeMeta.writeBE(UInt32(compressed.count))
                 return PlaneResult(meta: planeMeta.data, data: compressed)
@@ -2509,11 +2536,14 @@
             }
             
             if let err = error {
-                logger.error("encode frame failed: \(err)")
+                fail(err)
                 return
             }
 
-            guard let res0 = results[0], let res1 = results[1] else { return }
+            guard let res0 = results[0], let res1 = results[1] else {
+                fail(VTRemotedError.protocolViolation("decoded plane output missing"))
+                return
+            }
             chunks.append(res0.meta)
             chunks.append(res0.data)
             chunks.append(res1.meta)

@@ -78,7 +78,8 @@ public final class VTRClientHandler: @unchecked Sendable {
 
     private var codec: VideoCodec = .h264
     private var clientName: String = "unknown"
-    private var stats = ClientStats()
+    private let stats = LockedClientStats()
+    private let failure = SessionFailure()
     private var configuration: SessionConfiguration?
     private var codecSession: (any CodecSession)?
     private let inputBufferPool = BufferPool()
@@ -93,8 +94,8 @@ public final class VTRClientHandler: @unchecked Sendable {
 
     private func sendTranscodePacketAckIfNeeded(for configuration: SessionConfiguration) throws {
         guard shouldSendPacketAck(for: configuration) else { return }
-        stats.bytesOut += Int64(VTRProtocol.headerSize)
         try messageIO.send(type: .packetAck, body: Data())
+        stats.update { $0.bytesOut += Int64(VTRProtocol.headerSize) }
     }
 
     private func rejectUnexpectedKnownClientMessage(_ type: VTRMessageType) throws {
@@ -137,32 +138,36 @@ public final class VTRClientHandler: @unchecked Sendable {
 
     public func run() {
         defer {
-            if let configuration {
-                logger.info(stats.summary(mode: configuration.mode))
-            }
             codecSession?.shutdown()
+            if let configuration {
+                logger.info(stats.snapshot().summary(mode: configuration.mode))
+            }
         }
 
         do {
             try handshake()
             try configure()
-            try mainLoop()
+            do {
+                try mainLoop()
+            } catch {
+                if failure.record(error) {
+                    sendError(code: 2, message: "processing failed: \(error)")
+                }
+                throw error
+            }
         } catch {
             logger.error("ERROR session=\(clientName) err=\(error)")
         }
     }
 
     private func sendError(code: UInt32, message: String) {
-        let body = makeErrorBody(code: code, message: message)
+        failure.record(VTRemotedError.protocolViolation(message))
+        let body = ErrorResponse(code: code, message: message).encode()
         // Best-effort: if the socket is already dead, we'll just log on our side.
-        try? messageIO.send(type: .error, body: body)
-    }
-
-    private func makeErrorBody(code: UInt32, message: String) -> Data {
-        let err = ErrorResponse(code: code, message: message)
-        let body = err.encode()
-        stats.bytesOut += Int64(VTRProtocol.headerSize + body.count)
-        return body
+        do {
+            try messageIO.send(type: .error, body: body)
+            stats.update { $0.bytesOut += Int64(VTRProtocol.headerSize + body.count) }
+        } catch { }
     }
 
     private func validateMessageLength(
@@ -239,7 +244,7 @@ public final class VTRClientHandler: @unchecked Sendable {
             maxBodyBytes: Self.maxHelloBytes
         )
         defer { inputBufferPool.return(payload) }
-        stats.bytesIn += Int64(VTRProtocol.headerSize + payload.count)
+        stats.update { $0.bytesIn += Int64(VTRProtocol.headerSize + payload.count) }
         guard header.type == VTRMessageType.hello.rawValue else {
             throw VTRemotedError.protocolViolation("expected HELLO")
         }
@@ -261,8 +266,8 @@ public final class VTRClientHandler: @unchecked Sendable {
             activeSessions: UInt16(clamping: snapshot.activeSessions)
         )
         let ackBody = ack.encode()
-        stats.bytesOut += Int64(VTRProtocol.headerSize + ackBody.count)
         try messageIO.send(type: .helloAck, body: ackBody)
+        stats.update { $0.bytesOut += Int64(VTRProtocol.headerSize + ackBody.count) }
 
         if !authed {
             logger.info("HELLO authfail from \(hello.clientName) codec=\(hello.codec)")
@@ -276,7 +281,7 @@ public final class VTRClientHandler: @unchecked Sendable {
             try performConfigure()
         } catch {
             logger.error("CONFIGURE failed error=\(error)")
-            sendError(code: 1, message: "configure failed: \(error)")
+            if !failure.hasFailed { sendError(code: 1, message: "configure failed: \(error)") }
             throw error
         }
     }
@@ -288,7 +293,7 @@ public final class VTRClientHandler: @unchecked Sendable {
             sendLengthError: false
         )
         defer { inputBufferPool.return(payload) }
-        stats.bytesIn += Int64(VTRProtocol.headerSize + payload.count)
+        stats.update { $0.bytesIn += Int64(VTRProtocol.headerSize + payload.count) }
         guard header.type == VTRMessageType.configure.rawValue else {
             throw VTRemotedError.protocolViolation("expected CONFIGURE")
         }
@@ -314,17 +319,34 @@ public final class VTRClientHandler: @unchecked Sendable {
         let mode = config.mode
         let session = sessionFactory { [weak self] type, bodyParts in
             guard let self else { return }
+            if type == .error {
+                failure.record(VTRemotedError.protocolViolation("asynchronous codec failure"))
+            } else {
+                try failure.check()
+            }
+            defer {
+                if type == .error { (messageIO as? VTRWireConnection)?.cancelRead() }
+            }
             let totalCount = totalBodyByteCount(bodyParts)
-            stats.bytesOut += Int64(VTRProtocol.headerSize + totalCount)
-            if type == .packet { stats.packetsOut += 1; stats.recordOutput() }
-            if type == .frame { stats.framesOut += 1 }
+            do {
+                try messageIO.sendMessage(type: type, bodyParts: bodyParts)
+            } catch {
+                failure.record(error)
+                (messageIO as? VTRWireConnection)?.cancelRead()
+                throw error
+            }
+            stats.update {
+                $0.bytesOut += Int64(VTRProtocol.headerSize + totalCount)
+                if type == .packet { $0.packetsOut += 1; $0.recordOutput() }
+                if type == .frame { $0.framesOut += 1; $0.recordOutput() }
+            }
             stats.maybeReport(mode: mode, logger: logger, intervalSeconds: 0.25)
-            try messageIO.sendMessage(type: type, bodyParts: bodyParts)
         }
         codecSession = session
         configuration = config
 
         let extradata = try session.configure(config)
+        try failure.check()
         let resp = ConfigureAckResponse(
             status: 0,
             extradata: extradata,
@@ -332,8 +354,8 @@ public final class VTRClientHandler: @unchecked Sendable {
             warnings: 0
         )
         let body = resp.encode()
-        stats.bytesOut += Int64(VTRProtocol.headerSize + body.count)
         try messageIO.send(type: .configureAck, body: body)
+        stats.update { $0.bytesOut += Int64(VTRProtocol.headerSize + body.count) }
 
         logger.info(
             "CONFIGURE ok mode=\(config.mode.rawValue) codec=\(config.codec.rawValue) " +
@@ -371,7 +393,10 @@ public final class VTRClientHandler: @unchecked Sendable {
         }
 
         func sendDoneAndLog() throws {
+            try failure.check()
             try messageIO.send(type: .done, body: Data())
+            self.stats.update { $0.bytesOut += Int64(VTRProtocol.headerSize) }
+            let stats = stats.snapshot()
             let msg = switch configuration.mode {
             case .encode:
                 "DONE client=\(clientName) frames=\(stats.framesIn) packets=\(stats.packetsOut)"
@@ -386,10 +411,12 @@ public final class VTRClientHandler: @unchecked Sendable {
         // Prefer streaming reads when available to avoid materializing large FRAME payloads.
         if let streamIO = messageIO as? VTRStreamIO {
             while true {
+                try failure.check()
                 let header = try streamIO.readHeader(timeoutSeconds: idleTimeoutSeconds)
+                try failure.check()
                 let messageLength = Int(header.length)
                 try validateMessageLength(messageLength, type: header.type, cap: maxMessageBytes)
-                stats.bytesIn += Int64(VTRProtocol.headerSize) + Int64(messageLength)
+                stats.update { $0.bytesIn += Int64(VTRProtocol.headerSize) + Int64(messageLength) }
                 stats.maybeReport(mode: configuration.mode, logger: logger, intervalSeconds: 0.25)
 
                 guard let type = VTRMessageType(rawValue: header.type) else {
@@ -399,8 +426,7 @@ public final class VTRClientHandler: @unchecked Sendable {
 
                 switch type {
                 case .frame:
-                    stats.framesIn += 1
-                    stats.recordSubmit()
+                    stats.update { $0.framesIn += 1; $0.recordSubmit() }
                     if let streamSession = codecSession as? StreamingCodecSession {
                         try streamSession.handleFrameStream(streamIO: streamIO, length: messageLength)
                     } else {
@@ -409,7 +435,7 @@ public final class VTRClientHandler: @unchecked Sendable {
                         try codecSession.handleFrameMessage(payload)
                     }
                 case .packet:
-                    stats.packetsIn += 1
+                    stats.update { $0.packetsIn += 1; $0.recordSubmit() }
                     let payload = try streamIO.readBody(length: messageLength, pool: inputBufferPool)
                     defer { inputBufferPool.return(payload) }
                     try codecSession.handlePacketMessage(payload)
@@ -422,6 +448,7 @@ public final class VTRClientHandler: @unchecked Sendable {
                 case .ping:
                     try streamIO.skip(length: messageLength)
                     try messageIO.send(type: .pong, body: Data())
+                    stats.update { $0.bytesOut += Int64(VTRProtocol.headerSize) }
                 default:
                     try streamIO.skip(length: messageLength)
                     try rejectUnexpectedKnownClientMessage(type)
@@ -430,10 +457,12 @@ public final class VTRClientHandler: @unchecked Sendable {
         }
 
         while true {
+            try failure.check()
             let (header, payload) = try messageIO.readMessage(pool: inputBufferPool, timeoutSeconds: idleTimeoutSeconds)
+            try failure.check()
             defer { inputBufferPool.return(payload) }
             try validateMessageLength(payload.count, type: header.type, cap: maxMessageBytes)
-            stats.bytesIn += Int64(VTRProtocol.headerSize + payload.count)
+            stats.update { $0.bytesIn += Int64(VTRProtocol.headerSize + payload.count) }
             stats.maybeReport(mode: configuration.mode, logger: logger, intervalSeconds: 0.25)
             guard let type = VTRMessageType(rawValue: header.type) else {
                 continue
@@ -441,11 +470,10 @@ public final class VTRClientHandler: @unchecked Sendable {
 
             switch type {
             case .frame:
-                stats.framesIn += 1
-                stats.recordSubmit()
+                stats.update { $0.framesIn += 1; $0.recordSubmit() }
                 try codecSession.handleFrameMessage(payload)
             case .packet:
-                stats.packetsIn += 1
+                stats.update { $0.packetsIn += 1; $0.recordSubmit() }
                 try codecSession.handlePacketMessage(payload)
                 try sendTranscodePacketAckIfNeeded(for: configuration)
             case .flush:
@@ -454,6 +482,7 @@ public final class VTRClientHandler: @unchecked Sendable {
                 return
             case .ping:
                 try messageIO.send(type: .pong, body: Data())
+                stats.update { $0.bytesOut += Int64(VTRProtocol.headerSize) }
             default:
                 try rejectUnexpectedKnownClientMessage(type)
             }

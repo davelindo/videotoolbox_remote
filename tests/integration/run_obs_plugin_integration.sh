@@ -23,7 +23,9 @@ cleanup() {
     kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
   fi
-  rm -rf "$BUILD_DIR"
+  if [[ "${VTREMOTE_OBS_RECORDINGS:-0}" != 1 ]]; then
+    rm -rf "$BUILD_DIR"
+  fi
 }
 trap cleanup EXIT
 
@@ -333,5 +335,46 @@ run_case none success --expect-wire-compression 0 -- --wire-compression none
 run_case lz4 success --expect-wire-compression 1 -- --wire-compression lz4
 run_case zstd success --expect-wire-compression 2 -- --wire-compression zstd
 run_case packet_oversize failure --expect-wire-compression 1 --packet-bytes 9000000 -- --wire-compression lz4
+run_case delayed success --packet-delay-ms 150 -- --wire-compression none
+run_case error success --frame-response error -- --expect-encode-error --error-contains 'injected frame failure'
+run_case eof success --frame-response eof -- --expect-encode-error
+run_case reset success --frame-response reset -- --expect-encode-error
+run_case truncated success --packet-bytes 64 --header-only-filled -- --expect-encode-error
+run_case malformed success --packet-bytes 1 -- --expect-encode-error
+run_case stalled success --stall-after frame --stall-seconds 6 -- --expect-encode-error --error-wait-ms 5500 --error-contains 'timed out'
+
+if [[ "${VTREMOTE_OBS_RECORDINGS:-0}" == 1 ]]; then
+  cd "$ROOT"
+  make -f tests/integration/api-regressions.mk "API_BUILD_DIR=$BUILD_DIR" \
+    "OBS_CFLAGS=$OBS_CFLAGS" "OBS_LIBS=$OBS_LIBS $DL_LIBS" "$BUILD_DIR/obs_recording"
+  source tests/integration/vtremoted_common.sh
+  VTREMOTED="${VTREMOTED:-$ROOT/vtremoted/.build/release/vtremoted}"
+  VTREMOTE_HOST=127.0.0.1
+  VTREMOTE_USE_EXISTING=""
+  VTREMOTE_PORT=""
+  VTREMOTE_TOKEN=""
+  vtremote_start_server "$BUILD_DIR/recording.server.log"
+  for codec in h264 hevc; do
+    echo "Recording through normal libobs start/stop: $codec"
+    run_with_timeout "$CLIENT_TIMEOUT_SECS" env "${HARNESS_ENV[@]}" "${HARNESS_PREFIX[@]}" \
+      "$BUILD_DIR/obs_recording" "$PLUGIN_BINARY" "$ROOT/obs-plugin/data" \
+      "$VTREMOTE_PORT" "$codec" "$BUILD_DIR/$codec.mkv" 60 \
+      >"$BUILD_DIR/$codec.recording.log" 2>&1
+    "$ROOT/ffmpeg/ffmpeg" -v error -xerror -err_detect explode -i "$BUILD_DIR/$codec.mkv" -f null -
+    "$ROOT/ffmpeg/ffprobe" -v error -count_frames -select_streams v:0 \
+      -show_entries stream=codec_name,pix_fmt,nb_read_frames,extradata_size \
+      -of json "$BUILD_DIR/$codec.mkv" >"$BUILD_DIR/$codec.probe.json"
+    "$PYTHON_BIN" - "$BUILD_DIR/$codec.probe.json" "$codec" <<'PY'
+import json, sys
+stream = json.load(open(sys.argv[1]))["streams"][0]
+assert stream["codec_name"] == sys.argv[2], stream
+assert int(stream["nb_read_frames"]) == 60 and stream["extradata_size"] > 0, stream
+assert stream["pix_fmt"] == ("yuv420p10le" if sys.argv[2] == "hevc" else "yuv420p"), stream
+print("PASS recording software decode/container/extradata/count", stream)
+PY
+  done
+  vtremote_stop_server
+  SERVER_PID=""
+fi
 
 echo "OK: OBS plugin libobs integration test passed; cases logged under $BUILD_DIR"

@@ -89,6 +89,8 @@ export VTREMOTED="$PWD/vtremoted/.build/release/vtremoted"
 ### Key Scripts
 - **`run_all.sh`**: Standard integration suite.
 - **`bench_vtremote.sh`**: Perform encoding/transcoding benchmarks.
+- **`bench_sustained.py`**: Repeated natural-video and 1/2/4-session comparisons with identities, resource use, merged latency percentiles, counts and decode validation. See the [runner instructions](../tests/integration/README.md).
+- **`run_transport_regressions.py`**, **`run_decode_duplex.py`**, **`run_session_reset.sh`**: Deadline, completion, simultaneous transport and codec context-reuse regressions.
 - **`run_vtremoted_roundtrip.sh`**: Verify H.264/HEVC roundtrip correctness.
 - **`run_mock_wire_compression.sh`**: Validate LZ4 and Zstd compressed frame payloads against the Python mock server.
 - **`run_mock_protocol_capabilities.sh`**: Validate 0.4.1 configure-time capability negotiation and clear rejection of unsupported surfaces.

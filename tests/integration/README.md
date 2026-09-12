@@ -2,6 +2,14 @@
 
 This tree holds VideoToolbox Remote integration tests and benchmarks.
 
+- `run_transport_regressions.py`: complete-message daemon deadlines, session-slot release, normal/BUSY version identity and encoder DONE/error handling. Use `--skip-daemon` on Windows/Linux.
+- `socket_timeouts.c`: runtime getsockopt/receive/blocked-send checks for the shared FFmpeg timeout helper, including Winsock milliseconds. Windows CI compiles and runs it.
+- `run_decode_duplex.py`: public decoder API regression for simultaneous large uploads/downloads and explicit truncation/timeout errors.
+- `run_session_reset.sh`: hardware H.264/HEVC same-context decoder/BSF reuse, including reset with output pending and exact decoded plane checks.
+- `check_decode_parity.py`: compares raw decode SHA-256 frame hashes, timestamps and color metadata against a preserved daemon baseline, across none/LZ4/Zstd transport.
+- `bench_sustained.py`: reusable natural-video, sustained and concurrent comparisons; see the command and metric definitions below.
+- `bench_inflight.py`: fixed/automatic depth comparisons with controlled response delay and changing processing capacity. Its packets are protocol fixtures, not decodable media.
+- `run_obs_pipeline.py`: bounded worker API throughput/cancellation experiment, excluded from the plugin build pending a supported OBS drain API. Its explicit drain is not evidence of correct normal OBS recording shutdown.
 - `mock_vtremoted/`: portable Python mock server to exercise protocol framing and message flow. It responds to HELLO/CONFIGURE/FRAME/FLUSH, can return caller-supplied HEVC fixtures, and exits after FLUSH (see its README for usage).
 - `run_mock_roundtrip.sh`: spins up the Python mock and runs `h264_videotoolbox_remote` against it using a built ffmpeg binary (defaults to `ffmpeg/ffmpeg` in the repo root).
 - `run_mock_wire_compression.sh`: runs dedicated LZ4 and Zstd mock cases so compressed frame-payload validation is explicit instead of coupled to framing smoke tests.
@@ -12,6 +20,7 @@ This tree holds VideoToolbox Remote integration tests and benchmarks.
 - `run_mock_transcode_hvc1_hdr_signaling.sh`: spins up the Python mock with HEVC Main10 HDR fixtures and asserts both the explicit-override and source-preservation `vtremote_transcode` paths keep `hvc1`, HDR color signaling, and MP4 `nclx` container metadata on HLS/fMP4 output.
 - `run_obs_plugin_client_mock.sh`: compiles the OBS plugin client (`obs-plugin/src/vtremoted-client.cpp`) with a local OBS logging stub and runs protocol smoke cases against the Python mock server for `none`, `lz4`, `zstd`, and oversized inbound responses.
 - `run_obs_plugin_integration.sh`: builds the actual OBS plugin module against `libobs`, loads it through the OBS module API, creates a real `obs_encoder_t` + `video_t`, and drives the encoder lifecycle against the Python mock server. Skips cleanly when `libobs` dev headers/libs are unavailable.
+- `VTREMOTE_OBS_RECORDINGS=1 bash tests/integration/run_obs_plugin_integration.sh`: additionally uses a disposable loopback hardware daemon and a local libobs test output backed by libavformat. Records H.264/NV12 and HEVC/P010 through normal output start/stop, verifies container signaling, extradata, software decode and all 60 submitted frames, and retains recordings/logs under the printed temporary directory. Requires built FFmpeg libraries and libobs. It has no streaming/service configuration.
 - `run_complex_chain_test.sh`: exercises a complex filter chain via the mock server to validate framing + options under load.
 - `check_pts_dts.sh`: ffprobe-based validator that fails on **non-monotonic DTS** (muxer requirement) and missing keyframes. Note: `pts < dts` is valid when B-frames are used.
 - `check_frame_packet_count.sh`: validates that decoded frame count equals packet count (guards against warmup/extra packets).
@@ -44,6 +53,23 @@ For performance tests and benchmarks, use the release daemon:
 ```bash
 export VTREMOTED="$PWD/vtremoted/.build/release/vtremoted"
 ```
+
+For a sustained comparison on macOS, preserve the baseline binaries first, then run:
+
+```bash
+python3 tests/integration/bench_sustained.py \
+  --input /path/to/natural-main10.mp4 --output /tmp/vtr-comparison \
+  --baseline-daemon /path/to/baseline/vtremoted \
+  --modes encode,decode,transcode --sessions 1,2,4 \
+  --frames 1800 --warmup-frames 120 --min-seconds 30 --repeats 3 \
+  --fixture-source 'fixture provenance' --wire lz4
+```
+
+The command owns fresh loopback daemons. It repeats compressed input packets into finite local fixtures, avoiding seek/reconnect work inside measured runs. Session modes cycle through the requested list; use `--modes decode` for decode-only comparisons and `--depths 0,8,16,32,64` for encoder depth cases. `--baseline-ffmpeg` can compare client binaries too. The output directory must be new.
+
+`metadata.json`, `runs.jsonl`, and `summary.json` capture source/binary/fixture identity, settings, fps, CPU time, peak RSS, wire bytes, exact counts and independent decode validation of encoded output. Summary distributions include variation. Latencies run from server input submission through completed output send; logarithmic histogram counts merge across sessions and repeats for p50/p95/p99 (up to 4.5% bucket quantization above the one-microsecond floor). Old baseline binaries without histograms retain their per-session percentiles but have no merged percentile estimate. Summed process RSS peaks are an upper bound, not a simultaneous measurement. Raw-fps Jain fairness is meaningful for equal workloads; mixed modes have different costs.
+
+Warm-up throughput estimates each session's frame count for the requested minimum duration. Check `all_sustained`; increase `--frames` if any run is shorter. Correctness failures stop the run independently of speed. Raw decode timing runs validate counts; use the API/plane tests and a separate pixel comparison when changing decode memory paths. No hardware regression threshold is chosen before measuring variance. This runner currently measures loopback; the existing `bench_vtremote.sh` supports an explicitly designated remote server, without the new aggregate resource capture.
 
 Async decode defaults:
 - `VTREMOTE_DECODE_ASYNC=1` (default on)

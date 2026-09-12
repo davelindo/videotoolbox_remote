@@ -4,6 +4,10 @@ public struct LatencyTracker: Sendable {
     private var times: [UInt64]
     private var head = 0
     private var count = 0
+    // Sixteen logarithmic buckets per doubling, starting at one microsecond.
+    // Percentiles report bucket upper bounds (at most 4.5% quantization error
+    // above the one-microsecond floor).
+    private var histogram = [UInt64](repeating: 0, count: 512)
 
     public private(set) var sumNanoseconds: UInt64 = 0
     public private(set) var maxNanoseconds: UInt64 = 0
@@ -17,7 +21,9 @@ public struct LatencyTracker: Sendable {
 
     public mutating func submit(at nowNanoseconds: UInt64) {
         if count == times.count {
-            times.append(contentsOf: Array(repeating: 0, count: times.count))
+            let capacity = times.count
+            times = Array(times[head...]) + Array(times[..<head]) + Array(repeating: 0, count: capacity)
+            head = 0
         }
         let index = (head + count) % times.count
         times[index] = nowNanoseconds
@@ -34,6 +40,9 @@ public struct LatencyTracker: Sendable {
         sumNanoseconds &+= delta
         sampleCount &+= 1
         if delta > maxNanoseconds { maxNanoseconds = delta }
+        let micros = max(1, Double(delta) / 1_000)
+        let bucket = min(histogram.count - 1, Int(log2(micros) * 16))
+        histogram[bucket] &+= 1
     }
 
     public mutating func discardOne() {
@@ -49,5 +58,25 @@ public struct LatencyTracker: Sendable {
 
     public var maxMilliseconds: Double {
         Double(maxNanoseconds) / 1_000_000.0
+    }
+
+    /// Sparse bucket counts let benchmark tooling merge sessions and repeats.
+    public var histogramSummary: String {
+        histogram.enumerated().compactMap { bucket, count in
+            count == 0 ? nil : "\(bucket):\(count)"
+        }.joined(separator: ",")
+    }
+
+    public func percentileMilliseconds(_ percentile: Double) -> Double {
+        guard sampleCount > 0 else { return 0 }
+        let rank = max(1, UInt64(ceil(min(1, max(0, percentile)) * Double(sampleCount))))
+        var cumulative: UInt64 = 0
+        for (bucket, count) in histogram.enumerated() {
+            cumulative += count
+            if cumulative >= rank {
+                return min(maxMilliseconds, pow(2, Double(bucket + 1) / 16) / 1_000)
+            }
+        }
+        return maxMilliseconds
     }
 }

@@ -200,6 +200,17 @@ if(BUILD_TESTING)
     target_compile_options(vtremote_teardown_lock_test PRIVATE
         ${VTREMOTE_WARNING_FLAGS})
     add_test(NAME vtremote_teardown_lock_unit COMMAND vtremote_teardown_lock_test)
+    add_executable(vtremote_pipeline_test tests/test_pipeline.c)
+    target_include_directories(vtremote_pipeline_test SYSTEM PRIVATE ${LIBVA_INCLUDE_DIRS})
+    target_link_libraries(vtremote_pipeline_test PRIVATE vtremote_client Threads::Threads ${CMAKE_DL_LIBS})
+    target_compile_options(vtremote_pipeline_test PRIVATE ${VTREMOTE_WARNING_FLAGS} -UNDEBUG)
+    add_test(NAME vtremote_pipeline_unit COMMAND vtremote_pipeline_test)
+    add_executable(vtremote_pipeline_probe tests/pipeline_probe.c)
+    target_link_libraries(vtremote_pipeline_probe PRIVATE vtremote_client)
+    target_compile_options(vtremote_pipeline_probe PRIVATE ${VTREMOTE_WARNING_FLAGS} -UNDEBUG)
+    add_test(NAME vtremote_pipeline_e2e
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_pipeline_e2e.py
+            --test $<TARGET_FILE:vtremote_pipeline_probe>)
     add_test(NAME vtremote_plex_transcoder_wrapper_unit
         COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_plex_transcoder_wrapper.py

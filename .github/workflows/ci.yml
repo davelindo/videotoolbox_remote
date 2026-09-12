@@ -126,10 +126,13 @@ jobs:
               - 'Makefile'
             vtremoted:
               - 'vtremoted/**'
+              - 'tests/integration/run_transport_regressions.py'
               - 'Makefile'
             vaapi_driver:
               - 'vaapi-driver/**'
               - 'tests/integration/mock_vtremoted/mock_vtremoted.py'
+              - 'tests/integration/run_obs_pipeline.py'
+              - 'tests/integration/run_transport_regressions.py'
               - 'Makefile'
             obs_plugin:
               - 'obs-plugin/**'
@@ -137,6 +140,11 @@ jobs:
               - 'tests/integration/run_obs_plugin_integration.sh'
               - 'tests/integration/obs_plugin_client_smoke.cpp'
               - 'tests/integration/obs_plugin_integration.cpp'
+              - 'tests/integration/obs_recording.cpp'
+              - 'tests/integration/api-regressions.mk'
+              - 'tests/integration/run_obs_pipeline.py'
+              - 'tests/integration/obs_pipeline_probe.cpp'
+              - 'tests/integration/run_transport_regressions.py'
               - 'tests/integration/obs_plugin_test_stubs/**'
               - 'tests/integration/mock_vtremoted/mock_vtremoted.py'
               - 'tests/integration/run_all.sh'
@@ -195,7 +203,9 @@ jobs:
           make build-vtremoted
       - name: Run tests
         run: |
-          cd vtremoted && swift test
+          cd vtremoted && swift test --sanitize=thread
+      - name: Verify daemon transport deadlines
+        run: python3 tests/integration/run_transport_regressions.py --vtremoted vtremoted/.build/release/vtremoted --skip-ffmpeg
       - name: Package vtremoted
         run: |
           mkdir -p dist/vtremoted
@@ -242,7 +252,9 @@ jobs:
           make build-vtremoted
       - name: Run tests
         run: |
-          cd vtremoted && swift test
+          cd vtremoted && swift test --sanitize=thread
+      - name: Verify daemon transport deadlines
+        run: python3 tests/integration/run_transport_regressions.py --vtremoted vtremoted/.build/release/vtremoted --skip-ffmpeg
       - name: Package vtremoted
         run: |
           mkdir -p dist/vtremoted
@@ -344,6 +356,9 @@ jobs:
 
       - name: Run mock integration tests (Linux)
         run: |
+          python3 tests/integration/run_transport_regressions.py --skip-daemon
+          python3 tests/integration/run_decode_duplex.py
+          python3 tests/integration/bench_inflight.py --frames 600 --repeats 1 --depths 0 --changing-capacity --output vtremote-inflight.json
           bash tests/integration/run_mock_roundtrip.sh
           bash tests/integration/run_mock_wire_compression.sh
           bash tests/integration/run_mock_decode.sh
@@ -474,6 +489,13 @@ jobs:
           ./ffmpeg/ffmpeg -hide_banner -decoders | grep -Eq '(^|[[:space:]])hevc_videotoolbox_remote([[:space:]]|$)'
           ./ffmpeg/ffmpeg -hide_banner -bsfs | grep -Eq '(^|[[:space:]])vtremote_transcode([[:space:]]|$)'
 
+      - name: Verify transport and decoder duplex I/O (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          python3 tests/integration/run_transport_regressions.py --skip-daemon
+          python3 tests/integration/run_decode_duplex.py
+          python3 tests/integration/bench_inflight.py --frames 600 --repeats 1 --depths 0 --changing-capacity --output vtremote-inflight.json
+
       - name: Package ffmpeg (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -508,6 +530,14 @@ jobs:
           ./ffmpeg/ffmpeg.exe -hide_banner -filters | grep -Eq '(^|[[:space:]])psnr([[:space:]]|$)'
           ./ffmpeg/ffmpeg.exe -hide_banner -filters | grep -Eq '(^|[[:space:]])ssim([[:space:]]|$)'
           ./ffmpeg/ffmpeg.exe -hide_banner -filters | grep -Eq '(^|[[:space:]])libvmaf([[:space:]]|$)'
+      - name: Verify Windows transport deadlines and encoder drain
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          gcc -O2 -Wall -Itests/integration/socket-stubs -Iffmpeg tests/integration/socket_timeouts.c -lws2_32 -o socket_timeouts.exe
+          ./socket_timeouts.exe
+          python tests/integration/run_transport_regressions.py --ffmpeg ./ffmpeg/ffmpeg.exe --skip-daemon
+          python tests/integration/bench_inflight.py --ffmpeg ./ffmpeg/ffmpeg.exe --frames 600 --repeats 1 --depths 0 --changing-capacity --output vtremote-inflight.json
       - name: Package ffmpeg (Windows/MSYS2)
         if: runner.os == 'Windows'
         shell: msys2 {0}

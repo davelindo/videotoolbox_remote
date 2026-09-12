@@ -5,6 +5,7 @@
 
 #include <obs-module.h>
 #include <util/darray.h>
+#include <util/platform.h>
 
 #include "vtremoted-client.h"
 #include "vtremoted-protocol.h"
@@ -33,12 +34,18 @@ struct vtremoted_encoder {
 
   DARRAY(uint8_t) packet_data;
 
-  bool first_frame;
 };
 
-static const char *vtremoted_getname(void *unused) {
+static bool connect_and_configure(struct vtremoted_encoder *enc);
+
+static const char *vtremoted_h264_getname(void *unused) {
   UNUSED_PARAMETER(unused);
-  return "VideoToolbox Remote";
+  return "VideoToolbox Remote H.264";
+}
+
+static const char *vtremoted_hevc_getname(void *unused) {
+  UNUSED_PARAMETER(unused);
+  return "VideoToolbox Remote HEVC";
 }
 
 static void vtremoted_destroy(void *data) {
@@ -65,12 +72,6 @@ static void vtremoted_defaults(obs_data_t *settings) {
   obs_data_set_default_int(settings, "bitrate", 6000);
   obs_data_set_default_int(settings, "keyint_sec", 2);
   obs_data_set_default_int(settings, "wire_compression", VTR_WIRE_LZ4);
-  obs_data_set_default_string(settings, "codec", "h264");
-}
-
-static const char *locale_string(const char *lookup, const char *fallback) {
-  const char *value = NULL;
-  return obs_module_get_string(lookup, &value) && value ? value : fallback;
 }
 
 static obs_properties_t *vtremoted_properties(void *unused) {
@@ -81,15 +82,6 @@ static obs_properties_t *vtremoted_properties(void *unused) {
   obs_properties_add_text(props, "host", "Server Host", OBS_TEXT_DEFAULT);
   obs_properties_add_int(props, "port", "Server Port", 1, 65535, 1);
   obs_properties_add_text(props, "token", "Auth Token", OBS_TEXT_PASSWORD);
-
-  obs_property_t *codec_list =
-      obs_properties_add_list(props, "codec",
-                              locale_string("VideoCodec", "Video Codec"),
-                              OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-  obs_property_list_add_string(codec_list,
-                               locale_string("H264", "H.264 (AVC)"), "h264");
-  obs_property_list_add_string(codec_list,
-                               locale_string("HEVC", "HEVC (H.265)"), "hevc");
 
   obs_property_t *p =
       obs_properties_add_int(props, "bitrate", "Bitrate", 500, 100000, 100);
@@ -109,28 +101,17 @@ static obs_properties_t *vtremoted_properties(void *unused) {
   return props;
 }
 
-static bool vtremoted_is_supported_codec(const char *codec) {
-  return codec && (strcmp(codec, "h264") == 0 || strcmp(codec, "hevc") == 0);
-}
-
-static void *vtremoted_create(obs_data_t *settings, obs_encoder_t *encoder) {
+static void *vtremoted_create(obs_data_t *settings, obs_encoder_t *encoder, const char *codec) {
   struct vtremoted_encoder *enc = bzalloc(sizeof(struct vtremoted_encoder));
   enc->encoder = encoder;
-  enc->first_frame = true;
 
   enc->host = bstrdup(obs_data_get_string(settings, "host"));
   enc->port = (int)obs_data_get_int(settings, "port");
   enc->token = bstrdup(obs_data_get_string(settings, "token"));
-  enc->codec = bstrdup(obs_data_get_string(settings, "codec"));
+  enc->codec = bstrdup(codec);
   enc->bitrate = (int)obs_data_get_int(settings, "bitrate");
   enc->gop = (int)obs_data_get_int(settings, "keyint_sec");
   enc->wire_compression = (int)obs_data_get_int(settings, "wire_compression");
-
-  if (!enc->codec || !vtremoted_is_supported_codec(enc->codec)) {
-    warn("Unsupported codec requested");
-    vtremoted_destroy(enc);
-    return NULL;
-  }
 
   enc->client = vtremoted_client_create();
   if (!enc->client) {
@@ -139,30 +120,20 @@ static void *vtremoted_create(obs_data_t *settings, obs_encoder_t *encoder) {
     return NULL;
   }
 
+  if (!connect_and_configure(enc)) {
+    vtremoted_destroy(enc);
+    return NULL;
+  }
+
   return enc;
 }
 
-static bool vtremoted_update(void *data, obs_data_t *settings) {
-  struct vtremoted_encoder *enc = data;
+static void *vtremoted_h264_create(obs_data_t *settings, obs_encoder_t *encoder) {
+  return vtremoted_create(settings, encoder, "h264");
+}
 
-  if (!vtremoted_is_supported_codec(obs_data_get_string(settings, "codec"))) {
-    warn("Ignoring unsupported codec change request");
-    return false;
-  }
-
-  bfree(enc->host);
-  bfree(enc->token);
-  bfree(enc->codec);
-
-  enc->host = bstrdup(obs_data_get_string(settings, "host"));
-  enc->codec = bstrdup(obs_data_get_string(settings, "codec"));
-  enc->port = (int)obs_data_get_int(settings, "port");
-  enc->token = bstrdup(obs_data_get_string(settings, "token"));
-  enc->bitrate = (int)obs_data_get_int(settings, "bitrate");
-  enc->gop = (int)obs_data_get_int(settings, "keyint_sec");
-  enc->wire_compression = (int)obs_data_get_int(settings, "wire_compression");
-
-  return true;
+static void *vtremoted_hevc_create(obs_data_t *settings, obs_encoder_t *encoder) {
+  return vtremoted_create(settings, encoder, "hevc");
 }
 
 static bool vtremoted_extra_data(void *data, uint8_t **extra_data,
@@ -188,12 +159,14 @@ static bool connect_and_configure(struct vtremoted_encoder *enc) {
 
   uint32_t width = obs_encoder_get_width(enc->encoder);
   uint32_t height = obs_encoder_get_height(enc->encoder);
+  if (!voi || !voi->fps_num || !voi->fps_den || !width || !height || (width & 1) || (height & 1))
+    return false;
 
   /* Determine pixel format */
   uint32_t pix_fmt = VTR_PIX_FMT_NV12;
   if (voi->format == VIDEO_FORMAT_NV12) {
     pix_fmt = VTR_PIX_FMT_NV12;
-  } else if (voi->format == VIDEO_FORMAT_P010) {
+  } else if (voi->format == VIDEO_FORMAT_P010 && strcmp(enc->codec, "hevc") == 0) {
     pix_fmt = VTR_PIX_FMT_P010;
   }
 
@@ -232,12 +205,7 @@ static bool connect_and_configure(struct vtremoted_encoder *enc) {
     enc->extra_data_size = ed_size;
   }
 
-  info("Connected and configured successfully");
   return true;
-}
-
-static size_t frame_size_nv12(uint32_t width, uint32_t height) {
-  return width * height * 3 / 2;
 }
 
 static bool vtremoted_encode(void *data, struct encoder_frame *frame,
@@ -250,21 +218,8 @@ static bool vtremoted_encode(void *data, struct encoder_frame *frame,
   if (!frame || !packet)
     return false;
 
-  /* Connect on first frame */
-  if (enc->first_frame) {
-    enc->first_frame = false;
-    if (!connect_and_configure(enc)) {
-      return false;
-    }
-  }
-
-  if (!vtremoted_client_is_connected(enc->client)) {
-    warn("Not connected");
-    return false;
-  }
-
-  /* Build semiplanar 4:2:0 frame data (NV12/P010: Y plane + UV plane). */
-  uint32_t width = obs_encoder_get_width(enc->encoder);
+  /* OBS does not drain encode(NULL) at recording stop. Return this frame's
+   * packet before accepting another frame until a supported drain API exists. */
   uint32_t height = obs_encoder_get_height(enc->encoder);
 
   /* Plane 0 = Y, plane 1 = UV interleaved. */
@@ -276,10 +231,11 @@ static bool vtremoted_encode(void *data, struct encoder_frame *frame,
   uint32_t heights_arr[2] = {height, height / 2};
   uint32_t sizes[2] = {(uint32_t)y_size, (uint32_t)uv_size};
 
-  /* Send frame */
   if (!vtremoted_client_send_frame(enc->client, frame->pts, 1, 2, planes,
                                    strides, heights_arr, sizes)) {
-    warn("Failed to send frame");
+    char error[1024] = {0};
+    vtremoted_client_get_error(enc->client, error, sizeof(error));
+    obs_encoder_set_last_error(enc->encoder, error[0] ? error : "Remote frame submission failed.");
     return false;
   }
 
@@ -289,10 +245,25 @@ static bool vtremoted_encode(void *data, struct encoder_frame *frame,
   int64_t pts = 0, dts = 0;
   bool keyframe = false;
 
-  if (!vtremoted_client_receive_packet(enc->client, &pkt_data, &pkt_size, &pts,
-                                       &dts, &keyframe)) {
-    /* No packet yet (may happen with B-frames buffering) */
-    return true;
+  VTRReceiveResult result = VTR_RECEIVE_PENDING;
+  uint64_t deadline = os_gettime_ns() + 5000000000ULL;
+  while (result == VTR_RECEIVE_PENDING) {
+    uint64_t now = os_gettime_ns();
+    if (now >= deadline) {
+      vtremoted_client_cancel(enc->client);
+      obs_encoder_set_last_error(enc->encoder, "Remote packet receive timed out.");
+      return false;
+    }
+    int remaining_ms = (int)((deadline - now + 999999) / 1000000);
+    result = vtremoted_client_receive_packet(enc->client, &pkt_data, &pkt_size,
+                                              &pts, &dts, &keyframe, remaining_ms);
+  }
+  if (result != VTR_RECEIVE_PACKET || pts != frame->pts) {
+    char error[1024] = {0};
+    vtremoted_client_get_error(enc->client, error, sizeof(error));
+    vtremoted_client_cancel(enc->client);
+    obs_encoder_set_last_error(enc->encoder, error[0] ? error : "Remote output does not match the submitted frame.");
+    return false;
   }
 
   /* Fill packet */
@@ -317,7 +288,7 @@ static void vtremoted_video_info(void *data, struct video_scale_info *info) {
     video_t *video = obs_encoder_video(enc->encoder);
     if (video) {
       const struct video_output_info *voi = video_output_get_info(video);
-      if (voi && voi->format == VIDEO_FORMAT_P010) {
+      if (voi && voi->format == VIDEO_FORMAT_P010 && strcmp(enc->codec, "hevc") == 0) {
         info->format = VIDEO_FORMAT_P010;
         return;
       }
@@ -331,13 +302,26 @@ struct obs_encoder_info vtremoted_encoder_info = {
     .id = "vtremoted_encoder",
     .type = OBS_ENCODER_VIDEO,
     .codec = "h264",
-    .get_name = vtremoted_getname,
-    .create = vtremoted_create,
+    .get_name = vtremoted_h264_getname,
+    .create = vtremoted_h264_create,
     .destroy = vtremoted_destroy,
     .encode = vtremoted_encode,
     .get_defaults = vtremoted_defaults,
     .get_properties = vtremoted_properties,
-    .update = vtremoted_update,
+    .get_extra_data = vtremoted_extra_data,
+    .get_video_info = vtremoted_video_info,
+};
+
+struct obs_encoder_info vtremoted_hevc_encoder_info = {
+    .id = "vtremoted_hevc_encoder",
+    .type = OBS_ENCODER_VIDEO,
+    .codec = "hevc",
+    .get_name = vtremoted_hevc_getname,
+    .create = vtremoted_hevc_create,
+    .destroy = vtremoted_destroy,
+    .encode = vtremoted_encode,
+    .get_defaults = vtremoted_defaults,
+    .get_properties = vtremoted_properties,
     .get_extra_data = vtremoted_extra_data,
     .get_video_info = vtremoted_video_info,
 };

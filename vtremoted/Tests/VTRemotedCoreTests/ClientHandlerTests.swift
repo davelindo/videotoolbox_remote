@@ -1,7 +1,98 @@
 @testable import VTRemotedCore
+import Darwin
 import XCTest
 
 final class ClientHandlerTests: XCTestCase {
+    private final class AsyncFailingSession: CodecSession, @unchecked Sendable {
+        let sender: MessageSender
+        let stage: String
+        let callbacks = DispatchGroup()
+        init(sender: @escaping MessageSender, stage: String) {
+            self.sender = sender
+            self.stage = stage
+        }
+        func configure(_ configuration: SessionConfiguration) throws -> Data { Data() }
+        func handlePacketMessage(_ payload: Data) throws { try handleFrameMessage(payload) }
+        func handleFrameMessage(_ payload: Data) throws {
+            callbacks.enter()
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { [self] in
+                defer { callbacks.leave() }
+                if stage == "output-send" {
+                    try? sender(.packet, [Data(count: 4 * 1024 * 1024)])
+                } else {
+                    try? sender(.error, [ErrorResponse(code: 2, message: "injected \(stage) failure").encode()])
+                }
+            }
+        }
+        func flush() throws { callbacks.wait() }
+        func shutdown() { callbacks.wait() }
+    }
+
+    func testAsynchronousFailureInterruptsIdleInput() throws {
+        for stage in ["decode", "encode", "transfer", "output-send"] {
+            var descriptors = [Int32](repeating: -1, count: 2)
+            XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &descriptors), 0)
+            defer { close(descriptors[0]); close(descriptors[1]) }
+            var bufferBytes: Int32 = 4096
+            XCTAssertEqual(setsockopt(descriptors[0], SOL_SOCKET, SO_SNDBUF, &bufferBytes, 4), 0)
+            let connection = try VTRWireConnection(fd: descriptors[0], writeTimeoutSeconds: 0.1)
+            let peer = try VTRWireConnection(fd: descriptors[1])
+            let handler = VTRClientHandler(io: connection, expectedToken: "", idleTimeoutSeconds: 60,
+                sessionFactory: { AsyncFailingSession(sender: $0, stage: stage) })
+            let finished = expectation(description: "\(stage) failure releases idle input")
+            DispatchQueue.global().async {
+                handler.run()
+                finished.fulfill()
+            }
+            try peer.send(type: .hello, body: makeHello(token: "", codec: "h264"))
+            XCTAssertEqual(try peer.readMessage(timeoutSeconds: 1).header.type, VTRMessageType.helloAck.rawValue)
+            try peer.send(type: .configure, body: makeConfigure(mode: "encode", wireCompression: "0"))
+            XCTAssertEqual(try peer.readMessage(timeoutSeconds: 1).header.type, VTRMessageType.configureAck.rawValue)
+            try peer.send(type: .frame, body: Data())
+            if stage != "output-send" {
+                let response = try peer.readMessage(timeoutSeconds: 1)
+                XCTAssertEqual(response.header.type, VTRMessageType.error.rawValue)
+                XCTAssertTrue(String(decoding: response.body, as: UTF8.self).contains(stage))
+            }
+            wait(for: [finished], timeout: 1.5)
+        }
+    }
+
+    private final class FailingSession: CodecSession {
+        let sender: MessageSender
+        let callbackFailure: Bool
+        init(sender: @escaping MessageSender, callbackFailure: Bool) {
+            self.sender = sender
+            self.callbackFailure = callbackFailure
+        }
+        func configure(_ configuration: SessionConfiguration) throws -> Data { Data() }
+        func handleFrameMessage(_ payload: Data) throws { }
+        func handlePacketMessage(_ payload: Data) throws { }
+        func shutdown() { }
+        func flush() throws {
+            if callbackFailure {
+                try sender(.error, [ErrorResponse(code: 2, message: "injected callback failure").encode()])
+            } else {
+                throw VTRemotedError.protocolViolation("injected flush failure")
+            }
+        }
+    }
+
+    func testFailedFlushNeverSendsDone() {
+        for callbackFailure in [false, true] {
+            let io = FakeIO(incoming: [
+                (.hello, makeHello(token: "", codec: "h264")),
+                (.configure, makeConfigure(mode: "encode", wireCompression: "0")),
+                (.flush, Data())
+            ])
+            let handler = VTRClientHandler(io: io, expectedToken: "", sessionFactory: {
+                FailingSession(sender: $0, callbackFailure: callbackFailure)
+            })
+            handler.run()
+            XCTAssertEqual(io.sent.map(\.0), [.helloAck, .configureAck, .error])
+        }
+    }
+
     private final class FakeIO: VTRMessageIO, @unchecked Sendable {
         var incoming: [(VTRMessageType, Data)]
         var sent: [(VTRMessageType, Data)] = []

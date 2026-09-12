@@ -182,6 +182,15 @@ public enum ZstdCodec {
         return out
     }
 
+    static func compress(_ source: UnsafeRawBufferPointer, pool: RawBufferPool) -> Data? {
+        guard source.count > 0, let base = source.baseAddress else { return nil }
+        let api = requireAPI("compress")
+        return pool.data(capacity: api.compressBound(source.count)) { destination in
+            let count = api.compress(destination.baseAddress, destination.count, base, source.count, 1)
+            return api.isError(count) == 0 ? count : nil
+        }
+    }
+
     public static func compress(_ src: UnsafeRawPointer, count: Int) -> Data? {
         guard count > 0 else { return Data() }
         let api = requireAPI("compress")

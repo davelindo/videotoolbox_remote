@@ -88,7 +88,8 @@ const FFCodec ff_h264_videotoolbox_remote_decoder = {
     .p.priv_class   = &vtremote_h264_dec_class,
     .init           = vtremote_h264_dec_init,
     .close          = vtremote_h264_dec_close,
-    FF_CODEC_DECODE_CB(ff_vtremote_decode),
+    .flush          = ff_vtremote_dec_flush,
+    FF_CODEC_RECEIVE_FRAME_CB(ff_vtremote_receive_frame),
 #if CONFIG_VIDEOTOOLBOX && defined(__APPLE__)
     .hw_configs     = vtremote_h264_dec_hw_configs,
     CODEC_PIXFMTS(AV_PIX_FMT_NV12, AV_PIX_FMT_VIDEOTOOLBOX),

@@ -79,8 +79,8 @@ public final class VTRServer {
         serverVersion: String,
         serverCapabilities: [String],
         limiter: VTRSessionLimiter
-    ) -> VTRClientHandler {
-        let connection = VTRWireConnection(fd: clientFd)
+    ) throws -> VTRClientHandler {
+        let connection = try VTRWireConnection(fd: clientFd, writeTimeoutSeconds: TimeInterval(idleTimeoutSeconds))
         return VTRClientHandler(
             io: connection,
             expectedToken: expectedToken,
@@ -100,7 +100,7 @@ public final class VTRServer {
         let expectedToken = try resolveExpectedToken()
         let limiter = VTRSessionLimiter(maxSessions: maxSessions)
         let serverName = "vtremoted"
-        let serverVersion = ProcessInfo.processInfo.environment["VTREMOTED_VERSION"] ?? "unknown"
+        let serverVersion = ProcessInfo.processInfo.environment["VTREMOTED_VERSION"] ?? Arguments.version
         let serverCapabilities = VTRCapability.runtimeServer
 
         #if os(Linux)
@@ -208,15 +208,19 @@ public final class VTRServer {
                     limiter.release()
                     close(clientFd)
                 }
-                let handler = self.makeClientHandler(
-                    fd: clientFd,
-                    expectedToken: token,
-                    serverName: serverName,
-                    serverVersion: serverVersion,
-                    serverCapabilities: serverCapabilities,
-                    limiter: limiter
-                )
-                handler.run()
+                do {
+                    let handler = try self.makeClientHandler(
+                        fd: clientFd,
+                        expectedToken: token,
+                        serverName: serverName,
+                        serverVersion: serverVersion,
+                        serverCapabilities: serverCapabilities,
+                        limiter: limiter
+                    )
+                    handler.run()
+                } catch {
+                    self.logger.error("socket setup failed: \(error)")
+                }
             }
         }
     }
@@ -235,15 +239,19 @@ public final class VTRServer {
             limiter.release()
             close(clientFd)
         }
-        let handler = makeClientHandler(
-            fd: clientFd,
-            expectedToken: expectedToken,
-            serverName: serverName,
-            serverVersion: serverVersion,
-            serverCapabilities: serverCapabilities,
-            limiter: limiter
-        )
-        handler.run()
+        do {
+            let handler = try makeClientHandler(
+                fd: clientFd,
+                expectedToken: expectedToken,
+                serverName: serverName,
+                serverVersion: serverVersion,
+                serverCapabilities: serverCapabilities,
+                limiter: limiter
+            )
+            handler.run()
+        } catch {
+            logger.error("socket setup failed: \(error)")
+        }
     }
 
     private func rejectBusy(
@@ -264,8 +272,9 @@ public final class VTRServer {
             activeSessions: UInt16(clamping: snap.activeSessions)
         )
         let body = ack.encode()
-        let connection = VTRWireConnection(fd: clientFd)
-        try? connection.send(type: .helloAck, body: body)
+        if let connection = try? VTRWireConnection(fd: clientFd, writeTimeoutSeconds: TimeInterval(handshakeTimeoutSeconds)) {
+            try? connection.send(type: .helloAck, body: body)
+        }
     }
 
     private func resolveExpectedToken() throws -> String {

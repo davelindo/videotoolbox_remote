@@ -155,19 +155,6 @@ static int vtremote_hevc_extradata_to_annexb(const uint8_t *in, int in_size,
   return 0;
 }
 
-static int set_socket_timeout(int fd, int timeout_ms) {
-  struct timeval tv;
-  tv.tv_sec = timeout_ms / 1000;
-  tv.tv_usec = (timeout_ms % 1000) * 1000;
-  if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, VTR_SOCKOPT_ARG & tv,
-                 sizeof(tv)) < 0)
-    return AVERROR(vtremote_sock_errno());
-  if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, VTR_SOCKOPT_ARG & tv,
-                 sizeof(tv)) < 0)
-    return AVERROR(vtremote_sock_errno());
-  return 0;
-}
-
 /* Configure socket for high-throughput video streaming */
 static void configure_socket_buffers(int fd) {
   vtremote_disable_sigpipe(fd);
@@ -657,6 +644,10 @@ static void vtremote_init_inflight(AVCodecContext *avctx,
   s->inflight_blocked = 0;
   s->inflight_idle_intervals = 0;
   s->inflight_last_adjust_us = av_gettime_relative();
+  s->inflight_last_packets = s->packets_recv;
+  s->inflight_probe_from = 0;
+  s->inflight_probe_rate = 0;
+  s->inflight_plateau_rate = 0;
 
   if (!s->inflight_auto) {
     s->inflight_min = s->inflight;
@@ -687,7 +678,29 @@ static void vtremote_auto_adjust_inflight(AVCodecContext *avctx,
   if (now - s->inflight_last_adjust_us < 1000000)
     return;
 
-  if (s->inflight_blocked > 0 && s->inflight < s->inflight_max_limit) {
+  double rate = (s->packets_recv - s->inflight_last_packets) * 1000000.0 /
+                (now - s->inflight_last_adjust_us);
+  if (s->inflight_probe_from) {
+    /* A full queue alone is not evidence that a larger one helps. Compare
+     * delivered packets over whole intervals, then undo an ineffective probe. */
+    if (rate <= s->inflight_probe_rate * 1.03) {
+      s->inflight = s->inflight_probe_from;
+      s->inflight_plateau_rate = rate;
+      if (vtremote_log_enabled(s, AV_LOG_VERBOSE))
+        av_log(avctx, AV_LOG_VERBOSE,
+               "vtremote inflight auto restore %d: throughput %.1f -> %.1f fps\n",
+               s->inflight, s->inflight_probe_rate, rate);
+    } else {
+      s->inflight_plateau_rate = 0;
+    }
+    s->inflight_probe_from = 0;
+    s->inflight_idle_intervals = 0;
+  } else if (s->inflight_blocked > 0 && s->inflight < s->inflight_max_limit &&
+             rate > 0 && (s->inflight_plateau_rate == 0 ||
+                          rate < s->inflight_plateau_rate * 0.9 ||
+                          rate > s->inflight_plateau_rate * 1.1)) {
+    s->inflight_probe_from = s->inflight;
+    s->inflight_probe_rate = rate;
     int next = s->inflight + s->inflight_step;
     s->inflight = FFMIN(next, s->inflight_max_limit);
     s->inflight_idle_intervals = 0;
@@ -699,6 +712,7 @@ static void vtremote_auto_adjust_inflight(AVCodecContext *avctx,
     if (s->inflight_idle_intervals >= 3) {
       int next = s->inflight - s->inflight_step;
       s->inflight = FFMAX(next, s->inflight_min);
+      s->inflight_plateau_rate = 0;
       s->inflight_idle_intervals = 0;
       if (vtremote_log_enabled(s, AV_LOG_VERBOSE))
         av_log(avctx, AV_LOG_VERBOSE,
@@ -710,6 +724,7 @@ static void vtremote_auto_adjust_inflight(AVCodecContext *avctx,
 
   s->inflight_blocked = 0;
   s->inflight_last_adjust_us = now;
+  s->inflight_last_packets = s->packets_recv;
 }
 
 static int configure_zstd_ctx(AVCodecContext *avctx, VTRemoteEncContext *s,
@@ -788,7 +803,7 @@ static int write_full(int fd, const uint8_t *buf, int size) {
 #endif
       if (err == EINTR)
         continue;
-      return AVERROR(err);
+      return vtremote_blocking_error(err);
     }
     if (r == 0)
       return AVERROR_EOF;
@@ -814,7 +829,7 @@ static int read_full(int fd, uint8_t *buf, int size) {
           || err == WSAEWOULDBLOCK
 #endif
       )
-        return got == 0 ? AVERROR(EAGAIN) : AVERROR(EIO);
+        return AVERROR(ETIMEDOUT);
       return AVERROR(err);
     }
     if (r == 0)
@@ -886,22 +901,28 @@ static int connect_hostport(const char *hostport, int timeout_ms) {
     return AVERROR(EIO);
 
   int fd = -1;
+  int last_error = AVERROR(EIO);
   for (rp = res; rp; rp = rp->ai_next) {
     fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-    if (fd < 0)
+    if (fd < 0) {
+      last_error = AVERROR(vtremote_sock_errno());
       continue;
+    }
     /* Configure socket buffers BEFORE connect() for correct TCP Window Scale
      * negotiation */
     configure_socket_buffers(fd);
-    set_socket_timeout(fd, timeout_ms);
-    if (connect(fd, rp->ai_addr, rp->ai_addrlen) == 0)
+    int ret = vtremote_set_socket_timeout(fd, timeout_ms);
+    if (ret >= 0)
+      ret = vtremote_connect_or_finish(fd, rp->ai_addr, rp->ai_addrlen, timeout_ms);
+    if (ret == 0)
       break;
+    last_error = ret;
     VTR_CLOSE_SOCKET(fd);
     fd = -1;
   }
   freeaddrinfo(res);
   if (fd < 0)
-    return AVERROR(vtremote_sock_errno() ? vtremote_sock_errno() : EIO);
+    return last_error;
 
   return fd;
 }
@@ -1249,7 +1270,7 @@ static int vtremote_sendq_pump(AVCodecContext *avctx, int blocking) {
           continue;
         if (!blocking && (err == EAGAIN || err == EWOULDBLOCK))
           return AVERROR(EAGAIN);
-        return AVERROR(err);
+        return blocking ? vtremote_blocking_error(err) : AVERROR(err);
       }
       if (r == 0)
         return AVERROR(EPIPE);
@@ -1330,20 +1351,30 @@ static int vtremote_read_msg_nonblock(VTRemoteEncContext *s,
   return vtremote_read_msg(s, hdr, payload);
 }
 
+static int vtremote_accept_done(AVCodecContext *avctx) {
+  VTRemoteEncContext *s = avctx->priv_data;
+  if (!s->flushing || s->inflight_frames || s->queued_frames) {
+    av_log(avctx, AV_LOG_ERROR, "Remote encoder sent DONE with incomplete output.\n");
+    return AVERROR(EIO);
+  }
+  s->done = 1;
+  return 0;
+}
+
 /* Drain all available packets into the queue without blocking */
 static int vtremote_drain_available_packets(AVCodecContext *avctx) {
   VTRemoteEncContext *s = avctx->priv_data;
   int packets_read = 0;
 
-  while (s->pkt_q_count < s->pkt_q_size) {
+  while (!s->done && s->pkt_q_count < s->pkt_q_size) {
     VTRemoteMsgHeader hdr;
     uint8_t *payload = NULL;
     int ret = vtremote_read_msg_nonblock(s, &hdr, &payload);
     if (ret == AVERROR(EAGAIN))
       break; /* No more data available */
     if (s->flushing && vtremote_is_peer_close_error(ret)) {
-      s->done = 1;
-      return packets_read;
+      av_log(avctx, AV_LOG_ERROR, "Remote encoder disconnected before DONE; output is incomplete.\n");
+      return AVERROR(EIO);
     }
     if (ret < 0)
       return ret;
@@ -1360,8 +1391,8 @@ static int vtremote_drain_available_packets(AVCodecContext *avctx) {
       break;
     case VTREMOTE_MSG_DONE:
       av_free(payload);
-      s->done = 1;
-      return packets_read;
+      ret = vtremote_accept_done(avctx);
+      return ret < 0 ? ret : packets_read;
     case VTREMOTE_MSG_PING: {
       vtremote_sendq_enqueue_empty(s, VTREMOTE_MSG_PONG, 0);
       vtremote_sendq_pump(avctx, 0);
@@ -1424,8 +1455,8 @@ static int vtremote_wait_for_inflight_slot(AVCodecContext *avctx) {
       break;
     case VTREMOTE_MSG_DONE:
       av_free(payload);
-      s->done = 1;
-      return AVERROR_EOF;
+      ret = vtremote_accept_done(avctx);
+      return ret < 0 ? ret : AVERROR_EOF;
     case VTREMOTE_MSG_PING:
       av_free(payload);
       ret = vtremote_sendq_enqueue_empty(s, VTREMOTE_MSG_PONG, 0);
@@ -2395,8 +2426,6 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame) {
 
 int ff_vtremote_common_receive_packet(AVCodecContext *avctx, AVPacket *pkt) {
   VTRemoteEncContext *s = avctx->priv_data;
-  if (s->done)
-    return AVERROR_EOF;
 
   /* if queued packets, pop */
   if (s->pkt_q_count > 0) {
@@ -2407,6 +2436,9 @@ int ff_vtremote_common_receive_packet(AVCodecContext *avctx, AVPacket *pkt) {
     s->pkt_q_count--;
     return ret;
   }
+
+  if (s->done)
+    return AVERROR_EOF;
 
   for (;;) {
     int64_t recv_start_us = av_gettime_relative();
@@ -2420,8 +2452,8 @@ int ff_vtremote_common_receive_packet(AVCodecContext *avctx, AVPacket *pkt) {
     }
     vtremote_auto_adjust_inflight(avctx, s);
     if (s->flushing && vtremote_is_peer_close_error(ret)) {
-      s->done = 1;
-      return AVERROR_EOF;
+      av_log(avctx, AV_LOG_ERROR, "Remote encoder disconnected before DONE; output is incomplete.\n");
+      return AVERROR(EIO);
     }
     if (ret < 0)
       return ret;
@@ -2446,8 +2478,8 @@ int ff_vtremote_common_receive_packet(AVCodecContext *avctx, AVPacket *pkt) {
       return AVERROR_BUG;
     case VTREMOTE_MSG_DONE:
       av_free(payload);
-      s->done = 1;
-      return AVERROR_EOF;
+      ret = vtremote_accept_done(avctx);
+      return ret < 0 ? ret : AVERROR_EOF;
     case VTREMOTE_MSG_PING: {
       vtremote_sendq_enqueue_empty(s, VTREMOTE_MSG_PONG, 0);
       vtremote_sendq_pump(avctx, 0);
@@ -2493,6 +2525,11 @@ int ff_vtremote_encode(AVCodecContext *avctx, AVPacket *pkt,
   ret = vtremote_drain_available_packets(avctx);
   if (ret < 0 && ret != AVERROR(EAGAIN))
     return ret;
+
+  /* Realtime streams often return only through this nonblocking path. Keep
+   * the controller's interval clock running when the queue never fills. */
+  if (!s->flushing)
+    vtremote_auto_adjust_inflight(avctx, s);
 
   /* Return a queued packet if available. Consume the current input frame too. */
   if (s->pkt_q_count > 0) {
@@ -2541,15 +2578,20 @@ int ff_vtremote_encode(AVCodecContext *avctx, AVPacket *pkt,
   if (frame && !frame_submitted && vtremote_inflight_at_limit(s)) {
     if (s->inflight_auto)
       s->inflight_blocked++;
-    vtremote_sendq_pump(avctx, 1);
+    ret = vtremote_sendq_pump(avctx, 1);
+    if (ret < 0)
+      return ret;
     /* Block until we get at least one packet */
     ret = ff_vtremote_common_receive_packet(avctx, pkt);
     if (ret >= 0) {
       if (got_packet)
         *got_packet = 1;
-      /* Now send the pending frame since we freed up a slot */
-      ff_vtremote_common_send_frame(avctx, frame);
-      return 0;
+      /* Auto tuning can shrink the limit while receiving. Drain enough old
+       * work to accept this input; legacy encode callbacks consume the frame. */
+      ret = vtremote_wait_for_inflight_slot(avctx);
+      if (ret < 0)
+        return ret;
+      return ff_vtremote_common_send_frame(avctx, frame);
     }
     if (got_packet)
       *got_packet = 0;

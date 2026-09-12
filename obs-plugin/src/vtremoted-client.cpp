@@ -13,12 +13,14 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -129,18 +131,6 @@ bool validate_inbound_length(uint16_t type, uint32_t length, uint32_t cap) {
   return true;
 }
 
-bool discard_exact(socket_t sock, uint32_t len) {
-  std::array<uint8_t, 16 * 1024> scratch{};
-  uint32_t remaining = len;
-  while (remaining > 0) {
-    const size_t chunk = std::min<size_t>(remaining, scratch.size());
-    if (read_exact(sock, scratch.data(), chunk))
-      return false;
-    remaining -= (uint32_t)chunk;
-  }
-  return true;
-}
-
 bool compress_plane_payload(const uint8_t *src, uint32_t src_size,
                             int wire_compression,
                             std::vector<uint8_t> &compress_buf,
@@ -222,8 +212,11 @@ struct VTRemotedClient {
   int port;
   std::string token;
 
-  bool connected;
-  bool configured;
+  std::atomic<bool> connected;
+  std::atomic<bool> configured;
+  std::mutex send_mutex;
+  std::mutex error_mutex;
+  std::string error;
 
   uint32_t width;
   uint32_t height;
@@ -365,6 +358,11 @@ bool vtremoted_client_connect(VTRemotedClient *client, const char *host,
   if (!client || client->connected)
     return false;
 
+  vtremoted_client_disconnect(client);
+  {
+    std::lock_guard<std::mutex> lock(client->error_mutex);
+    client->error.clear();
+  }
   client->host = host ? host : "127.0.0.1";
   client->port = port > 0 ? port : VTR_PORT;
   client->token = token ? token : "";
@@ -483,6 +481,43 @@ bool vtremoted_client_is_connected(VTRemotedClient *client) {
   return client && client->connected;
 }
 
+void vtremoted_client_cancel(VTRemotedClient *client) {
+  if (!client) return;
+  client->connected = false;
+  client->configured = false;
+  if (client->sock != SOCKET_INVALID) {
+#ifdef _WIN32
+    shutdown(client->sock, SD_BOTH);
+#else
+    shutdown(client->sock, SHUT_RDWR);
+#endif
+  }
+}
+
+void vtremoted_client_get_error(VTRemotedClient *client, char *error, size_t size) {
+  if (!client || !error || !size) return;
+  std::lock_guard<std::mutex> lock(client->error_mutex);
+  std::snprintf(error, size, "%s", client->error.c_str());
+}
+
+static VTRReceiveResult fail_client(VTRemotedClient *client, const std::string &error) {
+  {
+    std::lock_guard<std::mutex> lock(client->error_mutex);
+    if (client->error.empty()) client->error = error;
+  }
+  vtr_log("%s", error.c_str());
+  vtremoted_client_cancel(client);
+  return VTR_RECEIVE_ERROR;
+}
+
+bool vtremoted_client_flush(VTRemotedClient *client) {
+  if (!client || !client->connected) return false;
+  std::lock_guard<std::mutex> lock(client->send_mutex);
+  if (send_msg(client->sock, VTR_MSG_FLUSH, nullptr, 0)) return true;
+  fail_client(client, "FLUSH send failed");
+  return false;
+}
+
 bool vtremoted_client_configure(VTRemotedClient *client, uint32_t width,
                                 uint32_t height, uint8_t pix_fmt,
                                 uint32_t time_base_num, uint32_t time_base_den,
@@ -536,6 +571,8 @@ bool vtremoted_client_configure(VTRemotedClient *client, uint32_t width,
   cfg.push_back(0);
 
   if (!add_option("mode", "encode") ||
+      !add_option_int("max_b_frames", 0) ||
+      !add_option_int("realtime", 1) ||
       !add_option_int("bitrate", bitrate) ||
       !add_option_int("gop", gop) ||
       !add_option_int("wire_compression", wire_compression))
@@ -657,49 +694,67 @@ bool vtremoted_client_send_frame(VTRemotedClient *client, int64_t pts,
   // Side data count (0)
   buf.push_back(0);
 
-  return send_msg(client->sock, VTR_MSG_FRAME, buf.data(),
-                  (uint32_t)buf.size());
+  std::lock_guard<std::mutex> lock(client->send_mutex);
+  if (send_msg(client->sock, VTR_MSG_FRAME, buf.data(), (uint32_t)buf.size()))
+    return true;
+  fail_client(client, "FRAME send failed");
+  return false;
 }
 
-bool vtremoted_client_receive_packet(VTRemotedClient *client,
+VTRReceiveResult vtremoted_client_receive_packet(VTRemotedClient *client,
                                      const uint8_t **out_data, size_t *out_size,
                                      int64_t *out_pts, int64_t *out_dts,
-                                     bool *out_keyframe) {
+                                     bool *out_keyframe, int wait_ms) {
   if (!client || !client->connected)
-    return false;
+    return VTR_RECEIVE_ERROR;
+
+  fd_set readers;
+  FD_ZERO(&readers);
+  FD_SET(client->sock, &readers);
+  timeval timeout = {wait_ms / 1000, (wait_ms % 1000) * 1000};
+  int ready = select((int)client->sock + 1, &readers, nullptr, nullptr, &timeout);
+  if (ready == 0)
+    return wait_ms == 0 ? VTR_RECEIVE_PENDING : fail_client(client, "PACKET receive timed out");
+  if (ready < 0)
+    return fail_client(client, "PACKET receive poll failed");
 
   struct vtr_header hdr;
   if (!recv_header(client->sock, &hdr))
-    return false;
+    return fail_client(client, "Invalid, truncated, or disconnected PACKET header");
   if (!validate_inbound_length(hdr.type, hdr.length,
                                INBOUND_MESSAGE_MAX_BYTES)) {
-    vtremoted_client_disconnect(client);
-    return false;
-  }
-
-  if (hdr.type == VTR_MSG_ERROR || hdr.type == VTR_MSG_DONE) {
-    /* Skip body */
-    if (hdr.length > 0 && !discard_exact(client->sock, hdr.length))
-      vtremoted_client_disconnect(client);
-    return false;
-  }
-
-  if (hdr.type != VTR_MSG_PACKET) {
-    /* Unexpected message, skip */
-    if (hdr.length > 0 && !discard_exact(client->sock, hdr.length))
-      vtremoted_client_disconnect(client);
-    return false;
+    return fail_client(client, "Oversized PACKET message");
   }
 
   /* Packet: pts(8) + dts(8) + duration(8) + flags(4) + data */
   std::vector<uint8_t> &buf = client->recv_buf;
   buf.resize(hdr.length);
   if (read_exact(client->sock, buf.data(), hdr.length))
-    return false;
+    return fail_client(client, "Truncated or timed out PACKET body");
+
+  if (hdr.type == VTR_MSG_ERROR) {
+    if (buf.size() < 6 || vtr_read_be16(buf.data() + 4) > buf.size() - 6)
+      return fail_client(client, "Malformed server ERROR");
+    return fail_client(client, "Server error: " + std::string(
+        reinterpret_cast<char *>(buf.data() + 6), vtr_read_be16(buf.data() + 4)));
+  }
+  if (hdr.type == VTR_MSG_DONE) {
+    if (!buf.empty()) return fail_client(client, "Malformed DONE");
+    vtremoted_client_cancel(client);
+    return VTR_RECEIVE_DONE;
+  }
+  if (hdr.type == VTR_MSG_PING) {
+    std::lock_guard<std::mutex> lock(client->send_mutex);
+    if (!send_msg(client->sock, VTR_MSG_PONG, buf.data(), (uint32_t)buf.size()))
+      return fail_client(client, "PONG send failed");
+    return VTR_RECEIVE_PENDING;
+  }
+  if (hdr.type != VTR_MSG_PACKET)
+    return fail_client(client, "Unexpected message while awaiting PACKET");
 
   if (buf.size() < 32) {
     vtr_log("Packet message too short: len=%zu min=32", buf.size());
-    return false;
+    return fail_client(client, "PACKET message too short");
   }
 
   int64_t pts = vtr_read_be64(buf.data());
@@ -712,7 +767,7 @@ bool vtremoted_client_receive_packet(VTRemotedClient *client,
   if (buf.size() < data_offset + data_len) {
     vtr_log("Packet message data length exceeds payload: len=%zu data_len=%u",
             buf.size(), data_len);
-    return false;
+    return fail_client(client, "PACKET data length exceeds payload");
   }
 
   *out_data = buf.data() + data_offset;
@@ -721,5 +776,5 @@ bool vtremoted_client_receive_packet(VTRemotedClient *client,
   *out_dts = dts;
   *out_keyframe = (flags & 1) != 0;
 
-  return true;
+  return VTR_RECEIVE_PACKET;
 }

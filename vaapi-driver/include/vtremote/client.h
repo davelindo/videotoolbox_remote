@@ -42,16 +42,35 @@ typedef struct VTRClient {
     VTRBuffer parameter_sets;
     VTRBuffer tx;
     VTRBuffer rx;
+    unsigned pending_count;
+    int64_t pending_pts[16];
+    int flushing;
+    uint8_t rx_header[VTR_HEADER_SIZE];
+    size_t rx_header_read;
+    size_t rx_body_read;
 } VTRClient;
 
 void vtr_client_init(VTRClient *client);
 void vtr_client_destroy(VTRClient *client);
 int vtr_client_connect(VTRClient *client, const VTRClientConfig *config,
                        char *error, size_t error_size);
+/* Serialized calls may keep up to 16 frames in flight. Send returns -EAGAIN
+ * at capacity. Receive returns 0 for a packet, 1 for a validated DONE. */
+int vtr_client_send_frame(VTRClient *client, const VTRFrame *frame,
+                          char *error, size_t error_size);
+int vtr_client_receive_packet(VTRClient *client, VTRBuffer *packet,
+                              int64_t *packet_pts, int64_t *packet_dts,
+                              uint32_t *packet_flags, char *error, size_t error_size);
+/* -EAGAIN preserves partial input and permits another bounded wait. */
+int vtr_client_receive_packet_timeout(VTRClient *client, VTRBuffer *packet,
+    int64_t *packet_pts, int64_t *packet_dts, uint32_t *packet_flags,
+    char *error, size_t error_size, int timeout_ms);
+int vtr_client_start_flush(VTRClient *client, char *error, size_t error_size);
 int vtr_client_encode(VTRClient *client, const VTRFrame *frame,
                       VTRBuffer *packet, int64_t *packet_pts,
                       int64_t *packet_dts, uint32_t *packet_flags,
                       char *error, size_t error_size);
+/* Convenience drain for a session with no outstanding output. */
 int vtr_client_flush(VTRClient *client, char *error, size_t error_size);
 
 #ifdef __cplusplus

@@ -18,6 +18,7 @@
 #include <unistd.h>
 #include <sys/time.h>
 #include <poll.h>
+#include <fcntl.h>
 #endif
 #include "avcodec.h"
 #include "codec_internal.h"
@@ -83,18 +84,6 @@ static int vtremote_sock_errno(void)
 #endif
 
 #include "vtremote_sock.h"
-
-static int set_socket_timeout(int fd, int timeout_ms)
-{
-    struct timeval tv;
-    tv.tv_sec  = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
-    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, VTR_SOCKOPT_ARG &tv, sizeof(tv)) < 0)
-        return AVERROR(vtremote_sock_errno());
-    if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, VTR_SOCKOPT_ARG &tv, sizeof(tv)) < 0)
-        return AVERROR(vtremote_sock_errno());
-    return 0;
-}
 
 /* Configure socket for high-throughput video streaming */
 static void configure_socket_buffers(int fd)
@@ -167,7 +156,7 @@ static int write_full(int fd, const uint8_t *buf, int size)
 #endif
             if (err == EINTR)
                 continue;
-            return AVERROR(err);
+            return vtremote_blocking_error(err);
         }
         if (r == 0)
             return AVERROR_EOF;
@@ -194,7 +183,7 @@ static int read_full(int fd, uint8_t *buf, int size)
                 || err == WSAEWOULDBLOCK
 #endif
                 )
-                return got == 0 ? AVERROR(EAGAIN) : AVERROR(EIO);
+                return AVERROR(ETIMEDOUT);
             return AVERROR(err);
         }
         if (r == 0)
@@ -205,20 +194,23 @@ static int read_full(int fd, uint8_t *buf, int size)
 }
 
 /* Wait for the socket to become readable (ms timeout). */
-static int wait_readable(int fd, int timeout_ms)
+static int wait_io(int fd, int writing, int timeout_ms)
 {
 #if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
-    fd_set readfds;
+    fd_set readfds, writefds;
     struct timeval tv;
     FD_ZERO(&readfds);
     FD_SET(fd, &readfds);
+    FD_ZERO(&writefds);
+    if (writing)
+        FD_SET(fd, &writefds);
     tv.tv_sec = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
-    return select(fd + 1, &readfds, NULL, NULL, &tv);
+    return select(fd + 1, &readfds, &writefds, NULL, &tv);
 #else
     struct pollfd pfd;
     pfd.fd = fd;
-    pfd.events = POLLIN;
+    pfd.events = POLLIN | (writing ? POLLOUT : 0);
     pfd.revents = 0;
     return poll(&pfd, 1, timeout_ms);
 #endif
@@ -259,9 +251,10 @@ static int connect_hostport(AVCodecContext *avctx, const char *hostport,
             last_err = sock_err ? sock_err : EIO;
             continue;
         }
-        set_socket_timeout(fd, timeout_ms);
+        int ret = vtremote_set_socket_timeout(fd, timeout_ms);
         configure_socket_buffers(fd);
-        int ret = vtremote_connect_or_finish(fd, rp->ai_addr, rp->ai_addrlen, timeout_ms);
+        if (ret >= 0)
+            ret = vtremote_connect_or_finish(fd, rp->ai_addr, rp->ai_addrlen, timeout_ms);
         if (ret == 0)
             break;
         last_err = AVUNERROR(ret);
@@ -906,6 +899,31 @@ int ff_vtremote_dec_init(AVCodecContext *avctx)
     return ret;
 }
 
+void ff_vtremote_dec_flush(AVCodecContext *avctx)
+{
+    VTRemoteDecContext *s = avctx->priv_data;
+    /* Wire FLUSH is terminal. Discard both remote codec state and unread bytes
+     * by reconnecting lazily when the caller resumes after an API reset. */
+    if (s->fd >= 0)
+        VTR_CLOSE_SOCKET(s->fd);
+    s->fd = -1;
+    s->connected = 0;
+    s->flushing = 0;
+    s->done = 0;
+    s->failed = 0;
+    s->nonblocking = 0;
+    s->pong_pending = 0;
+    s->tx_type = 0;
+    s->tx_offset = 0;
+    s->rx_header_len = 0;
+    s->rx_body_len = 0;
+    s->rx_buf_len = 0;
+    s->packets_sent = 0;
+    s->frames_recv = 0;
+    s->last_frame_pts = AV_NOPTS_VALUE;
+    vtremote_wbuf_reset(&s->pkt_buf);
+}
+
 int ff_vtremote_dec_close(AVCodecContext *avctx)
 {
     VTRemoteDecContext *s = avctx->priv_data;
@@ -1315,172 +1333,248 @@ static int fill_frame_from_compressed_view(AVCodecContext *avctx, VTRemoteDecCon
     return 0;
 }
 
-int ff_vtremote_decode(AVCodecContext *avctx, AVFrame *frame, int *got_frame, AVPacket *pkt)
+/* One owned input packet and one partial output message suffice: when a
+ * socket write stalls, keep reading the opposite direction. Returning a frame
+ * preserves any unfinished write for the next receive_frame call. */
+static int socket_progress(int fd, uint8_t *data, int size, int *offset, int writing)
+{
+    while (*offset < size) {
+        int n = writing ? (int)send(fd, data + *offset, size - *offset, vtremote_send_flags(0))
+                        : (int)recv(fd, data + *offset, size - *offset, 0);
+        if (n > 0) {
+            *offset += n;
+            continue;
+        }
+        if (!n)
+            return AVERROR_EOF;
+        int error = vtremote_sock_errno();
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+        if (error == WSAEINTR)
+            continue;
+        if (error == WSAEWOULDBLOCK)
+            return AVERROR(EAGAIN);
+#else
+        if (error == EINTR)
+            continue;
+        if (error == EAGAIN || error == EWOULDBLOCK)
+            return AVERROR(EAGAIN);
+#endif
+        return AVERROR(error);
+    }
+    return 0;
+}
+
+static int queue_message(VTRemoteDecContext *s, int type)
+{
+    VTRemoteMsgHeader header = { VTREMOTE_PROTO_MAGIC, VTREMOTE_PROTO_VERSION,
+                                type, s->pkt_buf.size };
+    int ret = vtremote_write_header(s->tx_header, sizeof(s->tx_header), &header);
+    if (ret < 0)
+        return ret;
+    s->tx_type = type;
+    s->tx_offset = 0;
+    return 0;
+}
+
+static int queue_decode_input(AVCodecContext *avctx)
 {
     VTRemoteDecContext *s = avctx->priv_data;
+    AVPacket packet = {0};
+    int ret;
+    if (s->tx_type)
+        return 0;
+    vtremote_wbuf_reset(&s->pkt_buf);
+    if (s->pong_pending) {
+        s->pong_pending = 0;
+        return queue_message(s, VTREMOTE_MSG_PONG);
+    }
+    if (s->flushing)
+        return 0;
+    ret = ff_decode_get_packet(avctx, &packet);
+    if (ret == AVERROR_EOF) {
+        s->flushing = 1;
+        return queue_message(s, VTREMOTE_MSG_FLUSH);
+    }
+    if (ret < 0)
+        return ret;
+    VTRemoteSideData side_data[16];
+    int count = 0;
+    if (packet.side_data_elems) {
+        if (s->server_caps & VTREMOTE_CAP_SIDE_DATA_V2) {
+            count = packet_side_data_from_avpacket(avctx, &packet, side_data,
+                                                   FF_ARRAY_ELEMS(side_data));
+        } else if (!s->warned_packet_side_data_no_cap) {
+            av_log(avctx, AV_LOG_WARNING,
+                   "Remote server does not advertise side_data.v2; dropping packet side data\n");
+            s->warned_packet_side_data_no_cap = 1;
+        }
+    }
+    ret = vtremote_payload_packet_ex(&s->pkt_buf, packet.pts, packet.dts,
+                                      FFMAX(packet.duration, 0),
+                                      !!(packet.flags & AV_PKT_FLAG_KEY),
+                                      packet.data, packet.size, side_data, count);
+    av_packet_unref(&packet);
+    return ret < 0 ? ret : queue_message(s, VTREMOTE_MSG_PACKET);
+}
+
+static int pump_decode_input(VTRemoteDecContext *s)
+{
+    int ret;
+    if (!s->tx_type)
+        return 0;
+    if (s->tx_offset < VTREMOTE_HEADER_SIZE) {
+        ret = socket_progress(s->fd, s->tx_header, VTREMOTE_HEADER_SIZE,
+                              &s->tx_offset, 1);
+        if (ret < 0)
+            return ret;
+    }
+    int offset = s->tx_offset - VTREMOTE_HEADER_SIZE;
+    ret = socket_progress(s->fd, s->pkt_buf.data, s->pkt_buf.size, &offset, 1);
+    s->tx_offset = VTREMOTE_HEADER_SIZE + offset;
+    if (ret < 0)
+        return ret;
+    s->bytes_sent += s->tx_offset;
+    if (s->tx_type == VTREMOTE_MSG_PACKET)
+        s->packets_sent++;
+    s->tx_type = 0;
+    return 0;
+}
+
+static int receive_decode_message(VTRemoteDecContext *s, VTRemoteMsgHeader *header)
+{
+    int ret = socket_progress(s->fd, s->rx_header, VTREMOTE_HEADER_SIZE,
+                              &s->rx_header_len, 0);
+    if (ret < 0)
+        return ret;
+    ret = vtremote_read_header(s->rx_header, VTREMOTE_HEADER_SIZE, header);
+    if (ret < 0)
+        return ret;
+    ret = vtremote_validate_payload_length(header->type, header->length);
+    if (ret < 0)
+        return ret;
+    if ((int)header->length > s->rx_buf_cap) {
+        uint8_t *buffer = av_realloc(s->rx_buf, header->length);
+        if (!buffer)
+            return AVERROR(ENOMEM);
+        s->rx_buf = buffer;
+        s->rx_buf_cap = header->length;
+    }
+    ret = socket_progress(s->fd, s->rx_buf, header->length, &s->rx_body_len, 0);
+    if (ret < 0)
+        return ret;
+    s->rx_buf_len = header->length;
+    s->rx_header_len = s->rx_body_len = 0;
+    s->bytes_recv += VTREMOTE_HEADER_SIZE + header->length;
+    return 0;
+}
+
+int ff_vtremote_receive_frame(AVCodecContext *avctx, AVFrame *frame)
+{
+    VTRemoteDecContext *s = avctx->priv_data;
+    int ret;
+    int64_t deadline = av_gettime_relative() + (int64_t)s->timeout_ms * 1000;
+    if (s->failed)
+        return AVERROR(EIO);
     if (s->done)
         return AVERROR_EOF;
-
-    if (pkt && pkt->size > 0) {
-        VTRemoteWBuf *payload = &s->pkt_buf;
-        vtremote_wbuf_reset(payload);
-        /* Preserve timestamp semantics, including AV_NOPTS_VALUE. */
-        int64_t pts = pkt->pts;
-        int64_t dts = pkt->dts;
-        int64_t dur = pkt->duration > 0 ? pkt->duration : 0;
-        VTRemoteSideData side_data[16];
-        int side_data_count = 0;
-        if (pkt->side_data_elems > 0) {
-            if (s->server_caps & VTREMOTE_CAP_SIDE_DATA_V2) {
-                side_data_count = packet_side_data_from_avpacket(
-                    avctx, pkt, side_data, FF_ARRAY_ELEMS(side_data));
-            } else if (!s->warned_packet_side_data_no_cap) {
-                av_log(avctx, AV_LOG_WARNING,
-                       "Remote server does not advertise side_data.v2; dropping packet side data\n");
-                s->warned_packet_side_data_no_cap = 1;
-            }
-        }
-        int ret = vtremote_payload_packet_ex(payload,
-                                             pts, dts, dur,
-                                             (pkt->flags & AV_PKT_FLAG_KEY) ? 1 : 0,
-                                             pkt->data, pkt->size,
-                                             side_data,
-                                             (uint8_t)side_data_count);
+    if (!s->connected) {
+        ret = vtremote_handshake(avctx);
         if (ret < 0)
-            return ret;
-        ret = vtremote_send_msg(s, VTREMOTE_MSG_PACKET, payload);
-        if (ret < 0)
-            return ret;
-        s->packets_sent++;
-    } else if (!s->flushing) {
-        s->flushing = 1;
-        VTRemoteWBuf empty = {0};
-        int ret = vtremote_send_msg(s, VTREMOTE_MSG_FLUSH, &empty);
-        if (ret < 0)
-            return ret;
+            goto fail;
     }
-
-    if (s->decode_async) {
-        for (;;) {
-            VTRemoteMsgHeader hdr;
-            uint8_t *payload = NULL;
-            int ret;
-            if (s->flushing) {
-                /* During flush, block until we receive a frame or DONE. */
-                ret = vtremote_read_msg(s, &hdr, &payload);
-            } else {
-                int64_t backlog = s->packets_sent - s->frames_recv;
-                int depth = s->decode_reorder_depth >= 0 ? s->decode_reorder_depth : 8;
-                int limit = FFMAX(2, depth + 2);
-                int timeout_ms = backlog > limit ? 2 : 0;
-                int ready = wait_readable(s->fd, timeout_ms);
-                if (ready <= 0) {
-                    if (got_frame)
-                        *got_frame = 0;
-                    return 0;
-                }
-                ret = vtremote_read_msg(s, &hdr, &payload);
-            }
-            if (ret == AVERROR(EAGAIN)) {
-                if (got_frame)
-                    *got_frame = 0;
+    if (!s->nonblocking) {
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+        u_long enabled = 1;
+        ret = ioctlsocket(s->fd, FIONBIO, &enabled);
+#else
+        int flags = fcntl(s->fd, F_GETFL, 0);
+        ret = flags < 0 ? -1 : fcntl(s->fd, F_SETFL, flags | O_NONBLOCK);
+#endif
+        if (ret < 0) {
+            ret = AVERROR(vtremote_sock_errno());
+            goto fail;
+        }
+        s->nonblocking = 1;
+    }
+    for (;;) {
+        int needs_input;
+        VTRemoteMsgHeader header;
+        ret = queue_decode_input(avctx);
+        needs_input = ret == AVERROR(EAGAIN);
+        if (ret < 0 && !needs_input)
+            goto fail;
+        ret = pump_decode_input(s);
+        if (ret < 0 && ret != AVERROR(EAGAIN))
+            goto fail;
+        ret = receive_decode_message(s, &header);
+        if (ret >= 0) {
+            switch (header.type) {
+            case VTREMOTE_MSG_FRAME: {
+                VTRemoteFrameView view;
+                ret = vtremote_parse_frame(s->rx_buf, header.length, &view);
+                if (ret >= 0)
+                    ret = s->wire_compression ? fill_frame_from_compressed_view(avctx, s, frame, &view)
+                                             : fill_frame_from_view(avctx, frame, &view);
+                if (ret < 0)
+                    goto fail;
+                if (s->decode_async)
+                    enforce_monotonic_pts(s, frame);
+                s->frames_recv++;
                 return 0;
             }
-            if (ret < 0)
-                return ret;
-
-            switch (hdr.type) {
-            case VTREMOTE_MSG_FRAME:
-            {
-                VTRemoteFrameView view;
-                ret = vtremote_parse_frame(payload, hdr.length, &view);
-                if (ret < 0) {
-                    return ret;
-                }
-                if (s->wire_compression == 1 || s->wire_compression == 2) {
-                    ret = fill_frame_from_compressed_view(avctx, s, frame, &view);
-                } else {
-                    ret = fill_frame_from_view(avctx, frame, &view);
-                }
-            if (ret < 0)
-                return ret;
-            if (s->decode_async)
-                enforce_monotonic_pts(s, frame);
-            s->frames_recv++;
-            if (got_frame)
-                *got_frame = 1;
-            return 0;
-            }
             case VTREMOTE_MSG_DONE:
+                if (!s->flushing || s->tx_type || header.length) {
+                    ret = AVERROR_INVALIDDATA;
+                    goto fail;
+                }
                 s->done = 1;
                 return AVERROR_EOF;
-            case VTREMOTE_MSG_PING:
-            {
-                VTRemoteWBuf empty = {0};
-                vtremote_send_msg(s, VTREMOTE_MSG_PONG, &empty);
-                break;
-            }
             case VTREMOTE_MSG_ERROR:
-            {
-                vtremote_log_error_msg(avctx, payload, hdr.length);
-                return AVERROR(EIO);
-            }
-            default:
+                vtremote_log_error_msg(avctx, s->rx_buf, header.length);
+                ret = AVERROR(EIO);
+                goto fail;
+            case VTREMOTE_MSG_PING:
+                s->pong_pending = 1;
                 break;
             }
+            continue;
+        }
+        if (ret != AVERROR(EAGAIN))
+            goto fail;
+        if (needs_input && !s->tx_type && !s->rx_header_len)
+            return AVERROR(EAGAIN);
+        /* A finished write can free room for the next buffered input packet. */
+        if (!s->tx_type && !needs_input && !s->flushing)
+            continue;
+        int remaining = vtremote_remaining_timeout_ms(deadline);
+        if (!remaining) {
+            ret = AVERROR(ETIMEDOUT);
+            goto fail;
+        }
+        ret = wait_io(s->fd, s->tx_type != 0, remaining);
+        if (ret < 0) {
+            int error = vtremote_sock_errno();
+            if (error == EINTR
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+                || error == WSAEINTR
+#endif
+                )
+                continue;
+            ret = AVERROR(error);
+            goto fail;
+        }
+        if (!ret) {
+            ret = AVERROR(ETIMEDOUT);
+            goto fail;
         }
     }
-
-    for (;;) {
-        VTRemoteMsgHeader hdr;
-        uint8_t *payload = NULL;
-        int ret = vtremote_read_msg(s, &hdr, &payload);
-        if (ret == AVERROR(EAGAIN)) {
-            if (got_frame)
-                *got_frame = 0;
-            return 0;
-        }
-        if (ret < 0)
-            return ret;
-
-        switch (hdr.type) {
-        case VTREMOTE_MSG_FRAME:
-        {
-            VTRemoteFrameView view;
-            ret = vtremote_parse_frame(payload, hdr.length, &view);
-            if (ret < 0) {
-                return ret;
-            }
-            if (s->wire_compression == 1 || s->wire_compression == 2) {
-                ret = fill_frame_from_compressed_view(avctx, s, frame, &view);
-            } else {
-                ret = fill_frame_from_view(avctx, frame, &view);
-            }
-            if (ret < 0)
-                return ret;
-            if (s->decode_async)
-                enforce_monotonic_pts(s, frame);
-            s->frames_recv++;
-            if (got_frame)
-                *got_frame = 1;
-            return 0;
-        }
-        case VTREMOTE_MSG_DONE:
-            s->done = 1;
-            return AVERROR_EOF;
-        case VTREMOTE_MSG_PING:
-        {
-            VTRemoteWBuf empty = {0};
-            vtremote_send_msg(s, VTREMOTE_MSG_PONG, &empty);
-            break;
-        }
-        case VTREMOTE_MSG_ERROR:
-        {
-            vtremote_log_error_msg(avctx, payload, hdr.length);
-            return AVERROR(EIO);
-        }
-        default:
-            break;
-        }
-    }
+fail:
+    av_log(avctx, AV_LOG_ERROR, "Remote decoder failed before DONE: %s\n", av_err2str(ret));
+    av_frame_unref(frame);
+    s->failed = 1;
+    if (s->fd >= 0)
+        VTR_CLOSE_SOCKET(s->fd);
+    s->fd = -1;
+    s->connected = 0;
+    return ret == AVERROR_EOF ? AVERROR(EIO) : ret;
 }

@@ -22,6 +22,10 @@ typedef struct VTRemoteEncContext {
     int inflight_blocked;
     int inflight_idle_intervals;
     int64_t inflight_last_adjust_us;
+    int64_t inflight_last_packets;
+    int inflight_probe_from;
+    double inflight_probe_rate;
+    double inflight_plateau_rate;
     int log_level;
     int wire_compression;
     int zstd_level;

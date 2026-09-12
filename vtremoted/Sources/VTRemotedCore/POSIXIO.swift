@@ -1,184 +1,128 @@
 import Foundation
 
+/// One monotonic deadline for an entire message, including partial transfers.
+public struct SocketDeadline: Sendable {
+    let nanoseconds: UInt64
+
+    public init(seconds: TimeInterval) {
+        let duration = min(max(0, seconds), Double(Int32.max) / 1000)
+        nanoseconds = DispatchTime.now().uptimeNanoseconds + UInt64(duration * 1_000_000_000)
+    }
+
+    func check() throws {
+        if DispatchTime.now().uptimeNanoseconds >= nanoseconds {
+            throw VTRemotedError.ioError(code: ETIMEDOUT, message: "socket deadline exceeded")
+        }
+    }
+}
+
 public enum POSIXIO {
-    private static func readExactLoop(count: Int, reader: (Int) -> Int) throws {
-        var got = 0
-        while got < count {
-            let bytesRead = reader(got)
-            if bytesRead < 0 {
-                let code = errno
-                if code == EINTR { continue }
-                throw VTRemotedError.ioError(code: code, message: String(cString: strerror(code)))
-            }
-            if bytesRead == 0 {
-                throw VTRemotedError.ioError(code: 0, message: "unexpected EOF")
-            }
-            got += bytesRead
-        }
-    }
-
-    private static func writeExactLoop(count: Int, writer: (Int) -> Int) throws {
-        var writtenTotal = 0
-        while writtenTotal < count {
-            let bytesWritten = writer(writtenTotal)
-            if bytesWritten < 0 {
-                let code = errno
-                if code == EINTR { continue }
-                throw VTRemotedError.ioError(code: code, message: String(cString: strerror(code)))
-            }
-            if bytesWritten == 0 {
-                throw VTRemotedError.ioError(code: 0, message: "write returned 0")
-            }
-            writtenTotal += bytesWritten
-        }
-    }
-
-    public static func readExact(fd fileDescriptor: Int32, into buffer: inout Data, count: Int) throws {
-        guard count >= 0 else {
-            throw VTRemotedError.protocolViolation("negative read length")
-        }
-        if buffer.count != count {
-            buffer.count = count
-        }
-
-        try buffer.withUnsafeMutableBytes { ptr in
-            if let base = ptr.baseAddress {
-                try readExactLoop(count: count) { got in
-                    read(fileDescriptor, base.advanced(by: got), count - got)
+    private static func wait(fd: Int32, events: Int16, deadline: SocketDeadline) throws {
+        var descriptor = pollfd(fd: fd, events: events, revents: 0)
+        while true {
+            try deadline.check()
+            let now = DispatchTime.now().uptimeNanoseconds
+            let remaining = deadline.nanoseconds > now ? deadline.nanoseconds - now : 0
+            let milliseconds = Int32(min(UInt64(Int32.max), (remaining + 999_999) / 1_000_000))
+            let result = poll(&descriptor, 1, milliseconds)
+            if result > 0 {
+                if descriptor.revents & Int16(POLLNVAL) != 0 {
+                    throw VTRemotedError.ioError(code: EBADF, message: "invalid socket")
                 }
-            } else {
-                try readExactLoop(count: count) { _ in
-                    Int(-1)
-                }
+                return // recv/send reports EOF or the specific socket error.
             }
+            if result == 0 { continue }
+            if errno == EINTR { continue }
+            throw VTRemotedError.ioError(code: errno, message: String(cString: strerror(errno)))
         }
     }
 
-    public static func readExact(fd fileDescriptor: Int32, into buffer: UnsafeMutableRawPointer, count: Int) throws {
-        guard count >= 0 else {
-            throw VTRemotedError.protocolViolation("negative read length")
-        }
+    public static func readExact(fd: Int32, into buffer: inout Data, count: Int,
+                                 deadline: SocketDeadline) throws {
+        guard count >= 0 else { throw VTRemotedError.protocolViolation("negative read length") }
+        buffer.count = count
         if count == 0 { return }
-
-        try readExactLoop(count: count) { got in
-            read(fileDescriptor, buffer.advanced(by: got), count - got)
+        try buffer.withUnsafeMutableBytes { bytes in
+            try readExact(fd: fd, into: bytes.baseAddress!, count: count, deadline: deadline)
         }
     }
 
-    public static func readExact(fd fileDescriptor: Int32, byteCount: Int) throws -> Data {
-        var data = Data(count: byteCount)
-        try readExact(fd: fileDescriptor, into: &data, count: byteCount)
-        return data
+    public static func readExact(fd: Int32, into buffer: UnsafeMutableRawPointer, count: Int,
+                                 deadline: SocketDeadline) throws {
+        guard count >= 0 else { throw VTRemotedError.protocolViolation("negative read length") }
+        var offset = 0
+        while offset < count {
+            try deadline.check()
+            let result = recv(fd, buffer.advanced(by: offset), count - offset, Int32(MSG_DONTWAIT))
+            if result > 0 { offset += result; continue }
+            if result == 0 { throw VTRemotedError.ioError(code: 0, message: "unexpected EOF") }
+            let code = errno
+            if code == EINTR { continue }
+            if code == EAGAIN || code == EWOULDBLOCK {
+                try wait(fd: fd, events: Int16(POLLIN), deadline: deadline)
+                continue
+            }
+            throw VTRemotedError.ioError(code: code, message: String(cString: strerror(code)))
+        }
     }
 
-    public static func writev(fd fileDescriptor: Int32, parts: [Data]) throws {
-        guard !parts.isEmpty else { return }
-
-        // Bind all `Data` buffers to stable pointers for the duration of the write loop.
+    public static func writev(fd: Int32, parts: [Data], deadline: SocketDeadline) throws {
         var pointers: [UnsafeRawBufferPointer] = []
-        pointers.reserveCapacity(parts.count)
-
-        func withPointers<T>(_ idx: Int, _ body: ([UnsafeRawBufferPointer]) throws -> T) rethrows -> T {
-            if idx == parts.count {
-                return try body(pointers)
-            }
-            return try parts[idx].withUnsafeBytes { ptr in
-                pointers.append(ptr)
+        func withPointers(_ index: Int, _ body: () throws -> Void) rethrows {
+            if index == parts.count { return try body() }
+            try parts[index].withUnsafeBytes { bytes in
+                pointers.append(bytes)
                 defer { pointers.removeLast() }
-                return try withPointers(idx + 1, body)
+                try withPointers(index + 1, body)
             }
         }
-
-        try withPointers(0) { buffers in
-            var iovecs: [iovec] = buffers.map { buffer in
-                iovec(
-                    iov_base: UnsafeMutableRawPointer(mutating: buffer.baseAddress),
-                    iov_len: buffer.count
-                )
+        try withPointers(0) {
+            var vectors = pointers.filter { !$0.isEmpty }.map {
+                iovec(iov_base: UnsafeMutableRawPointer(mutating: $0.baseAddress), iov_len: $0.count)
             }
-
-            let totalExpected = iovecs.reduce(0) { $0 + $1.iov_len }
-            if totalExpected == 0 { return }
-
-            var totalWritten = 0
-            var iovIndex = 0
-            while totalWritten < totalExpected {
-                let written = iovecs.withUnsafeMutableBufferPointer { ptr -> Int in
-                    guard let base = ptr.baseAddress else { return -1 }
-                    return Darwin.writev(fileDescriptor, base.advanced(by: iovIndex), Int32(ptr.count - iovIndex))
+            var index = 0
+            var batch: [iovec] = []
+            batch.reserveCapacity(min(vectors.count, Int(IOV_MAX)))
+            while index < vectors.count {
+                try deadline.check()
+                // Darwin can reject a whole uncompressed 4K frame with ENOBUFS
+                // even on a writable TCP socket. Bound each kernel allocation.
+                var budget = 1024 * 1024
+                batch.removeAll(keepingCapacity: true)
+                for vector in vectors[index...] {
+                    let length = min(vector.iov_len, budget)
+                    batch.append(iovec(iov_base: vector.iov_base, iov_len: length))
+                    budget -= length
+                    if budget == 0 || batch.count == Int(IOV_MAX) { break }
                 }
-
-                if written < 0 {
+                let result = batch.withUnsafeMutableBufferPointer { buffer -> Int in
+                    var message = msghdr()
+                    message.msg_iov = buffer.baseAddress!
+                    message.msg_iovlen = Int32(buffer.count)
+                    return sendmsg(fd, &message, Int32(MSG_DONTWAIT | MSG_NOSIGNAL))
+                }
+                if result < 0 {
                     let code = errno
                     if code == EINTR { continue }
+                    if code == EAGAIN || code == EWOULDBLOCK || code == ENOBUFS {
+                        try wait(fd: fd, events: Int16(POLLOUT), deadline: deadline)
+                        continue
+                    }
                     throw VTRemotedError.ioError(code: code, message: String(cString: strerror(code)))
                 }
-                if written == 0 {
-                    throw VTRemotedError.ioError(code: 0, message: "writev returned 0")
-                }
-
-                totalWritten += written
-                if totalWritten == totalExpected { return }
-
-                // Adjust iovecs for partial write without O(n) removeFirst().
-                var remaining = written
-                while remaining > 0, iovIndex < iovecs.count {
-                    if iovecs[iovIndex].iov_len <= remaining {
-                        remaining -= iovecs[iovIndex].iov_len
-                        iovIndex += 1
+                if result == 0 { throw VTRemotedError.ioError(code: EPIPE, message: "send returned 0") }
+                var remaining = result
+                while remaining > 0 {
+                    if remaining >= vectors[index].iov_len {
+                        remaining -= vectors[index].iov_len
+                        index += 1
                     } else {
-                        iovecs[iovIndex].iov_base = iovecs[iovIndex].iov_base.advanced(by: remaining)
-                        iovecs[iovIndex].iov_len -= remaining
+                        vectors[index].iov_base = vectors[index].iov_base.advanced(by: remaining)
+                        vectors[index].iov_len -= remaining
                         remaining = 0
                     }
                 }
             }
-        }
-    }
-
-    // Legacy helper for header+body calling the new vectorized version
-    public static func writev(fd fileDescriptor: Int32, header: Data, body: Data) throws {
-        try writev(fd: fileDescriptor, parts: [header, body])
-    }
-
-    public static func writeAll(fd fileDescriptor: Int32, data: Data) throws {
-        try data.withUnsafeBytes { raw in
-            guard let base = raw.baseAddress else { return }
-            try writeExactLoop(count: data.count) { offset in
-                write(fileDescriptor, base.advanced(by: offset), data.count - offset)
-            }
-        }
-    }
-
-    public static func pollReadable(fd fileDescriptor: Int32, timeoutSeconds: Int) throws {
-        var pollFd = pollfd(fd: fileDescriptor, events: Int16(POLLIN), revents: 0)
-        let clampedSeconds = max(0, min(timeoutSeconds, Int(Int32.max / 1000)))
-        let timeoutMilliseconds = clampedSeconds * 1000
-        let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(timeoutMilliseconds) * 1_000_000
-        while true {
-            let now = DispatchTime.now().uptimeNanoseconds
-            let remainingMilliseconds: Int32
-            if now >= deadline {
-                remainingMilliseconds = 0
-            } else {
-                let remainingNanoseconds = deadline - now
-                let roundedMilliseconds = (remainingNanoseconds + 999_999) / 1_000_000
-                remainingMilliseconds = Int32(min(roundedMilliseconds, UInt64(Int32.max)))
-            }
-
-            let result = withUnsafeMutablePointer(to: &pollFd) { ptr in
-                poll(ptr, 1, remainingMilliseconds)
-            }
-            if result > 0 {
-                return
-            }
-            if result == 0 {
-                throw VTRemotedError.ioError(code: 0, message: "poll timed out")
-            }
-
-            let code = errno
-            if code == EINTR { continue }
-            throw VTRemotedError.ioError(code: code, message: String(cString: strerror(code)))
         }
     }
 }

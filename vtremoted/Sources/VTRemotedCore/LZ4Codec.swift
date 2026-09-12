@@ -174,6 +174,18 @@ public enum LZ4Codec {
         return out
     }
 
+    static func compress(_ source: UnsafeRawBufferPointer, pool: RawBufferPool) -> Data? {
+        guard source.count > 0, source.count <= Int(Int32.max), let base = source.baseAddress else { return nil }
+        let api = requireAPI("compress")
+        let bound = api.compressBound(Int32(source.count))
+        guard bound > 0 else { return nil }
+        return pool.data(capacity: Int(bound)) { destination in
+            let count = api.compressDefault(base.assumingMemoryBound(to: Int8.self),
+                destination.baseAddress!.assumingMemoryBound(to: Int8.self), Int32(source.count), bound)
+            return count > 0 ? Int(count) : nil
+        }
+    }
+
     public static func compress(_ src: UnsafeRawPointer, count: Int) -> Data? {
         guard count > 0 else { return Data() }
         let api = requireAPI("compress")
