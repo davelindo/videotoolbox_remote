@@ -95,6 +95,14 @@ The release bundle includes `libvtremote_client.a`, public headers, and
 `vtremote-client.pc`. This client API is experimental and can change between
 repository releases; the wire protocol remains the published v1 contract.
 
+In v0.9.0, rebuild SDK consumers against the matching headers and static library
+because `VTRClient` has changed size. The new `vtr_client_send_frame` and
+`vtr_client_receive_packet` calls permit up to 16 frames in flight. Calls on a
+client must be serialized; a full submission queue returns `-EAGAIN` until
+output is received. `vtr_client_receive_packet_timeout` preserves partial input
+when a bounded wait expires. Use `vtr_client_start_flush` and receive packets
+through DONE to drain outstanding work.
+
 See [Plex integration](docs/PLEX.md), including its unclaimed-server compressed
 packet smoke test, and
 [architecture](docs/ARCHITECTURE.md) for operational details.

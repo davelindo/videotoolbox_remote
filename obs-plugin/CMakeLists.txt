@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(obs-vtremoted VERSION 1.0.0)
+project(obs-vtremoted VERSION 2.0.0)
 
 # Sanity-check the protocol HELLO build string against this project version.
 # The header define is parsed here so a drift fails configuration immediately.

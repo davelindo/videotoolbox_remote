@@ -11,8 +11,13 @@ static int drain(AVCodecContext *decoder) {
     int ret;
     while ((ret = avcodec_receive_frame(decoder, frame)) >= 0) {
         assert(frame->pts == frames && frame->width == 64 && frame->height == 64);
-        assert(frame->data[0][0] == frames + 16);
-        assert(frame->data[1][0] == 128);
+        for (int plane = 0; plane < 2; ++plane) {
+            int height = plane == 0 ? 64 : 32;
+            int expected = plane == 0 ? frames + 16 : 128;
+            for (int y = 0; y < height; ++y)
+                for (int x = 0; x < 64; ++x)
+                    assert(frame->data[plane][y * frame->linesize[plane] + x] == expected);
+        }
         ++frames;
         av_frame_unref(frame);
     }
@@ -21,7 +26,7 @@ static int drain(AVCodecContext *decoder) {
 }
 
 int main(int argc, char **argv) {
-    assert(argc == 4); /* endpoint, avcC fixture, expected failure */
+    assert(argc == 5); /* endpoint, avcC fixture, expected failure, timeout ms */
     const AVCodec *codec = avcodec_find_decoder_by_name("h264_videotoolbox_remote");
     assert(codec);
     AVCodecContext *decoder = avcodec_alloc_context3(codec);
@@ -39,7 +44,9 @@ int main(int argc, char **argv) {
     fclose(fixture);
     assert(av_opt_set(decoder->priv_data, "vt_remote_host", argv[1], 0) == 0);
     assert(av_opt_set_int(decoder->priv_data, "vt_remote_wire_compression", 0, 0) == 0);
-    assert(av_opt_set_int(decoder->priv_data, "vt_remote_timeout_ms", 300, 0) == 0);
+    int timeout_ms = atoi(argv[4]);
+    assert(timeout_ms > 0);
+    assert(av_opt_set_int(decoder->priv_data, "vt_remote_timeout_ms", timeout_ms, 0) == 0);
     int ret = avcodec_open2(decoder, codec, NULL);
     assert(ret == 0);
     for (int index = 0; index < 3; ++index) {

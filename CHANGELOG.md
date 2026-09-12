@@ -7,6 +7,55 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
+## [v0.9.0] - 2026-09-12
+
+### Added
+
+- Added bounded frame submission and packet completion APIs to the experimental
+  C SDK, allowing up to 16 frames in flight. The VA-API driver now waits for
+  completed output when applications synchronize or map encoded buffers.
+- Added repeatable natural-video and concurrent-session benchmarks with
+  throughput, latency, resource use, wire volume, and output validation.
+
+### Fixed
+
+- Enforced complete-message daemon deadlines for partial input and blocked
+  output, releasing expired sessions and cancelling failed transport operations.
+- Propagated fatal codec and callback errors, and rejected incomplete FFmpeg
+  drains instead of treating interrupted output as successful completion.
+- Prevented FFmpeg decoder deadlocks by advancing packet uploads and decoded
+  frame downloads together. Decoder and transcode-filter flushes now discard
+  partial transport state and reconnect when their contexts are reused.
+- Applied Winsock timeouts in milliseconds and propagated timeout setup errors
+  consistently across the FFmpeg encoder, decoder, and transcode filter.
+- Synchronized daemon statistics, preserved latency FIFO order during buffer
+  growth, and counted output only after successful sends.
+- Reduced raw-decode memory retention through reusable staging buffers and
+  prompt release of emitted frames and completed output buffers. Limited each
+  vectored send batch to avoid oversized uncompressed transfers on macOS.
+- Registered separate OBS H.264 and HEVC encoders with matching codec signaling,
+  NV12/P010 negotiation, startup extradata, and explicit transport errors.
+- Reported the packaged daemon version in normal and busy handshakes.
+- Kept VA-API source archive versions aligned with release tags in container
+  builds and checked that the expected versioned archive was produced.
+
+### Changed
+
+- Automatic FFmpeg encoder depth control retains increases only when completed
+  packet throughput improves, and reduces depth during realtime operation.
+  Explicit fixed-depth control remains available.
+- Bumped the packaged daemon to 0.9.0 and the independently versioned OBS plugin
+  to 2.0.0.
+
+### Upgrade notes
+
+- Rebuild C SDK consumers against the matching headers and static library;
+  the public client state has changed size.
+- In OBS, select **VideoToolbox Remote HEVC** for HEVC output. Saved settings
+  that used the former **Video Codec** property must select this dedicated
+  encoder. The existing encoder ID now selects H.264 explicitly.
+- The wire protocol version and message layouts remain unchanged.
+
 ## [v0.8.6] - 2026-09-10
 
 ### Changed

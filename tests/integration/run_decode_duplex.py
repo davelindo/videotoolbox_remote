@@ -10,6 +10,8 @@ from run_transport_regressions import ROOT, message, read_message, string
 
 
 def run(probe, fault):
+    # Large padded frames must tolerate shared-runner scheduling delays.
+    timeout_ms = 3000
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen()
@@ -18,7 +20,7 @@ def run(probe, fault):
 
         def serve():
             with listener.accept()[0] as peer:
-                peer.settimeout(5)
+                peer.settimeout(10)
                 peer.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
                 peer.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
                 assert read_message(peer)[0] == 1
@@ -45,7 +47,7 @@ def run(probe, fault):
                         return
                     if fault == "timeout":
                         peer.sendall(wire[:1])
-                        time.sleep(0.6)
+                        time.sleep(timeout_ms / 1000 + 0.5)
                         return
                     # The client has started its next large upload by this point.
                     time.sleep(0.02)
@@ -61,13 +63,14 @@ def run(probe, fault):
                     f"127.0.0.1:{port}",
                     str(ROOT / "tests/integration/mock_vtremoted/fixtures/h264_test_avcc.hex"),
                     str(int(fault != "none")),
+                    str(timeout_ms),
                 ],
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=20,
             )
+            assert result.returncode == 0, result.stderr + result.stdout
             future.result(timeout=5)
-        assert result.returncode == 0, result.stderr + result.stdout
         print(f"PASS decoder duplex fault={fault}")
 
 
