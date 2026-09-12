@@ -38,6 +38,8 @@ The non-version `nightly` tag is intentionally excluded.
 - Reported the packaged daemon version in normal and busy handshakes.
 - Kept VA-API source archive versions aligned with release tags in container
   builds and checked that the expected versioned archive was produced.
+- Linked SVT-AV1 into Linux client binaries so the archives do not require a
+  separately installed custom SVT-AV1 shared library.
 
 ### Changed
 

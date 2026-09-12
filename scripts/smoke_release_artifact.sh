@@ -57,6 +57,15 @@ case "$kind" in
       exit 1
     fi
 
+    if [[ "$(uname -s)" == Linux ]]; then
+      for executable in ffmpeg ffprobe ffplay; do
+        [[ -x "$tmpdir/$executable" ]] || continue
+        if readelf -d "$tmpdir/$executable" | grep -q 'Shared library: \[libSvtAv1Enc'; then
+          echo "$executable must not require a separate SVT-AV1 shared library" >&2
+          exit 1
+        fi
+      done
+    fi
     "$ffmpeg_bin" -hide_banner -version >/dev/null
     "$ffmpeg_bin" -hide_banner -filters >"$tmpdir/filters.txt"
     "$ffmpeg_bin" -hide_banner -encoders >"$tmpdir/encoders.txt"
