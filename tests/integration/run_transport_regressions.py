@@ -127,7 +127,11 @@ def daemon_deadlines(binary):
                 stalled.sendall(prefix)
             stalled.settimeout(2)
             started = time.monotonic()
-            assert stalled.recv(1) == b"", "stalled connection did not expire"
+            try:
+                assert stalled.recv(1) == b"", "stalled connection did not expire"
+            except ConnectionResetError:
+                # Closing while trickled bytes arrive can produce RST instead of FIN.
+                pass
             assert time.monotonic() - started < 1.8
             stop.set()
             if trickle:
