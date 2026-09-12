@@ -100,6 +100,9 @@ else
             tests/integration/run_obs_plugin_integration.sh|\
             tests/integration/obs_plugin_client_smoke.cpp|\
             tests/integration/obs_plugin_integration.cpp|\
+            tests/integration/obs_recording.cpp|\
+            tests/integration/api-regressions.mk|\
+            tests/integration/obs_pipeline_probe.cpp|\
             tests/integration/README.md)
                 mark_ffmpeg_changed
                 mark_obs_plugin_changed
@@ -108,10 +111,13 @@ else
                 mark_ffmpeg_changed
                 mark_obs_plugin_changed
                 ;;
-            tests/integration/mock_vtremoted/mock_vtremoted.py)
+            tests/integration/mock_vtremoted/mock_vtremoted.py|\
+            tests/integration/run_obs_pipeline.py|\
+            tests/integration/run_transport_regressions.py)
                 mark_ffmpeg_changed
                 mark_obs_plugin_changed
                 mark_vaapi_driver_changed
+                mark_vtremoted_changed
                 ;;
             tests/integration/*)
                 mark_ffmpeg_changed

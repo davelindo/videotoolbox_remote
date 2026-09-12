@@ -9,9 +9,11 @@ OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("obs-vtremoted", "en-US")
 
 extern struct obs_encoder_info vtremoted_encoder_info;
+extern struct obs_encoder_info vtremoted_hevc_encoder_info;
 
 bool obs_module_load(void) {
   obs_register_encoder(&vtremoted_encoder_info);
+  obs_register_encoder(&vtremoted_hevc_encoder_info);
   blog(LOG_INFO, "[vtremoted] Plugin loaded");
   return true;
 }

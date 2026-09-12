@@ -541,8 +541,9 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                     write_msg(conn, MSG_CONFIGURE_ACK,
                               make_configure_ack(pix_fmt, args.configure_extradata))
                     if args.reset_after_configure_ack:
+                        linger_format = "HH" if sys.platform == "win32" else "ii"
                         conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
-                                        struct.pack("ii", 1, 0))
+                                        struct.pack(linger_format, 1, 0))
                         return
                     continue
 
@@ -582,6 +583,18 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                     if args.stall_after == "frame":
                         time.sleep(args.stall_seconds)
                         return
+
+                    if args.frame_response != "normal":
+                        if args.frame_response == "error":
+                            write_msg(conn, MSG_ERROR, make_error(5, "injected frame failure"))
+                        elif args.frame_response == "reset":
+                            linger_format = "HH" if sys.platform == "win32" else "ii"
+                            conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
+                                            struct.pack(linger_format, 1, 0))
+                        return
+
+                    if args.packet_delay_ms:
+                        time.sleep(args.packet_delay_ms / 1000)
 
                     if args.packet_bytes > 0:
                         write_configured_filled_msg(conn, MSG_PACKET, args.packet_bytes, args)
@@ -781,6 +794,14 @@ def main() -> int:
         help="Reset the connection immediately after CONFIGURE_ACK",
     )
     parser.add_argument(
+        "--frame-response", choices=["normal", "error", "eof", "reset"],
+        default="normal", help="Inject a terminal response after reading FRAME",
+    )
+    parser.add_argument(
+        "--packet-delay-ms", type=int, default=0,
+        help="Delay each normal FRAME reply to exercise recoverable pending output",
+    )
+    parser.add_argument(
         "--configure-extradata-hex",
         default="",
         help="Hex-encoded extradata payload to send in CONFIGURE_ACK",
@@ -813,6 +834,8 @@ def main() -> int:
             raise ValueError("response-version must fit in uint16")
         if args.stall_seconds < 0:
             raise ValueError("stall-seconds must be non-negative")
+        if args.packet_delay_ms < 0:
+            raise ValueError("packet-delay-ms must be non-negative")
         OUTBOUND_VERSION = args.response_version
         args.capabilities = [cap for cap in args.capabilities.split(",") if cap]
         args.configure_extradata = validate_payload_size(

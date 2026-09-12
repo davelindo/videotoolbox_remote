@@ -138,17 +138,6 @@ typedef struct VTRemoteTranscodeContext {
     AVBSFContext *annexb_bsf;
 } VTRemoteTranscodeContext;
 
-static int set_socket_timeout(int fd, int timeout_ms) {
-    struct timeval tv;
-    tv.tv_sec = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
-    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, VTR_SOCKOPT_ARG &tv, sizeof(tv)) < 0)
-        return AVERROR(vtremote_sock_errno());
-    if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, VTR_SOCKOPT_ARG &tv, sizeof(tv)) < 0)
-        return AVERROR(vtremote_sock_errno());
-    return 0;
-}
-
 static void configure_socket_buffers(int fd) {
     vtremote_disable_sigpipe(fd);
 
@@ -169,7 +158,7 @@ static int write_full(int fd, const uint8_t *buf, int size) {
 #endif
             if (err == EINTR)
                 continue;
-            return AVERROR(err);
+            return vtremote_blocking_error(err);
         }
         if (r == 0)
             return AVERROR_EOF;
@@ -214,7 +203,7 @@ static int write_full_iov(int fd, const uint8_t *buf0, int size0,
             int err = vtremote_sock_errno();
             if (err == EINTR)
                 continue;
-            return AVERROR(err);
+            return vtremote_blocking_error(err);
         }
         if (r == 0)
             return AVERROR_EOF;
@@ -302,8 +291,9 @@ static int connect_hostport(AVBSFContext *ctx, const char *hostport,
             continue;
         }
         configure_socket_buffers(fd);
-        set_socket_timeout(fd, timeout_ms);
-        int ret = vtremote_connect_or_finish(fd, rp->ai_addr, rp->ai_addrlen, timeout_ms);
+        int ret = vtremote_set_socket_timeout(fd, timeout_ms);
+        if (ret >= 0)
+            ret = vtremote_connect_or_finish(fd, rp->ai_addr, rp->ai_addrlen, timeout_ms);
         if (ret == 0)
             break;
         last_err = AVUNERROR(ret);
@@ -715,7 +705,7 @@ static int vtremote_ensure_rx_capacity(VTRemoteTranscodeContext *s, uint32_t siz
 }
 
 static int vtremote_recv_some(VTRemoteTranscodeContext *s, uint8_t *dst, int size,
-                              int nonblock, int had_partial_read)
+                              int nonblock)
 {
     if (size <= 0)
         return 0;
@@ -748,7 +738,7 @@ static int vtremote_recv_some(VTRemoteTranscodeContext *s, uint8_t *dst, int siz
             ) {
                 if (nonblock)
                     return AVERROR(EAGAIN);
-                return had_partial_read ? AVERROR(EIO) : AVERROR(EAGAIN);
+                return AVERROR(ETIMEDOUT);
             }
             return AVERROR(err);
         }
@@ -770,8 +760,7 @@ static int vtremote_read_msg_internal(VTRemoteTranscodeContext *s, VTRemoteMsgHe
             ret = vtremote_recv_some(s,
                                      s->rx_header_buf + s->rx_header_read,
                                      VTREMOTE_HEADER_SIZE - s->rx_header_read,
-                                     nonblock,
-                                     s->rx_header_read > 0);
+                                     nonblock);
             if (ret < 0)
                 return ret;
             s->rx_header_read += ret;
@@ -808,8 +797,7 @@ static int vtremote_read_msg_internal(VTRemoteTranscodeContext *s, VTRemoteMsgHe
         ret = vtremote_recv_some(s,
                                  s->rx_buf + s->rx_payload_read,
                                  payload_len - s->rx_payload_read,
-                                 nonblock,
-                                 s->rx_payload_read > 0);
+                                 nonblock);
         if (ret < 0)
             return ret;
         s->rx_payload_read += ret;
@@ -1635,6 +1623,12 @@ static int vtremote_transcode_filter(AVBSFContext *ctx, AVPacket *pkt) {
     VTRemoteTranscodeContext *s = ctx->priv_data;
     int ret;
 
+    if (!s->connected) {
+        ret = vtremote_handshake(ctx);
+        if (ret < 0)
+            return ret;
+    }
+
     if (s->pkt_q_count > 0) {
         return pop_packet(s, pkt);
     }
@@ -1700,6 +1694,10 @@ static int vtremote_transcode_filter(AVBSFContext *ctx, AVPacket *pkt) {
 
 static void vtremote_transcode_flush(AVBSFContext *ctx) {
     VTRemoteTranscodeContext *s = ctx->priv_data;
+    if (s->fd >= 0)
+        VTR_CLOSE_SOCKET(s->fd);
+    s->fd = -1;
+    s->connected = 0;
     s->flushing = 0;
     s->done = 0;
     s->packets_sent = 0;

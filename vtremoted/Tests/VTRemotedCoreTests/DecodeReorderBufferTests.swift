@@ -2,6 +2,24 @@
 import XCTest
 
 final class DecodeReorderBufferTests: XCTestCase {
+    func testEmittedPayloadIsReleasedBeforeSlotCompaction() {
+        final class Payload { }
+        final class Witness { weak var value: Payload? }
+        let buffer = DecodeReorderBuffer<Payload>(depth: 2)
+        var first: Payload? = Payload()
+        let retained = Witness()
+        retained.value = first
+        _ = buffer.enqueue(ptsTicks: 0, durTicks: 1, payload: first!)
+        first = nil
+        XCTAssertNotNil(retained.value)
+        _ = buffer.enqueue(ptsTicks: 1, durTicks: 1, payload: Payload())
+        var output = buffer.enqueue(ptsTicks: 2, durTicks: 1, payload: Payload())
+        XCTAssertEqual(output.count, 1)
+        XCTAssertNotNil(retained.value)
+        output.removeAll()
+        XCTAssertNil(retained.value)
+    }
+
     func testReordersWithinDepth() {
         let buffer = DecodeReorderBuffer<Int>(depth: 2)
         var emitted: [Int64] = []

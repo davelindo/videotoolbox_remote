@@ -23,7 +23,7 @@ public struct Arguments: Equatable, Sendable {
 
     public init() {}
 
-    public static let version = "0.8.0"
+    public static let version = "0.9.0"
 
     /// Single source of truth for the packaged version, mirrored from the
     /// repository release tag (see CHANGELOG.md and docs/llms.txt).

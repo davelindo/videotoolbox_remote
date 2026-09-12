@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(obs-vtremoted VERSION 1.0.0)
+project(obs-vtremoted VERSION 2.0.0)
 
 # Sanity-check the protocol HELLO build string against this project version.
 # The header define is parsed here so a drift fails configuration immediately.
@@ -21,6 +21,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
 
 find_package(PkgConfig REQUIRED)
+find_package(Threads REQUIRED)
 
 # OBS paths - can be set via environment or cmake args
 # OBS_SOURCE_DIR: path to obs-studio source (contains libobs/)
@@ -82,6 +83,7 @@ set(PLUGIN_SOURCES
 
 # Create the plugin
 add_library(obs-vtremoted MODULE ${PLUGIN_SOURCES})
+target_link_libraries(obs-vtremoted PRIVATE Threads::Threads)
 
 target_include_directories(obs-vtremoted PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

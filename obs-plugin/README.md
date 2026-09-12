@@ -36,6 +36,15 @@ This compiles the plugin client and validates connect/configure/frame/packet flo
 
 ## Codec Selection
 
-The encoder exposes a **Video Codec** property (`h264` or `hevc`). The choice is
+Select **VideoToolbox Remote H.264** or **VideoToolbox Remote HEVC** from OBS's
+encoder list. H.264 uses NV12; HEVC supports NV12 and P010. The selected codec is
 negotiated in the protocol HELLO message and honored by `vtremoted` when the
 server advertises the matching capability (HEVC requires Apple Silicon).
+
+### Upgrading to plugin 2.0.0
+
+Plugin 2.0.0 is included in the v0.9.0 repository release. The former **Video
+Codec** property has been removed. If saved output settings selected HEVC
+through that property, choose **VideoToolbox Remote HEVC** after upgrading.
+The existing `vtremoted_encoder` ID now selects H.264 explicitly; HEVC uses
+`vtremoted_hevc_encoder`.

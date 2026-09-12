@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #define _POSIX_C_SOURCE 200809L
+#ifdef __APPLE__
+#define _DARWIN_C_SOURCE
+#endif
 #include "vtremote/client.h"
 
 #include <arpa/inet.h>
@@ -14,6 +17,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 #ifndef MSG_NOSIGNAL
@@ -355,16 +359,32 @@ static int write_all(int fd, const uint8_t *data, size_t size) {
     return 0;
 }
 
-static int read_all(int fd, uint8_t *data, size_t size) {
-    size_t offset = 0;
-    while (offset < size) {
-        ssize_t count = recv(fd, data + offset, size - offset, 0);
+static int64_t now_ms(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+
+static int read_progress(int fd, uint8_t *data, size_t size, size_t *offset, int64_t deadline) {
+    while (*offset < size) {
+        ssize_t count = recv(fd, data + *offset, size - *offset, MSG_DONTWAIT);
         if (count < 0) {
             if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                struct pollfd pfd = {fd, POLLIN, 0};
+                int64_t remaining = deadline - now_ms();
+                int ready;
+                if (remaining <= 0) return -EAGAIN;
+                ready = poll(&pfd, 1, (int)remaining);
+                if (!ready) return -EAGAIN;
+                if (ready < 0 && errno != EINTR) return -errno;
+                continue;
+            }
             return -errno;
         }
         if (count == 0) return -ECONNRESET;
-        offset += (size_t)count;
+        *offset += (size_t)count;
+        if (*offset < size && now_ms() >= deadline) return -EAGAIN;
     }
     return 0;
 }
@@ -387,15 +407,16 @@ static int send_message(VTRClient *client, uint16_t type,
     return 0;
 }
 
-static int receive_message(VTRClient *client, VTRMessage *message) {
-    uint8_t header[VTR_HEADER_SIZE];
+static int receive_message_until(VTRClient *client, VTRMessage *message, int64_t deadline) {
+    uint8_t *header;
     uint32_t magic;
     uint16_t version;
     uint32_t size;
     int rc;
     if (!client || !message || client->fd < 0) return -EINVAL;
+    header = client->rx_header;
     memset(message, 0, sizeof(*message));
-    if ((rc = read_all(client->fd, header, sizeof(header))) < 0) return rc;
+    if ((rc = read_progress(client->fd, header, VTR_HEADER_SIZE, &client->rx_header_read, deadline)) < 0) return rc;
     magic = read_be32(header);
     version = read_be16(header + 4);
     message->type = read_be16(header + 6);
@@ -404,10 +425,15 @@ static int receive_message(VTRClient *client, VTRMessage *message) {
     if (vtr_validate_message_size(message->type, size) < 0) return -EOVERFLOW;
     if (vtr_buffer_reserve(&client->rx, size) < 0) return -ENOMEM;
     client->rx.size = size;
-    if (size && (rc = read_all(client->fd, client->rx.data, size)) < 0) return rc;
+    if (size && (rc = read_progress(client->fd, client->rx.data, size, &client->rx_body_read, deadline)) < 0) return rc;
+    client->rx_header_read = client->rx_body_read = 0;
     message->payload = client->rx.data;
     message->payload_size = size;
     return 0;
+}
+
+static int receive_message(VTRClient *client, VTRMessage *message) {
+    return receive_message_until(client, message, now_ms() + client->timeout_ms);
 }
 
 typedef struct Reader {
@@ -714,45 +740,72 @@ fail:
     return rc;
 }
 
-int vtr_client_encode(VTRClient *client, const VTRFrame *frame,
-                      VTRBuffer *packet, int64_t *packet_pts,
-                      int64_t *packet_dts, uint32_t *packet_flags,
-                      char *error, size_t error_size) {
-    VTRMessage message;
-    VTRPacketView view;
+static int terminal_error(VTRClient *client, int error) {
+    if (client->fd >= 0) close(client->fd);
+    client->fd = -1;
+    client->connected = 0;
+    return error;
+}
+
+int vtr_client_send_frame(VTRClient *client, const VTRFrame *frame,
+                          char *error, size_t error_size) {
     int rc;
-    if (!client || !client->connected || !frame || !packet) return -EINVAL;
+    if (!client || !client->connected || !frame || client->flushing) return -EINVAL;
+    if (client->pending_count == 16) return -EAGAIN;
     if ((rc = vtr_build_frame(&client->tx, frame,
                               client->wire_compression)) < 0 ||
         (rc = send_message(client, VTR_MSG_FRAME, client->tx.data,
                            client->tx.size)) < 0) {
         set_error(error, error_size, "FRAME send failed: %s", strerror(-rc));
-        return rc;
+        return terminal_error(client, rc == -EAGAIN ? -ETIMEDOUT : rc);
     }
+    client->pending_pts[client->pending_count++] = frame->pts;
+    return 0;
+}
+
+int vtr_client_receive_packet_timeout(VTRClient *client, VTRBuffer *packet,
+                              int64_t *packet_pts, int64_t *packet_dts,
+                              uint32_t *packet_flags, char *error, size_t error_size, int timeout_ms) {
+    VTRMessage message;
+    VTRPacketView view;
+    unsigned pending;
+    int rc;
+    int64_t deadline = now_ms() + timeout_ms;
+    if (!client || !client->connected || !packet || timeout_ms < 0) return -EINVAL;
     for (;;) {
-        if ((rc = receive_message(client, &message)) < 0) {
+        if ((rc = receive_message_until(client, &message, deadline)) < 0) {
             set_error(error, error_size, "PACKET receive failed: %s", strerror(-rc));
-            return rc;
+            return rc == -EAGAIN ? rc : terminal_error(client, rc);
         }
         if (message.type == VTR_MSG_PING) {
             rc = send_message(client, VTR_MSG_PONG, message.payload, message.payload_size);
-            if (rc < 0) return rc;
+            if (rc < 0) return terminal_error(client, rc == -EAGAIN ? -ETIMEDOUT : rc);
             continue;
         }
         if (message.type == VTR_MSG_ERROR) {
             error_from_remote(&message, error, error_size);
-            return -EIO;
+            return terminal_error(client, -EIO);
+        }
+        if (message.type == VTR_MSG_DONE && client->flushing && !client->pending_count) {
+            client->connected = 0;
+            return 1;
         }
         if (message.type != VTR_MSG_PACKET) {
             set_error(error, error_size, "expected PACKET, received %s",
                       vtr_message_type_name(message.type));
-            return -EPROTO;
+            return terminal_error(client, -EPROTO);
         }
         break;
     }
     if ((rc = vtr_parse_packet(message.payload, message.payload_size, &view)) < 0) {
         set_error(error, error_size, "invalid PACKET payload");
-        return rc;
+        return terminal_error(client, rc);
+    }
+    for (pending = 0; pending < client->pending_count; ++pending)
+        if (client->pending_pts[pending] == view.pts) break;
+    if (pending == client->pending_count) {
+        set_error(error, error_size, "PACKET does not match an outstanding frame");
+        return terminal_error(client, -EPROTO);
     }
     vtr_buffer_reset(packet);
     if ((view.flags & 1U) != 0 && client->parameter_sets.size != 0) {
@@ -762,39 +815,58 @@ int vtr_client_encode(VTRClient *client, const VTRFrame *frame,
         if ((flags & required) != required &&
             (rc = vtr_put_bytes(packet, client->parameter_sets.data,
                                 client->parameter_sets.size)) < 0) {
-            return rc;
+            return terminal_error(client, rc);
         }
     }
-    if ((rc = vtr_put_bytes(packet, view.data, view.data_size)) < 0) return rc;
+    if ((rc = vtr_put_bytes(packet, view.data, view.data_size)) < 0) return terminal_error(client, rc);
     if (packet_pts) *packet_pts = view.pts;
     if (packet_dts) *packet_dts = view.dts;
     if (packet_flags) *packet_flags = view.flags;
+    --client->pending_count;
+    memmove(&client->pending_pts[pending], &client->pending_pts[pending + 1],
+            (client->pending_count - pending) * sizeof(client->pending_pts[0]));
+    return 0;
+}
+
+int vtr_client_receive_packet(VTRClient *client, VTRBuffer *packet,
+                              int64_t *packet_pts, int64_t *packet_dts,
+                              uint32_t *packet_flags, char *error, size_t error_size) {
+    return vtr_client_receive_packet_timeout(client, packet, packet_pts, packet_dts,
+        packet_flags, error, error_size, client ? client->timeout_ms : 0);
+}
+
+int vtr_client_encode(VTRClient *client, const VTRFrame *frame,
+                      VTRBuffer *packet, int64_t *packet_pts,
+                      int64_t *packet_dts, uint32_t *packet_flags,
+                      char *error, size_t error_size) {
+    int rc = vtr_client_send_frame(client, frame, error, error_size);
+    if (rc < 0) return rc;
+    return vtr_client_receive_packet(client, packet, packet_pts, packet_dts,
+                                     packet_flags, error, error_size);
+}
+
+int vtr_client_start_flush(VTRClient *client, char *error, size_t error_size) {
+    int rc;
+    if (!client || client->fd < 0 || client->flushing) return 0;
+    if ((rc = send_message(client, VTR_MSG_FLUSH, NULL, 0)) < 0) {
+        set_error(error, error_size, "FLUSH send failed: %s", strerror(-rc));
+        return terminal_error(client, rc == -EAGAIN ? -ETIMEDOUT : rc);
+    }
+    client->flushing = 1;
     return 0;
 }
 
 int vtr_client_flush(VTRClient *client, char *error, size_t error_size) {
-    VTRMessage message;
+    VTRBuffer packet;
     int rc;
-    if (!client || client->fd < 0) return 0;
-    if ((rc = send_message(client, VTR_MSG_FLUSH, NULL, 0)) < 0) {
-        set_error(error, error_size, "FLUSH send failed: %s", strerror(-rc));
-        return rc;
+    if (!client || client->fd < 0 || !client->connected) return 0;
+    if (client->pending_count) {
+        set_error(error, error_size, "receive pending packets before completing flush");
+        return -EBUSY;
     }
-    for (;;) {
-        if ((rc = receive_message(client, &message)) < 0) {
-            set_error(error, error_size, "FLUSH receive failed: %s", strerror(-rc));
-            return rc;
-        }
-        if (message.type == VTR_MSG_DONE) return 0;
-        if (message.type == VTR_MSG_PING) {
-            rc = send_message(client, VTR_MSG_PONG, message.payload, message.payload_size);
-            if (rc < 0) return rc;
-            continue;
-        }
-        if (message.type == VTR_MSG_PACKET) continue; /* delayed packet; v1 discards at teardown */
-        if (message.type == VTR_MSG_ERROR) {
-            error_from_remote(&message, error, error_size);
-            return -EIO;
-        }
-    }
+    if ((rc = vtr_client_start_flush(client, error, error_size)) < 0) return rc;
+    vtr_buffer_init(&packet);
+    rc = vtr_client_receive_packet(client, &packet, NULL, NULL, NULL, error, error_size);
+    vtr_buffer_free(&packet);
+    return rc == 1 ? 0 : rc < 0 ? rc : -EPROTO;
 }

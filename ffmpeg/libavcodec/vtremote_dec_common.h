@@ -38,6 +38,15 @@ typedef struct VTRemoteDecContext {
     int connected;
     int flushing;
     int done;
+    int failed;
+    int nonblocking;
+    int pong_pending;
+    int tx_type;
+    int tx_offset;
+    uint8_t tx_header[VTREMOTE_HEADER_SIZE];
+    uint8_t rx_header[VTREMOTE_HEADER_SIZE];
+    int rx_header_len;
+    int rx_body_len;
     VTRemoteWBuf pkt_buf;
     uint8_t *rx_buf;
     int rx_buf_cap;
@@ -69,6 +78,7 @@ typedef struct VTRemoteDecContext {
 
 int ff_vtremote_dec_init(AVCodecContext *avctx);
 int ff_vtremote_dec_close(AVCodecContext *avctx);
-int ff_vtremote_decode(AVCodecContext *avctx, AVFrame *frame, int *got_frame, AVPacket *pkt);
+void ff_vtremote_dec_flush(AVCodecContext *avctx);
+int ff_vtremote_receive_frame(AVCodecContext *avctx, AVFrame *frame);
 
 #endif /* AVCODEC_VTREMOTE_DEC_COMMON_H */

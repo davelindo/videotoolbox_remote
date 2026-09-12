@@ -20,6 +20,19 @@
 #include "libavutil/error.h"
 #include "libavutil/time.h"
 
+static inline int vtremote_set_socket_timeout(int fd, int timeout_ms)
+{
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+    DWORD value = timeout_ms;
+#else
+    struct timeval value = { timeout_ms / 1000, (timeout_ms % 1000) * 1000 };
+#endif
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, VTR_SOCKOPT_ARG &value, sizeof(value)) < 0 ||
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, VTR_SOCKOPT_ARG &value, sizeof(value)) < 0)
+        return AVERROR(vtremote_sock_errno());
+    return 0;
+}
+
 static inline int vtremote_send_flags(int flags)
 {
 #if !defined(HAVE_WINSOCK2_H) || !HAVE_WINSOCK2_H
@@ -28,6 +41,18 @@ static inline int vtremote_send_flags(int flags)
 #endif
 #endif
     return flags;
+}
+
+/* EAGAIN from a blocking socket is a timeout, not codec backpressure. */
+static inline int vtremote_blocking_error(int error)
+{
+    if (error == EAGAIN || error == EWOULDBLOCK
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+        || error == WSAEWOULDBLOCK || error == WSAETIMEDOUT
+#endif
+    )
+        return AVERROR(ETIMEDOUT);
+    return AVERROR(error);
 }
 
 static inline void vtremote_disable_sigpipe(int fd)
@@ -65,6 +90,8 @@ static inline int vtremote_finish_interrupted_connect(int fd,
      * connect(); keep WSAEINTR fatal instead of pretending the handshake is
      * still in progress.
      */
+    (void)fd;
+    (void)deadline_us;
     return AVERROR(WSAEINTR);
 #else
     for (;;) {

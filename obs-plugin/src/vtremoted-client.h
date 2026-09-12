@@ -7,7 +7,7 @@
 
 /* Plugin build identity reported in the protocol HELLO message.
  * Keep in sync with obs-plugin/CMakeLists.txt project() version. */
-#define OBS_PLUGIN_VERSION "1.0.0"
+#define OBS_PLUGIN_VERSION "2.0.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -44,10 +44,21 @@ bool vtremoted_client_send_frame(VTRemotedClient *client, int64_t pts,
                                  const uint32_t *heights,
                                  const uint32_t *sizes);
 
-bool vtremoted_client_receive_packet(VTRemotedClient *client,
+typedef enum VTRReceiveResult {
+  VTR_RECEIVE_ERROR = -1,
+  VTR_RECEIVE_PENDING = 0,
+  VTR_RECEIVE_PACKET = 1,
+  VTR_RECEIVE_DONE = 2,
+} VTRReceiveResult;
+
+/* Cancel I/O without closing a descriptor that another worker may be using. */
+void vtremoted_client_cancel(VTRemotedClient *client);
+void vtremoted_client_get_error(VTRemotedClient *client, char *error, size_t size);
+bool vtremoted_client_flush(VTRemotedClient *client);
+VTRReceiveResult vtremoted_client_receive_packet(VTRemotedClient *client,
                                      const uint8_t **out_data, size_t *out_size,
                                      int64_t *out_pts, int64_t *out_dts,
-                                     bool *out_keyframe);
+                                     bool *out_keyframe, int wait_ms);
 
 #ifdef __cplusplus
 }

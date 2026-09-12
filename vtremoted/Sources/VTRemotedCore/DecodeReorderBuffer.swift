@@ -18,7 +18,7 @@ final class DecodeReorderBuffer<Payload> {
 
     private let depth: Int
     private let compactionThreshold = 64
-    private var pending: [PendingFrame] = []
+    private var pending: [PendingFrame?] = []
     private var head: Int = 0
     private var seq: Int64 = 0
     private var lastEmittedPts: Int64 = Int64.min
@@ -60,7 +60,7 @@ final class DecodeReorderBuffer<Payload> {
         }
         var idx = pending.count
         while idx > head {
-            let prev = pending[idx - 1]
+            let prev = pending[idx - 1]!
             if prev.ptsTicks < frame.ptsTicks || (prev.ptsTicks == frame.ptsTicks && prev.seq <= frame.seq) {
                 break
             }
@@ -75,7 +75,9 @@ final class DecodeReorderBuffer<Payload> {
         let drainCount = max(0, pendingCount - targetCount)
         emitted.reserveCapacity(drainCount)
         while pendingCount > targetCount {
-            let frame = pending[head]
+            let frame = pending[head]!
+            // Release emitted media immediately; compaction only reclaims slots.
+            pending[head] = nil
             head += 1
             var pts = frame.ptsTicks
             var clamped = false
