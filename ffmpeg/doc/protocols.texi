@@ -1239,6 +1239,11 @@ truncating. Default value is 1.
 Specify the path of the file containing private key to use during authorization.
 By default libssh searches for keys in the @file{~/.ssh/} directory.
 
+@item verify
+Verify the server host key against the known_hosts file before
+authenticating, if set to 1. Servers that are not in the file, or whose
+key differs from the one recorded there, are refused. Default value is 1.
+
 @end table
 
 Example: Play a file stored on remote server.
@@ -1737,6 +1742,12 @@ assumed that the other process may have gotten stuck or died in the meantime.
 If set to zero, no waiting is done and all processes will immediately race
 to try and fetch the same missing blocks themselves. Defaults to 10000 (10 ms).
 
+@item ignore_errors
+If true, failures of the underlying input stream are not treated as fatal, and
+playback continues using only the data already present in the cache file.
+Default is false. Any attempt to read into uncached data will result in an
+unrecoverable IO error.
+
 @item retry_errors
 If true (the default), transient read errors from the underlying input stream
 are ignored and retried again. If false, any blocks that previously failed
@@ -1747,6 +1758,21 @@ If true (the default), blocks whose contents fail the CRC integrity check are
 re-fetched from the underlying input stream, overwriting the corrupt cached
 data. If false, cache corruption is treated as a fatal read error.
 
+@item cache_size_max
+Maximum amount of data to cache, in bytes, rounded down to a multiple of the
+chosen block size. Accepts the usual size suffixes, e.g. @code{10G} for
+10*10^9 bytes, or @code{10Gi} for 10*2^30 bytes. Defaults to 0, meaning no
+limit.
+
+Once this limit is reached, the protocol switches to read-only mode (see
+@option{read_only}). Already cached data is never evicted, so once this limit
+is reached, no new data will ever be cached until the cache file is deleted.
+
+Note that this option is best-effort only, and may over-write up to N-1
+blocks, where N is the number of concurrent processes using the same cache
+file. Note also that the underlying file system may reserve more space than
+written, if the underlying allocation granularity is larger than the block
+size.
 @end table
 
 URL Syntax is

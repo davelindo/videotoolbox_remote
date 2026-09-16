@@ -210,6 +210,7 @@ typedef struct OptionsContext {
     SpecifierOptList fps_mode;
     SpecifierOptList force_fps;
     SpecifierOptList frame_aspect_ratios;
+    SpecifierOptList stereo3ds;
     SpecifierOptList display_rotations;
     SpecifierOptList display_hflips;
     SpecifierOptList display_vflips;
