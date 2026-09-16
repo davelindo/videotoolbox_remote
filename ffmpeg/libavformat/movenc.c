@@ -23,6 +23,7 @@
 
 #include "config_components.h"
 
+#include <math.h>
 #include <stdint.h>
 #include <inttypes.h>
 
@@ -54,7 +55,6 @@
 #include "libavutil/csp.h"
 #include "libavutil/intfloat.h"
 #include "libavutil/mathematics.h"
-#include "libavutil/libm.h"
 #include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/dict.h"
@@ -2994,17 +2994,21 @@ static int mov_write_video_tag(AVFormatContext *s, AVIOContext *pb, MOVMuxContex
         mov_write_amve_tag(pb, track);
     }
 
-    if (track->mode == MODE_MP4 && mov->fc->strict_std_compliance <= FF_COMPLIANCE_UNOFFICIAL) {
+    if (track->mode == MODE_MP4) {
         const AVPacketSideData *stereo_3d = av_packet_side_data_get(track->st->codecpar->coded_side_data,
                                                                     track->st->codecpar->nb_coded_side_data,
                                                                     AV_PKT_DATA_STEREO3D);
         const AVPacketSideData *spherical_mapping = av_packet_side_data_get(track->st->codecpar->coded_side_data,
                                                                             track->st->codecpar->nb_coded_side_data,
                                                                             AV_PKT_DATA_SPHERICAL);
-        if (stereo_3d)
+        if (stereo_3d && mov->fc->strict_std_compliance <= FF_COMPLIANCE_UNOFFICIAL)
             mov_write_st3d_tag(s, pb, (AVStereo3D*)stereo_3d->data);
-        if (spherical_mapping)
+        else if (stereo_3d)
+            av_log(s, AV_LOG_WARNING, "Writing supported 'st3d' metadata requires -strict unofficial.\n");
+        if (spherical_mapping && mov->fc->strict_std_compliance <= FF_COMPLIANCE_UNOFFICIAL)
             mov_write_sv3d_tag(mov->fc, pb, (AVSphericalMapping*)spherical_mapping->data);
+        else if (spherical_mapping)
+            av_log(s, AV_LOG_WARNING, "Writing supported 'sv3d' metadata requires -strict unofficial.\n");
     }
 
     if (track->mode == MODE_MOV || (track->mode == MODE_MP4 &&
@@ -7922,7 +7926,12 @@ static int mov_create_timecode_track(AVFormatContext *s, int index, int src_inde
         return AVERROR(ENOMEM);
     *track->src_track = src_index;
     track->nb_src_track = 1;
-    track->timescale = mov->tracks[src_index].timescale;
+    if (tc.flags & AV_TIMECODE_FLAG_DROPFRAME)
+        track->timescale = tc.fps * 1000;
+    else if (tc.rate.den == 1001)
+        track->timescale = tc.rate.num;
+    else
+        track->timescale = tc.fps;
     if (tc.flags & AV_TIMECODE_FLAG_DROPFRAME)
         track->timecode_flags |= MOV_TIMECODE_FLAG_DROPFRAME;
 

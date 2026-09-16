@@ -6404,6 +6404,13 @@ static int mov_read_trun(MOVContext *c, AVIOContext *pb, MOVAtom atom)
         if (flags & MOV_TRUN_SAMPLE_FLAGS)    sample_flags    = avio_rb32(pb);
         if (flags & MOV_TRUN_SAMPLE_CTS)      ctts_duration   = avio_rb32(pb);
 
+        if (sample_duration > c->max_stts_delta) {
+            av_log(c->fc, AV_LOG_WARNING,
+                   "Too large sample duration %u in trun entry %u in st:%d. Clipping to 1.\n",
+                   sample_duration, i, st->index);
+            sample_duration = 1;
+        }
+
         mov_update_dts_shift(sc, ctts_duration, c->fc);
         if (pts != AV_NOPTS_VALUE) {
             dts = pts - sc->dts_shift;
@@ -7566,7 +7573,12 @@ static int mov_read_eyes(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     }
 
     sc->stereo3d->flags                           = flags;
-    sc->stereo3d->type                            = type;
+    /* eyes/stri only records packed vs single-eye, not SBS/TB. Keep a more
+     * specific type already set by st3d. */
+    if (type != AV_STEREO3D_UNSPEC)
+        sc->stereo3d->type = type;
+    else if (sc->stereo3d->type == AV_STEREO3D_2D)
+        sc->stereo3d->type = type;
     sc->stereo3d->view                            = view;
     sc->stereo3d->primary_eye                     = primary_eye;
     sc->stereo3d->baseline                        = baseline;
