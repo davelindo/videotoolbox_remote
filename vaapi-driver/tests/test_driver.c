@@ -83,6 +83,7 @@ int main(int argc, char **argv) {
     VABufferID sequence_buffer = VA_INVALID_ID;
     VAImage image;
     void *image_data = NULL;
+    void *parameter_data = NULL;
     VACodedBufferSegment *segment = NULL;
     union {
         VAEncSequenceParameterBufferH264 h264;
@@ -217,7 +218,10 @@ int main(int argc, char **argv) {
     CHECK_STATUS(vtable.vaCreateBuffer(&context, encode_context,
                                        VAEncSequenceParameterBufferType,
                                        (unsigned int)sequence_size, 1,
-                                       &sequence, &sequence_buffer));
+                                       NULL, &sequence_buffer));
+    CHECK_STATUS(vtable.vaMapBuffer(&context, sequence_buffer, &parameter_data));
+    memcpy(parameter_data, &sequence, sequence_size);
+    CHECK_STATUS(vtable.vaUnmapBuffer(&context, sequence_buffer));
     memset(&picture, 0, sizeof(picture));
     if (profile == VAProfileH264High) {
         picture.h264.CurrPic.picture_id = surface_id;
@@ -231,7 +235,10 @@ int main(int argc, char **argv) {
     CHECK_STATUS(vtable.vaCreateBuffer(&context, encode_context,
                                        VAEncPictureParameterBufferType,
                                        (unsigned int)picture_size, 1,
-                                       &picture, &picture_buffer));
+                                       NULL, &picture_buffer));
+    CHECK_STATUS(vtable.vaMapBuffer(&context, picture_buffer, &parameter_data));
+    memcpy(parameter_data, &picture, picture_size);
+    CHECK_STATUS(vtable.vaUnmapBuffer(&context, picture_buffer));
 
     CHECK_STATUS(vtable.vaBeginPicture(&context, encode_context, surface_id));
     render_buffers[0] = sequence_buffer;

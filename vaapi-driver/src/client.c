@@ -657,7 +657,8 @@ int vtr_client_connect(VTRClient *client, const VTRClientConfig *config,
 
     if (!client || !config || !config->endpoint || !config->codec ||
         !config->width || !config->height) return -EINVAL;
-    if (client->fd >= 0) vtr_client_destroy(client);
+    /* Terminal I/O errors close the socket but retain the reusable buffers. */
+    vtr_client_destroy(client);
     vtr_client_init(client);
     client->timeout_ms = config->timeout_ms > 0 ? config->timeout_ms : 10000;
     snprintf(client->endpoint, sizeof(client->endpoint), "%s", config->endpoint);

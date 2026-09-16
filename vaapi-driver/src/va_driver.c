@@ -1018,7 +1018,9 @@ static VAStatus create_buffer_locked(VTRVADriver *driver, VAContextID context_id
     buffer->element_size = size;
     buffer->num_elements = num_elements;
     buffer->capacity = total;
-    buffer->size = data ? total : 0;
+    /* Input length is independent of whether callers initialize via data or
+     * MapBuffer. Coded output starts empty until an encoded packet arrives. */
+    buffer->size = total;
     buffer->data = (uint8_t *)calloc(1, total);
     if (!buffer->data) {
         memset(buffer, 0, sizeof(*buffer));
@@ -1078,8 +1080,12 @@ static VAStatus vtrva_buffer_set_num_elements(VADriverContextP ctx,
     buffer->data = next;
     buffer->capacity = total;
     buffer->num_elements = num_elements;
-    if (buffer->size > total) buffer->size = total;
-    if (buffer->type == VAEncCodedBufferType) buffer->coded.buf = next;
+    if (buffer->type == VAEncCodedBufferType) {
+        if (buffer->size > total) buffer->size = total;
+        buffer->coded.buf = next;
+    } else {
+        buffer->size = total;
+    }
     pthread_mutex_unlock(&driver->lock);
     return VA_STATUS_SUCCESS;
 }
@@ -1718,7 +1724,9 @@ static VAStatus copy_between_surface_and_image_locked(VTRVADriver *driver,
     uint8_t *surface_uv;
     uint8_t *image_y;
     uint8_t *image_uv;
-    uint32_t row_bytes;
+    uint32_t bytes_per_sample;
+    uint32_t y_row_bytes;
+    uint32_t uv_row_bytes;
     uint32_t y;
     if (!buffer || !buffer->data) return VA_STATUS_ERROR_INVALID_BUFFER;
     if (surface->fourcc != image->image.format.fourcc ||
@@ -1728,22 +1736,25 @@ static VAStatus copy_between_surface_and_image_locked(VTRVADriver *driver,
     surface_uv = surface->data + surface->stride_y * surface->height;
     image_y = buffer->data + image->image.offsets[0];
     image_uv = buffer->data + image->image.offsets[1];
-    row_bytes = surface->width * (surface->fourcc == VA_FOURCC_P010 ? 2U : 1U);
+    bytes_per_sample = surface->fourcc == VA_FOURCC_P010 ? 2U : 1U;
+    y_row_bytes = surface->width * bytes_per_sample;
+    /* Each subsampled chroma sample is a complete interleaved U/V pair. */
+    uv_row_bytes = ((surface->width + 1U) / 2U) * 2U * bytes_per_sample;
     for (y = 0; y < surface->height; ++y) {
         if (image_to_surface)
             memcpy(surface_y + y * surface->stride_y,
-                   image_y + y * image->image.pitches[0], row_bytes);
+                   image_y + y * image->image.pitches[0], y_row_bytes);
         else
             memcpy(image_y + y * image->image.pitches[0],
-                   surface_y + y * surface->stride_y, row_bytes);
+                   surface_y + y * surface->stride_y, y_row_bytes);
     }
     for (y = 0; y < surface->uv_height; ++y) {
         if (image_to_surface)
             memcpy(surface_uv + y * surface->stride_uv,
-                   image_uv + y * image->image.pitches[1], row_bytes);
+                   image_uv + y * image->image.pitches[1], uv_row_bytes);
         else
             memcpy(image_uv + y * image->image.pitches[1],
-                   surface_uv + y * surface->stride_uv, row_bytes);
+                   surface_uv + y * surface->stride_uv, uv_row_bytes);
     }
     return VA_STATUS_SUCCESS;
 }
