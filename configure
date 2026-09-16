@@ -220,6 +220,7 @@ External library support:
   --enable-libaribcaption  enable ARIB text and caption decoding via libaribcaption [no]
   --enable-libass          enable libass subtitles rendering,
                            needed for subtitles and ass filter [no]
+  --enable-libastcenc      enable ASTC image encoding/decoding via astc-encoder [no]
   --enable-libbluray       enable BluRay reading using libbluray [no]
   --enable-libbs2b         enable bs2b DSP library [no]
   --enable-libcaca         enable textual display using libcaca [no]
@@ -477,6 +478,7 @@ Optimization options (experts only):
   --disable-armv6t2        disable armv6t2 optimizations
   --disable-vfp            disable VFP optimizations
   --disable-neon           disable NEON optimizations
+  --disable-arm-aes        disable ARM/AArch64 AES optimizations
   --disable-arm-crc        disable ARM/AArch64 CRC optimizations
   --disable-dotprod        disable DOTPROD optimizations
   --disable-i8mm           disable I8MM optimizations
@@ -989,10 +991,10 @@ add_objcflags(){
     append OBJCFLAGS $($objcflags_filter "$@")
 }
 
+# This also covers ObjC, it inherits CFLAGS.
 add_allcflags(){
     add_cflags "$@"
     add_cxxflags "$@"
-    add_objcflags "$@"
 }
 
 add_asflags(){
@@ -1227,7 +1229,7 @@ void foo(void){ __asm__ volatile($code); }
 EOF
     log_file $TMPC
     test_cmd $cc $CPPFLAGS $CFLAGS $flags "$@" $CC_C $(cc_o $TMPO) $TMPC &&
-    enable $name && add_cflags $flags && add_asflags $flags && add_ldflags $flags
+    enable $name && add_allcflags $flags && add_asflags $flags && add_ldflags $flags
 }
 
 check_insn(){
@@ -1389,11 +1391,7 @@ check_objcflags(){
 }
 
 check_allcflags(){
-    allcret=0
-    check_cflags "$@" || allcret=$?
-    check_cxxflags "$@" || allcret=$?
-    check_objcflags "$@" || allcret=$?
-    return $allcret
+    check_cflags "$@" && check_cxxflags "$@"
 }
 
 test_ldflags(){
@@ -1466,20 +1464,6 @@ check_func(){
     test_ld "cc" "$@" <<EOF && enable $func
 extern int $func();
 int main(void){ $func(); }
-EOF
-}
-
-check_mathfunc(){
-    log check_mathfunc "$@"
-    func=$1
-    narg=$2
-    shift 2
-    test $narg = 2 && args="f, g" || args="f"
-    disable $func
-    test_ld "cc" "$@" <<EOF && enable $func
-#include <math.h>
-float foo(float f, float g) { return $func($args); }
-int main(void){ return (int) foo; }
 EOF
 }
 
@@ -2052,6 +2036,7 @@ EXTERNAL_LIBRARY_NONFREE_LIST="
 EXTERNAL_LIBRARY_VERSION3_LIST="
     gmp
     libaribb24
+    libastcenc
     liblensfun
     libopencore_amrnb
     libopencore_amrwb
@@ -2336,6 +2321,7 @@ ARCH_EXT_LIST_ARM="
     armv6
     armv6t2
     armv8
+    arm_aes
     arm_crc
     dotprod
     i8mm
@@ -2501,38 +2487,6 @@ HEADERS_LIST="
 INTRINSICS_LIST="
     intrinsics_neon
     intrinsics_sse2
-"
-
-MATH_FUNCS="
-    atanf
-    atan2f
-    cbrt
-    cbrtf
-    copysign
-    cosf
-    erf
-    exp2
-    exp2f
-    expf
-    hypot
-    isfinite
-    isinf
-    isnan
-    ldexpf
-    llrint
-    llrintf
-    log2
-    log2f
-    log10f
-    lrint
-    lrintf
-    powf
-    rint
-    round
-    roundf
-    sinf
-    trunc
-    truncf
 "
 
 SYSTEM_FEATURES="
@@ -2707,7 +2661,6 @@ HAVE_LIST="
     $HAVE_LIST_PUB
     $HEADERS_LIST
     $INTRINSICS_LIST
-    $MATH_FUNCS
     $SYSTEM_FEATURES
     $SYSTEM_FUNCS
     $SYSTEM_LIBRARIES
@@ -2971,6 +2924,7 @@ intrinsics_sse2_deps="sse2"
 vfp_deps="arm"
 vfpv3_deps="vfp"
 setend_deps="arm"
+arm_aes_deps="aarch64 neon"
 arm_crc_deps="aarch64"
 dotprod_deps="aarch64 neon"
 i8mm_deps="aarch64 neon"
@@ -3842,6 +3796,8 @@ libaom_av1_encoder_deps="libaom"
 libaom_av1_encoder_select="extract_extradata_bsf dovi_rpuenc"
 libaribb24_decoder_deps="libaribb24"
 libaribcaption_decoder_deps="libaribcaption"
+libastcenc_encoder_deps="libastcenc"
+libastcenc_decoder_deps="libastcenc"
 libcodec2_decoder_deps="libcodec2"
 libcodec2_encoder_deps="libcodec2"
 libdav1d_decoder_deps="libdav1d"
@@ -4129,7 +4085,8 @@ schannel_conflict="openssl gnutls libtls mbedtls"
 sctp_protocol_deps="struct_sctp_event_subscribe struct_msghdr_msg_flags"
 sctp_protocol_select="network"
 securetransport_conflict="openssl gnutls libtls mbedtls"
-shared_protocol_deps="mmap stdatomic unistd_h"
+shared_protocol_deps="mmap unistd_h"
+shared_protocol_deps_any="stdatomic atomics_native"
 srtp_protocol_select="rtp_protocol srtp"
 tcp_protocol_select="network"
 tls_protocol_deps_any="gnutls openssl schannel securetransport libtls mbedtls"
@@ -4292,7 +4249,7 @@ select_filter_select="scene_sad"
 sharpness_vaapi_filter_deps="vaapi"
 showcqt_filter_deps="avformat swscale"
 showcqt_filter_suggest="libfontconfig libfreetype"
-signature_filter_deps="gpl avcodec avformat"
+signature_filter_deps="gpl avcodec"
 smartblur_filter_deps="gpl swscale"
 sobel_opencl_filter_deps="opencl"
 sofalizer_filter_deps="libmysofa"
@@ -4914,36 +4871,45 @@ set >> $logfile
 test -n "$valgrind" && toolchain="valgrind-memcheck"
 
 add_sanitizer_flags(){
+    sanitizer_cflags=
+    sanitizer_ldflags=
+
     case "$1" in
         asan)
-            add_allcflags -fsanitize=address
-            add_ldflags -fsanitize=address
+            sanitizer_cflags="-fsanitize=address"
+            sanitizer_ldflags="-fsanitize=address"
         ;;
         fuzz)
-            add_allcflags -fsanitize=fuzzer-no-link
-            add_ldflags -fsanitize=fuzzer-no-link
+            sanitizer_cflags="-fsanitize=fuzzer-no-link"
+            sanitizer_ldflags="-fsanitize=fuzzer-no-link"
             : "${libfuzzer_path:=-fsanitize=fuzzer}"
         ;;
         lsan)
-            add_allcflags -fsanitize=leak
-            add_ldflags -fsanitize=leak
+            sanitizer_cflags="-fsanitize=leak"
+            sanitizer_ldflags="-fsanitize=leak"
         ;;
         msan)
-            add_allcflags -fsanitize=memory -fsanitize-memory-track-origins
-            add_ldflags -fsanitize=memory
+            sanitizer_cflags="-fsanitize=memory -fsanitize-memory-track-origins"
+            sanitizer_ldflags="-fsanitize=memory"
         ;;
         tsan)
-            add_allcflags -fsanitize=thread
-            add_ldflags -fsanitize=thread
+            sanitizer_cflags="-fsanitize=thread"
+            sanitizer_ldflags="-fsanitize=thread"
         ;;
         usan|ubsan)
-            add_allcflags -fsanitize=undefined
-            add_ldflags -fsanitize=undefined
+            sanitizer_cflags="-fsanitize=undefined"
+            sanitizer_ldflags="-fsanitize=undefined"
         ;;
         ?*)
             die "Unknown sanitizer $1"
         ;;
     esac
+
+    test_cflags $sanitizer_cflags ||
+        die "Sanitizer $1 is not supported by $cc"
+
+    add_allcflags $sanitizer_cflags
+    check_ldflags $sanitizer_ldflags
 }
 
 add_sanitizers(){
@@ -4953,12 +4919,12 @@ add_sanitizers(){
     for sanitizer; do
         add_sanitizer_flags "$sanitizer"
     done
-    add_allcflags -fno-omit-frame-pointer
+    check_allcflags -fno-omit-frame-pointer
 }
 
 case "$toolchain" in
     clang-*)
-        add_sanitizers "${toolchain#clang-}"
+        requested_sanitizers="${toolchain#clang-}"
         cc_default="clang"
         cxx_default="clang++"
     ;;
@@ -4970,10 +4936,10 @@ case "$toolchain" in
         ranlib_default="llvm-ranlib"
         strip_default="llvm-strip"
         windres_default="llvm-windres"
-        test "$toolchain" != "llvm" && add_sanitizers "${toolchain#llvm-}"
+        test "$toolchain" != "llvm" && requested_sanitizers="${toolchain#llvm-}"
     ;;
     gcc-*)
-        add_sanitizers "${toolchain#gcc-}"
+        requested_sanitizers="${toolchain#gcc-}"
         cc_default="gcc"
         cxx_default="g++"
         # In case of tsan with gcc, PIC has to be enabled
@@ -4993,7 +4959,7 @@ case "$toolchain" in
                 ;;
         esac
     ;;
-    msvc)
+    msvc|msvc-*)
         cc_default="cl.exe"
         cxx_default="cl.exe"
         ld_default="$source_path/compat/windows/mslink"
@@ -5014,6 +4980,7 @@ case "$toolchain" in
         # issues with msys/win32 path conversion for MSVC parameters
         # such as -Fo<file> or -out:<file>.
         TMPDIR=.
+        test "$toolchain" != "msvc" && requested_sanitizers="${toolchain#msvc-}"
     ;;
     icl)
         cc_default="icl"
@@ -5419,15 +5386,7 @@ probe_cc(){
         else
             _ident=$($_cc --version 2>/dev/null | head -n1 | tr -d '\r')
         fi
-        if [ -x "$(command -v wslpath)" ]; then
-            _DEPCMD='$(DEP$(1)) $(DEP$(1)FLAGS) $($(1)DEP_FLAGS) $< 2>&1 | awk '\''/including/ { sub(/^.*file: */, ""); if (!match($$0, / /)) { print $$0 } }'\'' | xargs -r -d\\n -n1 wslpath -u | awk '\''BEGIN { printf "%s:", "$@" }; { sub(/\r/,""); printf " %s", $$0 }; END { print "" }'\'' > $(@:.o=.d)'
-
-        else
-            _DEPCMD='$(DEP$(1)) $(DEP$(1)FLAGS) $($(1)DEP_FLAGS) $< 2>&1 | awk '\''/including/ { sub(/^.*file: */, ""); gsub(/\\/, "/"); if (!match($$0, / /)) print "$@:", $$0 }'\'' > $(@:.o=.d)'
-        fi
-        _DEPFLAGS='$(CPPFLAGS) -showIncludes -Zs'
-        _DEPCCFLAGS='$(CFLAGS)'
-        _DEPCXXFLAGS='$(CXXFLAGS)'
+        _depflags='-showIncludes'
         _cflags_speed="-O2"
         _cflags_size="-O1"
         if $_cc -nologo- 2>&1 | grep -q Linker; then
@@ -5537,9 +5496,11 @@ fi
 
 # Treat unrecognized flags as errors on MSVC
 test_cpp_condition windows.h "_MSC_FULL_VER >= 193030705" &&
-    check_cflags -options:strict
+    check_allcflags -options:strict
 test_host_cpp_condition windows.h "_MSC_FULL_VER >= 193030705" &&
     check_host_cflags -options:strict
+
+test -n "$requested_sanitizers" && add_sanitizers "$requested_sanitizers"
 
 add_cflags $extra_cflags
 add_cxxflags $extra_cxxflags
@@ -5781,15 +5742,15 @@ elif enabled mips; then
             p5600)
                 enable mips32r2
                 enable mips32r5
-                check_cflags "-mtune=p5600" && check_cflags "-msched-weight -mload-store-pairs -funroll-loops"
+                check_allcflags "-mtune=p5600" && check_allcflags "-msched-weight -mload-store-pairs -funroll-loops"
             ;;
             i6400)
                 enable mips64r6
-                check_cflags "-mtune=i6400 -mabi=64" && check_cflags "-msched-weight -mload-store-pairs -funroll-loops" && check_ldflags "-mabi=64"
+                check_allcflags "-mtune=i6400 -mabi=64" && check_allcflags "-msched-weight -mload-store-pairs -funroll-loops" && check_ldflags "-mabi=64"
             ;;
             p6600)
                 enable mips64r6
-                check_cflags "-mtune=p6600 -mabi=64" && check_cflags "-msched-weight -mload-store-pairs -funroll-loops" && check_ldflags "-mabi=64"
+                check_allcflags "-mtune=p6600 -mabi=64" && check_allcflags "-msched-weight -mload-store-pairs -funroll-loops" && check_ldflags "-mabi=64"
             ;;
             # Cores from Loongson
             loongson2e|loongson2f|loongson3*)
@@ -6149,7 +6110,7 @@ case $target_os in
         SLIBNAME_WITH_MAJOR='$(SLIBPREF)$(FULLNAME).$(LIBMAJOR)$(SLIBSUF)'
         enabled x86_64 && objformat="macho64" || objformat="macho32"
         enabled_any pic shared x86_64 ||
-            { check_cflags -mdynamic-no-pic && add_asflags -mdynamic-no-pic; }
+            { check_allcflags -mdynamic-no-pic && add_asflags -mdynamic-no-pic; }
         check_headers dispatch/dispatch.h &&
             add_cppflags '-I\$(SRC_PATH)/compat/dispatch_semaphore'
         if test -n "$sysroot"; then
@@ -6328,7 +6289,7 @@ case $target_os in
     symbian)
         SLIBSUF=".dll"
         enable dos_paths
-        add_cflags --include=$sysinclude/gcce/gcce.h -fvisibility=default
+        add_allcflags --include=$sysinclude/gcce/gcce.h -fvisibility=default
         add_cppflags -D__GCCE__ -D__SYMBIAN32__ -DSYMBIAN_OE_POSIX_SIGNALS
         add_ldflags -Wl,--target1-abs,--no-undefined \
                     -Wl,-Ttext,0x80000,-Tdata,0x1000000 -shared \
@@ -6569,7 +6530,8 @@ if enabled aarch64; then
     # internal assembler in clang 3.3 does not support this instruction
     enabled neon && check_insn neon 'ext   v0.8B, v0.8B, v1.8B, #1'
 
-    archext_list="arm_crc dotprod i8mm pmull eor3 sve sve2 sme sme_i16i64 sme2"
+    archext_list="arm_aes arm_crc dotprod i8mm pmull eor3 sve sve2 sme sme_i16i64 sme2"
+    enabled arm_aes && check_archext_name_insn arm_aes aes 'aese  v0.16b, v1.16b'
     enabled arm_crc && check_archext_name_insn arm_crc crc 'crc32x w0, w0, x0'
     enabled pmull   && check_archext_name_insn pmull aes 'pmull v0.1q, v0.1d, v0.1d'
     enabled eor3    && check_archext_name_insn eor3 sha3 'eor3 v0.16b, v1.16b, v2.16b, v3.16b'
@@ -6596,7 +6558,7 @@ elif enabled arm; then
     test_cpp_condition stddef.h "defined __thumb__" && test_cc <<EOF && enable_weak thumb
 float func(float a, float b){ return a+b; }
 EOF
-    enabled thumb && check_cflags -mthumb || check_cflags -marm
+    enabled thumb && check_allcflags -mthumb || check_allcflags -marm
 
     if check_cpp_condition vfp_args stddef.h "defined __ARM_PCS_VFP"; then
         :
@@ -6698,7 +6660,7 @@ elif enabled parisc; then
 
     if enabled gcc; then
         case $($cc -dumpversion) in
-            4.[3-9].*) check_cflags -fno-optimize-sibling-calls ;;
+            4.[3-9].*) check_allcflags -fno-optimize-sibling-calls ;;
         esac
     fi
 
@@ -6710,7 +6672,7 @@ elif enabled ppc; then
     check_inline_asm xform_asm '"lwzx %1, %y0" :: "Z"(*(int*)0), "r"(0)'
 
     if enabled altivec; then
-        check_cflags -maltivec -mabi=altivec
+        check_allcflags -maltivec -mabi=altivec
 
         # check if our compiler supports Motorola AltiVec C API
         check_cc altivec altivec.h "vector signed int v1 = (vector signed int) { 0 };
@@ -6721,7 +6683,7 @@ elif enabled ppc; then
     fi
 
     if enabled vsx; then
-        check_cflags -mvsx
+        check_allcflags -mvsx
         check_cc vsx altivec.h "int v[4] = { 0 };
                                 vector signed int v1 = vec_vsx_ld(0, v);"
     fi
@@ -7210,16 +7172,6 @@ check_lib libdl dlfcn.h "dlopen dlsym" || check_lib libdl dlfcn.h "dlopen dlsym"
 check_lib libm math.h sin -lm
 check_host_lib math.h sin -lm
 
-atan2f_args=2
-copysign_args=2
-hypot_args=2
-ldexpf_args=2
-powf_args=2
-
-for func in $MATH_FUNCS; do
-    eval check_mathfunc $func \${${func}_args:-1} $libm_extralibs
-done
-
 # these are off by default, so fail if requested and not available
 enabled avisynth          && { require_headers "avisynth/avisynth_c.h avisynth/avs/version.h" &&
                                { test_cpp_condition avisynth/avs/version.h "AVS_MAJOR_VER >= 3 && AVS_MINOR_VER >= 7 && AVS_BUGFIX_VER >= 3 || AVS_MAJOR_VER >= 3 && AVS_MINOR_VER > 7 || AVS_MAJOR_VER > 3" ||
@@ -7242,6 +7194,18 @@ enabled libaribb24        && { check_pkg_config libaribb24 "aribb24 > 1.0.3" "ar
                                { enabled gpl && require_pkg_config libaribb24 aribb24 "aribb24/aribb24.h" arib_instance_new; } ||
                                die "ERROR: libaribb24 requires version higher than 1.0.3 or --enable-gpl."; }
 enabled libaribcaption    && require_pkg_config libaribcaption "libaribcaption >= 1.1.1" "aribcaption/aribcaption.h" aribcc_context_alloc
+enabled libastcenc        && {
+    require libastcenc astcenc/astcenc.h astcenc_config_init -lastcenc -lstdc++ $libm_extralibs
+    test_ld "cc" -lastcenc -lstdc++ $libm_extralibs <<EOF || die "ERROR: libastcenc 5.4 or newer is required; the encoder/decoder use the four-argument astcenc_context_alloc() interface added in that release."
+#include <astcenc/astcenc.h>
+int main(void) {
+    struct astcenc_config cfg;
+    struct astcenc_context *ctx;
+    return astcenc_context_alloc(&cfg, 1, &ctx, 0) != ASTCENC_SUCCESS;
+}
+EOF
+}
+libastcenc_extralibs="-lastcenc -lstdc++ $libm_extralibs"
 enabled lv2               && require_pkg_config lv2 lilv-0 "lilv/lilv.h" lilv_world_new
 enabled libiec61883       && require libiec61883 libiec61883/iec61883.h iec61883_cmp_connect -lraw1394 -lavc1394 -lrom1394 -liec61883
 enabled libass            && require_pkg_config libass "libass >= 0.11.0" ass/ass.h ass_library_init
@@ -7832,7 +7796,7 @@ fi
 
 enabled debug && add_allcflags -g"$debuglevel" && add_asflags -g"$debuglevel"
 
-for lang in c cxx objc; do
+for lang in c cxx; do
     test_${lang}flags -Werror=unused-command-line-argument &&
         append unknown_warning_${lang}flags "-Werror=unused-command-line-argument"
     test_${lang}flags -Werror=unknown-warning-option &&
@@ -7843,8 +7807,7 @@ check_warning(){
     warning_flag=$1
     flag_to_add=${2:-$1}
     test_cflags $unknown_warning_cflags $warning_flag && add_cflags $flag_to_add
-    test_cxxflags -Werror $unknown_warning_cxxflags $warning_flag && add_cxxflags $flag_to_add
-    test_objcflags $unknown_warning_objcflags $warning_flag && add_objcflags $flag_to_add
+    test_cxxflags $unknown_warning_cxxflags $warning_flag && add_cxxflags $flag_to_add
 }
 
 check_disable_warning(){
@@ -7981,7 +7944,7 @@ check_optflags -fno-signed-zeros
 
 if [ -n "$lto" ]; then
     test "$cc_type" != "$ld_type" && die "LTO requires same compiler and linker"
-    check_cflags  $lto
+    check_allcflags $lto
     check_ldflags $lto $cpuflags
     disable inline_asm_direct_symbol_refs
     if test "$cc_type" = "clang"; then
@@ -7996,7 +7959,7 @@ if [ -n "$lto" ]; then
     fi
 fi
 
-enabled ftrapv && check_cflags -ftrapv
+enabled ftrapv && check_allcflags -ftrapv
 
 if enabled icc; then
     # Just warnings, no remarks
@@ -8086,21 +8049,21 @@ elif enabled clang; then
     check_allcflags -Werror=return-type
 elif enabled_any msvc icl; then
     enabled x86_32 && disable aligned_stack
-    enabled_all x86_32 debug && add_cflags -Oy-
+    enabled_all x86_32 debug && add_allcflags -Oy-
     enabled debug && add_ldflags -debug
     enable pragma_deprecated
     if enabled icl; then
         # -Qansi-alias is basically -fstrict-aliasing, but does not work
         # (correctly) on icl 13.x.
         test_cpp_condition "windows.h" "__ICL < 1300 || __ICL >= 1400" &&
-            add_cflags -Qansi-alias
+            add_allcflags -Qansi-alias
         # Some inline asm is not compilable in debug
         if enabled debug; then
             disable ebx_available
         fi
     fi
     # enable utf-8 source processing
-    check_cflags -utf-8
+    check_allcflags -utf-8
 fi
 
 case $as_type in
@@ -8220,6 +8183,7 @@ for thread in $THREADS_LIST; do
 done
 
 if disabled stdatomic; then
+    add_cppflags '-I\$(SRC_PATH)/compat/atomics'
     if enabled atomics_win32; then
         add_cppflags '-I\$(SRC_PATH)/compat/atomics/win32'
     else
@@ -8257,7 +8221,7 @@ enabled sab_filter          && prepend avfilter_deps "swscale"
 enabled scale_filter        && prepend avfilter_deps "swscale"
 enabled scale2ref_filter    && prepend avfilter_deps "swscale"
 enabled showcqt_filter      && prepend avfilter_deps "avformat swscale"
-enabled signature_filter    && prepend avfilter_deps "avcodec avformat"
+enabled signature_filter    && prepend avfilter_deps "avcodec"
 enabled smartblur_filter    && prepend avfilter_deps "swscale"
 enabled spp_filter          && prepend avfilter_deps "avcodec"
 enabled sr_filter           && prepend avfilter_deps "avformat swscale"
@@ -8352,6 +8316,7 @@ if enabled aarch64; then
     echo "NEON enabled              ${neon-no}"
     echo "DOTPROD enabled           ${dotprod-no}"
     echo "I8MM enabled              ${i8mm-no}"
+    echo "ARM_AES enabled           ${arm_aes-no}"
     echo "PMULL enabled             ${pmull-no}"
     echo "EOR3 enabled              ${eor3-no}"
     echo "SVE enabled               ${sve-no}"
