@@ -1382,25 +1382,7 @@ TESTPROGS = avcodec                                                     \
             codec_desc                                                  \
             htmlsubtitles                                               \
             jpeg2000dwt                                                 \
-            mathops
-
-TESTPROGS-$(CONFIG_VIDEOTOOLBOX_REMOTE)  += vtremote_proto
-
-VTREMOTE_COMMON-$(CONFIG_H264_VIDEOTOOLBOX_REMOTE_ENCODER) = yes
-VTREMOTE_COMMON-$(CONFIG_HEVC_VIDEOTOOLBOX_REMOTE_ENCODER) = yes
-VTREMOTE_COMMON-$(CONFIG_H264_VIDEOTOOLBOX_REMOTE_DECODER) = yes
-VTREMOTE_COMMON-$(CONFIG_HEVC_VIDEOTOOLBOX_REMOTE_DECODER) = yes
-VTREMOTE_ENC_COMMON-$(CONFIG_H264_VIDEOTOOLBOX_REMOTE_ENCODER) = yes
-VTREMOTE_ENC_COMMON-$(CONFIG_HEVC_VIDEOTOOLBOX_REMOTE_ENCODER) = yes
-VTREMOTE_DEC_COMMON-$(CONFIG_H264_VIDEOTOOLBOX_REMOTE_DECODER) = yes
-VTREMOTE_DEC_COMMON-$(CONFIG_HEVC_VIDEOTOOLBOX_REMOTE_DECODER) = yes
-OBJS-$(CONFIG_VIDEOTOOLBOX_REMOTE)        += vtremote_proto.o
-OBJS-$(VTREMOTE_ENC_COMMON-yes)           += vtremote_enc_common.o
-OBJS-$(VTREMOTE_DEC_COMMON-yes)           += vtremote_dec_common.o
-OBJS-$(CONFIG_H264_VIDEOTOOLBOX_REMOTE_ENCODER) += vtremote_h264.o
-OBJS-$(CONFIG_HEVC_VIDEOTOOLBOX_REMOTE_ENCODER) += vtremote_hevc.o
-OBJS-$(CONFIG_H264_VIDEOTOOLBOX_REMOTE_DECODER) += vtremote_h264_dec.o
-OBJS-$(CONFIG_HEVC_VIDEOTOOLBOX_REMOTE_DECODER) += vtremote_hevc_dec.o
+            mathops                                                    \
 
 TESTPROGS-$(CONFIG_AC3DSP)                += ac3
 TESTPROGS-$(CONFIG_APV_DECODER)           += apv
