@@ -177,6 +177,18 @@ if(BUILD_TESTING)
     target_compile_options(vtremote_protocol_test PRIVATE ${VTREMOTE_WARNING_FLAGS})
     add_test(NAME vtremote_protocol_unit COMMAND vtremote_protocol_test)
 
+    add_executable(vtremote_client_cleanup_test tests/test_client_cleanup.c)
+    target_link_libraries(vtremote_client_cleanup_test PRIVATE vtremote_client)
+    target_compile_options(vtremote_client_cleanup_test PRIVATE ${VTREMOTE_WARNING_FLAGS} -UNDEBUG)
+    add_test(NAME vtremote_client_cleanup_unit COMMAND vtremote_client_cleanup_test)
+
+    add_executable(vtremote_buffer_layout_test tests/test_buffer_layout.c src/va_driver.c)
+    target_include_directories(vtremote_buffer_layout_test SYSTEM PRIVATE ${LIBVA_INCLUDE_DIRS})
+    target_link_libraries(vtremote_buffer_layout_test PRIVATE vtremote_client Threads::Threads)
+    target_compile_options(vtremote_buffer_layout_test PRIVATE ${VTREMOTE_WARNING_FLAGS} -UNDEBUG)
+    add_test(NAME vtremote_mapped_parameters_unit COMMAND vtremote_buffer_layout_test parameters)
+    add_test(NAME vtremote_image_copy_unit COMMAND vtremote_buffer_layout_test images)
+
     add_executable(vtremote_client_reconnect_test tests/test_client_reconnect.c)
     target_link_libraries(vtremote_client_reconnect_test PRIVATE vtremote_client)
     target_compile_options(vtremote_client_reconnect_test PRIVATE ${VTREMOTE_WARNING_FLAGS})

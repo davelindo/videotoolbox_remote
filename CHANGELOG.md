@@ -7,6 +7,18 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
+### Fixed
+
+- Released retained C SDK transport and parameter-set buffers when reconnecting
+  after a terminal I/O failure.
+- Preserved VA-API input buffer lengths for map/fill/unmap submissions and
+  element-count changes, while keeping coded output empty until completion.
+- Kept VA-API buffer allocations and mapped pointers stable when changing valid
+  element counts, preserving retained data and completed coded output and
+  rejecting counts beyond the allocation.
+- Copied complete NV12 and P010 chroma pairs for odd-width image uploads and
+  downloads without touching row padding.
+
 ## [v0.9.1] - 2026-09-16
 
 ### Changed
