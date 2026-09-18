@@ -1056,36 +1056,26 @@ static VAStatus vtrva_buffer_set_num_elements(VADriverContextP ctx,
                                                unsigned int num_elements) {
     VTRVADriver *driver = driver_data(ctx);
     VTRVABuffer *buffer;
-    size_t total;
-    uint8_t *next;
-    if (!driver || !num_elements) return VA_STATUS_ERROR_INVALID_PARAMETER;
+    if (!driver) return VA_STATUS_ERROR_INVALID_PARAMETER;
     pthread_mutex_lock(&driver->lock);
     buffer = lookup_buffer_locked(driver, buffer_id);
     if (!buffer) {
         pthread_mutex_unlock(&driver->lock);
         return VA_STATUS_ERROR_INVALID_BUFFER;
     }
-    if (!buffer->owns_data || buffer->element_size > SIZE_MAX / num_elements) {
+    if (!buffer->owns_data || !buffer->element_size) {
         pthread_mutex_unlock(&driver->lock);
         return VA_STATUS_ERROR_INVALID_PARAMETER;
     }
-    total = (size_t)buffer->element_size * num_elements;
-    next = (uint8_t *)realloc(buffer->data, total);
-    if (!next) {
+    if (num_elements > buffer->capacity / buffer->element_size) {
         pthread_mutex_unlock(&driver->lock);
-        return VA_STATUS_ERROR_ALLOCATION_FAILED;
+        return VA_STATUS_ERROR_MAX_NUM_EXCEEDED;
     }
-    if (total > buffer->capacity)
-        memset(next + buffer->capacity, 0, total - buffer->capacity);
-    buffer->data = next;
-    buffer->capacity = total;
+    /* This changes the valid count, not the allocation. Keep mapped pointers
+     * and bytes outside the valid range intact so callers can restore it. */
     buffer->num_elements = num_elements;
-    if (buffer->type == VAEncCodedBufferType) {
-        if (buffer->size > total) buffer->size = total;
-        buffer->coded.buf = next;
-    } else {
-        buffer->size = total;
-    }
+    if (buffer->type != VAEncCodedBufferType)
+        buffer->size = (size_t)buffer->element_size * num_elements;
     pthread_mutex_unlock(&driver->lock);
     return VA_STATUS_SUCCESS;
 }

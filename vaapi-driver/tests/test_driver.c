@@ -85,6 +85,7 @@ int main(int argc, char **argv) {
     void *image_data = NULL;
     void *parameter_data = NULL;
     VACodedBufferSegment *segment = NULL;
+    uint8_t *packet_copy = NULL;
     union {
         VAEncSequenceParameterBufferH264 h264;
         VAEncSequenceParameterBufferHEVC hevc;
@@ -201,7 +202,7 @@ int main(int argc, char **argv) {
 
     CHECK_STATUS(vtable.vaCreateBuffer(&context, encode_context,
                                        VAEncCodedBufferType,
-                                       1024 * 1024, 1, NULL,
+                                       1, 1024 * 1024, NULL,
                                        &coded_buffer));
     memset(&sequence, 0, sizeof(sequence));
     if (profile == VAProfileH264High) {
@@ -258,10 +259,29 @@ int main(int argc, char **argv) {
     printf("ok: codec=%s profiles=%d packet_bytes=%u first_nal=%02x\n",
            codec, profile_count, segment->size,
            ((const uint8_t *)segment->buf)[3]);
+    uint32_t packet_size = segment->size;
+    void *packet_pointer = segment->buf;
+    packet_copy = malloc(packet_size);
+    if (!packet_copy) goto fail;
+    memcpy(packet_copy, segment->buf, packet_size);
+    /* The element count describes valid input; it must not truncate completed
+     * output, move its allocation, or replace its length with capacity. */
+    const unsigned counts[] = {0, 1, 1024 * 1024};
+    for (unsigned i = 0; i < sizeof(counts) / sizeof(counts[0]); ++i) {
+        CHECK_STATUS(vtable.vaBufferSetNumElements(&context, coded_buffer, counts[i]));
+        CHECK_STATUS(vtable.vaUnmapBuffer(&context, coded_buffer));
+        CHECK_STATUS(vtable.vaMapBuffer(&context, coded_buffer, (void **)&segment));
+        if (segment->buf != packet_pointer || segment->size != packet_size ||
+            memcmp(segment->buf, packet_copy, packet_size) != 0) {
+            fprintf(stderr, "element count changed completed coded output\n");
+            goto fail;
+        }
+    }
     CHECK_STATUS(vtable.vaUnmapBuffer(&context, coded_buffer));
 
     rc = 0;
 fail:
+    free(packet_copy);
     if (sequence_buffer != VA_INVALID_ID && context.pDriverData)
         (void)vtable.vaDestroyBuffer(&context, sequence_buffer);
     if (picture_buffer != VA_INVALID_ID && context.pDriverData)

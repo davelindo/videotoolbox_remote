@@ -4,6 +4,7 @@
 #include <va/va_enc_h264.h>
 #include <va/va_enc_hevc.h>
 #include <assert.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -58,8 +59,9 @@ static void test_parameters(VADriverContextP va, int hevc, int mapped) {
     OK(va->vtable->vaCreateContext(va, config, 64, 64, VA_PROGRESSIVE,
                                   &surface, 1, &context));
     OK(va->vtable->vaCreateBuffer(va, context, VAEncCodedBufferType,
-                                 1024, 1, NULL, &coded));
+                                 1024, 2, NULL, &coded));
     /* Allocated output capacity must never be reported as encoded bytes. */
+    OK(va->vtable->vaBufferSetNumElements(va, coded, 1));
     OK(va->vtable->vaBufferSetNumElements(va, coded, 2));
     OK(va->vtable->vaMapBuffer(va, coded, &pointer));
     assert(((VACodedBufferSegment *)pointer)->size == 0);
@@ -92,18 +94,34 @@ static void test_parameters(VADriverContextP va, int hevc, int mapped) {
     submit_parameter(va, context, VAEncMiscParameterBufferType, &fps, sizeof(fps), mapped);
     submit_parameter(va, context, VAEncMiscParameterBufferType, &bitrate, sizeof(bitrate), mapped);
 
-    /* Growing a byte-element input buffer must expose its newly filled data;
-     * shrinking it must restore validation of a truncated structure. */
+    /* Changing the valid count must preserve the allocation and mapped data,
+     * including bytes outside the temporarily valid range. */
     OK(va->vtable->vaCreateBuffer(va, context, VAEncSequenceParameterBufferType,
-                                 1, 1, NULL, &resized));
-    assert(va->vtable->vaRenderPicture(va, context, &resized, 1) == VA_STATUS_ERROR_INVALID_BUFFER);
-    OK(va->vtable->vaBufferSetNumElements(va, resized, sequence_size));
+                                 1, sequence_size + 16, NULL, &resized));
     OK(va->vtable->vaMapBuffer(va, resized, &pointer));
+    void *original_pointer = pointer;
+    memset(pointer, 0xa5, sequence_size + 16);
     memcpy(pointer, &sequence, sequence_size);
+    OK(va->vtable->vaBufferSetNumElements(va, resized, sequence_size - 1));
+    OK(va->vtable->vaBufferSetNumElements(va, resized, sequence_size + 16));
+    OK(va->vtable->vaUnmapBuffer(va, resized));
+    OK(va->vtable->vaMapBuffer(va, resized, &pointer));
+    assert(pointer == original_pointer);
+    assert(memcmp(pointer, &sequence, sequence_size) == 0);
+    for (unsigned i = sequence_size; i < sequence_size + 16; ++i)
+        assert(((uint8_t *)pointer)[i] == 0xa5);
     OK(va->vtable->vaUnmapBuffer(va, resized));
     OK(va->vtable->vaRenderPicture(va, context, &resized, 1));
     OK(va->vtable->vaBufferSetNumElements(va, resized, sequence_size - 1));
     assert(va->vtable->vaRenderPicture(va, context, &resized, 1) == VA_STATUS_ERROR_INVALID_BUFFER);
+    OK(va->vtable->vaBufferSetNumElements(va, resized, 0));
+    assert(va->vtable->vaRenderPicture(va, context, &resized, 1) == VA_STATUS_ERROR_INVALID_BUFFER);
+    OK(va->vtable->vaBufferSetNumElements(va, resized, sequence_size));
+    assert(va->vtable->vaBufferSetNumElements(va, resized, sequence_size + 17) ==
+           VA_STATUS_ERROR_MAX_NUM_EXCEEDED);
+    assert(va->vtable->vaBufferSetNumElements(va, resized, UINT_MAX) ==
+           VA_STATUS_ERROR_MAX_NUM_EXCEEDED);
+    OK(va->vtable->vaRenderPicture(va, context, &resized, 1));
     OK(va->vtable->vaDestroyBuffer(va, resized));
     /* No EndPicture: this regression tests local parameter submission only. */
     OK(va->vtable->vaDestroyContext(va, context));
