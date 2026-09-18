@@ -196,13 +196,6 @@ typedef struct OptionsContext {
     SpecifierOptList keep_metadata;
     SpecifierOptList max_frames;
     SpecifierOptList bitstream_filters;
-    SpecifierOptList vt_remote_transcode;
-    SpecifierOptList vt_remote_out_codec;
-    SpecifierOptList vt_remote_pix_fmt;
-    SpecifierOptList vt_remote_port;
-    SpecifierOptList vt_remote_out_width;
-    SpecifierOptList vt_remote_out_height;
-    SpecifierOptList vt_remote_scale_mode;
     SpecifierOptList codec_tags;
     SpecifierOptList sample_fmts;
     SpecifierOptList qscale;
