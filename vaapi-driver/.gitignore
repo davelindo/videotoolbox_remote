@@ -1,9 +1,0 @@
-/build*/
-/dist/
-__pycache__/
-*.pyc
-*.o
-*.so
-*.a
-*.tar.gz
-*.zip
