@@ -77,7 +77,6 @@ extern const FFBitStreamFilter ff_vp9_superframe_bsf;
 extern const FFBitStreamFilter ff_vp9_superframe_split_bsf;
 extern const FFBitStreamFilter ff_vvc_metadata_bsf;
 extern const FFBitStreamFilter ff_vvc_mp4toannexb_bsf;
-extern const FFBitStreamFilter ff_vtremote_transcode_bsf;
 
 /* these filters are part of public or internal API,
  * they are formatted to not be found by the grep
