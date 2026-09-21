@@ -248,7 +248,6 @@ External library support:
   --enable-libkvazaar      enable HEVC encoding via libkvazaar [no]
   --enable-liblc3          enable LC3 de/encoding via liblc3 [no]
   --enable-liblcevc-dec    enable LCEVC decoding via liblcevc-dec [no]
-  --enable-liblz4          enable LZ4 compression via liblz4 [no]
   --enable-liblensfun      enable lensfun lens correction [no]
   --enable-libmodplug      enable ModPlug via libmodplug [no]
   --enable-libmp3lame      enable MP3 encoding via libmp3lame [no]
@@ -370,7 +369,6 @@ External library support:
   --disable-vaapi          disable Video Acceleration API (mainly Unix/Intel) code [autodetect]
   --disable-vdpau          disable Nvidia Video Decode and Presentation API for Unix code [autodetect]
   --disable-videotoolbox   disable VideoToolbox code [autodetect]
-  --enable-videotoolbox-remote enable VideoToolbox Remote codecs (h264/hevc) [no]
   --disable-vulkan         disable Vulkan code [autodetect]
   --enable-vulkan-static   statically link to libvulkan [no]
 
@@ -2087,8 +2085,6 @@ EXTERNAL_LIBRARY_LIST="
     libkvazaar
     liblc3
     liblcevc_dec
-    liblz4
-    libzstd
     libmodplug
     libmp3lame
     libmysofa
@@ -2212,7 +2208,6 @@ FEATURE_LIST="
     static
     swscale_alpha
     unstable
-    videotoolbox_remote
 "
 
 # this list should be kept in linking order
@@ -3366,6 +3361,8 @@ videotoolbox_hwaccel_deps="videotoolbox pthreads"
 videotoolbox_hwaccel_extralibs="-framework QuartzCore"
 vulkan_deps="threads"
 vulkan_deps_any="libdl LoadLibrary"
+spirv_headers_spirv_h_deps="vulkan"
+spirv_unified1_spirv_h_deps="vulkan"
 
 apv_vulkan_hwaccel_deps="vulkan spirv_compiler"
 apv_vulkan_hwaccel_select="apv_decoder"
@@ -3789,20 +3786,11 @@ pcm_alaw_at_encoder_select="audio_frame_queue"
 pcm_mulaw_at_encoder_deps="audiotoolbox"
 pcm_mulaw_at_encoder_select="audio_frame_queue"
 chromaprint_muxer_deps="chromaprint"
-h264_videotoolbox_encoder_deps="videotoolbox pthreads"
+h264_videotoolbox_encoder_deps="pthreads"
 h264_videotoolbox_encoder_select="atsc_a53 videotoolbox_encoder"
-hevc_videotoolbox_encoder_deps="videotoolbox pthreads"
-hevc_videotoolbox_encoder_select="videotoolbox_encoder"
-h264_videotoolbox_remote_decoder_deps="network liblz4 libzstd"
-h264_videotoolbox_remote_decoder_select=""
-h264_videotoolbox_remote_encoder_deps="network liblz4 libzstd"
-h264_videotoolbox_remote_encoder_select=""
-
-hevc_videotoolbox_remote_decoder_deps="network liblz4 libzstd"
-hevc_videotoolbox_remote_decoder_select=""
-hevc_videotoolbox_remote_encoder_deps="network liblz4 libzstd"
-hevc_videotoolbox_remote_encoder_select=""
-prores_videotoolbox_encoder_deps="videotoolbox pthreads"
+hevc_videotoolbox_encoder_deps="pthreads"
+hevc_videotoolbox_encoder_select="atsc_a53 videotoolbox_encoder"
+prores_videotoolbox_encoder_deps="pthreads"
 prores_videotoolbox_encoder_select="videotoolbox_encoder"
 libaom_av1_decoder_deps="libaom"
 libaom_av1_decoder_select="itut_t35"
@@ -3894,7 +3882,7 @@ libxvid_encoder_deps="libxvid"
 libzvbi_teletext_decoder_deps="libzvbi"
 vapoursynth_demuxer_deps="vapoursynth"
 videotoolbox_suggest="coreservices"
-videotoolbox_deps="corefoundation coremedia corevideo availability_h VTDecompressionSessionDecodeFrame"
+videotoolbox_deps="corefoundation coremedia corevideo VTDecompressionSessionDecodeFrame"
 videotoolbox_encoder_deps="videotoolbox VTCompressionSessionPrepareToEncodeFrames"
 
 # demuxers / muxers
@@ -4785,13 +4773,6 @@ for opt do
     esac
 done
 
-if enabled videotoolbox_remote; then
-    enable h264_videotoolbox_remote_encoder h264_videotoolbox_remote_decoder \
-           hevc_videotoolbox_remote_encoder hevc_videotoolbox_remote_decoder
-    enable network
-    enable liblz4
-fi
-
 enabled libnpp && warn "libnpp has been removed and enabling it does nothing."
 
 for e in $env; do
@@ -5407,7 +5388,15 @@ probe_cc(){
         else
             _ident=$($_cc --version 2>/dev/null | head -n1 | tr -d '\r')
         fi
-        _depflags='-showIncludes'
+        if [ -x "$(command -v wslpath)" ]; then
+            _DEPCMD='$(DEP$(1)) $(DEP$(1)FLAGS) $($(1)DEP_FLAGS) $< 2>&1 | awk '\''/including/ { sub(/^.*file: */, ""); if (!match($$0, / /)) { print $$0 } }'\'' | xargs -r -d\\n -n1 wslpath -u | awk '\''BEGIN { printf "%s:", "$@" }; { sub(/\r/,""); printf " %s", $$0 }; END { print "" }'\'' > $(@:.o=.d)'
+
+        else
+            _DEPCMD='$(DEP$(1)) $(DEP$(1)FLAGS) $($(1)DEP_FLAGS) $< 2>&1 | awk '\''/including/ { sub(/^.*file: */, ""); gsub(/\\/, "/"); if (!match($$0, / /)) print "$@:", $$0 }'\'' > $(@:.o=.d)'
+        fi
+        _DEPFLAGS='$(CPPFLAGS) -showIncludes -Zs'
+        _DEPCCFLAGS='$(CFLAGS)'
+        _DEPCXXFLAGS='$(CXXFLAGS)'
         _cflags_speed="-O2"
         _cflags_size="-O1"
         if $_cc -nologo- 2>&1 | grep -q Linker; then
@@ -6971,8 +6960,6 @@ check_headers sys/un.h
 check_headers termios.h
 check_headers unistd.h
 check_headers valgrind/valgrind.h
-check_headers Availability.h
-enabled Availability_h && enable availability_h
 check_func_headers VideoToolbox/VTCompressionSession.h VTCompressionSessionPrepareToEncodeFrames -framework VideoToolbox
 check_func_headers VideoToolbox/VideoToolbox.h VTDecompressionSessionDecodeFrame -framework VideoToolbox
 check_func_headers VideoToolbox/VideoToolbox.h VTPixelTransferSessionCreate -framework VideoToolbox
@@ -7003,22 +6990,17 @@ check_lib android android/native_window.h ANativeWindow_acquire -landroid
 check_lib mediandk "stdint.h media/NdkMediaFormat.h" AMediaFormat_new -lmediandk
 check_lib camera2ndk "stdbool.h stdint.h camera/NdkCameraManager.h" ACameraManager_create -lcamera2ndk
 
-if enabled darwin; then
-    enabled appkit       && check_apple_framework AppKit
-    enabled audiotoolbox && check_apple_framework AudioToolbox
-    enabled avfoundation && check_apple_framework AVFoundation
-    enabled coreimage    && check_apple_framework CoreImage
-    enabled metal        && check_apple_framework Metal
-    enabled videotoolbox && check_apple_framework VideoToolbox
+enabled appkit       && check_apple_framework AppKit
+enabled audiotoolbox && check_apple_framework AudioToolbox
+enabled avfoundation && check_apple_framework AVFoundation
+enabled coreimage    && check_apple_framework CoreImage
+enabled metal        && check_apple_framework Metal
+enabled videotoolbox && check_apple_framework VideoToolbox
 
-    check_apple_framework CoreFoundation
-    check_apple_framework CoreMedia
-    check_apple_framework CoreVideo
-    check_apple_framework CoreAudio
-else
-    disable appkit audiotoolbox avfoundation coreimage metal videotoolbox
-    disable corefoundation coremedia corevideo coreaudio
-fi
+check_apple_framework CoreFoundation
+check_apple_framework CoreMedia
+check_apple_framework CoreVideo
+check_apple_framework CoreAudio
 
 enabled audiotoolbox && {
     check_type AudioToolbox/AudioToolbox.h AudioObjectPropertyAddress
@@ -7271,8 +7253,6 @@ enabled libkvazaar        && require_pkg_config libkvazaar "kvazaar >= 2.0.0" kv
 enabled liblc3            && require_pkg_config liblc3 "lc3 >= 1.1.0" lc3.h lc3_hr_setup_encoder
 enabled liblensfun        && require_pkg_config liblensfun lensfun lensfun.h lf_db_create
 enabled liblcevc_dec      && require_pkg_config liblcevc_dec "lcevc_dec >= 4.0.0" "LCEVC/lcevc_dec.h" LCEVC_CreateDecoder
-enabled liblz4            && require_pkg_config liblz4 liblz4 lz4.h LZ4_compress_default
-enabled libzstd           && require_pkg_config libzstd libzstd zstd.h ZSTD_compress
 
 if enabled libmfx && enabled libvpl; then
    die "ERROR: can not use libmfx and libvpl together"

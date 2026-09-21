@@ -395,20 +395,14 @@ static void vtenc_reset(VTEncContext *vtctx)
         vtctx->supported_props = NULL;
     }
 
-    if (vtctx->color_primaries) {
-        CFRelease(vtctx->color_primaries);
-        vtctx->color_primaries = NULL;
-    }
-
-    if (vtctx->transfer_function) {
-        CFRelease(vtctx->transfer_function);
-        vtctx->transfer_function = NULL;
-    }
-
-    if (vtctx->ycbcr_matrix) {
-        CFRelease(vtctx->ycbcr_matrix);
-        vtctx->ycbcr_matrix = NULL;
-    }
+    /* The colorimetry fields hold references borrowed from CoreVideo (Get
+     * semantics). Releasing them would free CoreVideo's cached string for
+     * codepoints without a constant name, and later lookups of the same
+     * codepoint would hand out a dangling pointer.
+     */
+    vtctx->color_primaries = NULL;
+    vtctx->transfer_function = NULL;
+    vtctx->ycbcr_matrix = NULL;
 }
 
 static int vtenc_q_pop(VTEncContext *vtctx, bool wait, CMSampleBufferRef *buf, ExtraSEI *sei)
@@ -762,6 +756,7 @@ static void vtenc_output_callback(
     }
 
     if (!sample_buffer) {
+        vtenc_free_buf_node(info);
         return;
     }
 
@@ -2680,9 +2675,14 @@ static int vtenc_populate_extradata(AVCodecContext   *avctx,
         goto pe_cleanup;
     }
 
+    if (!buf) {
+        // VideoToolbox reports a dropped frame as success with no buffer.
+        av_log(avctx, AV_LOG_ERROR, "Extradata frame dropped, no param sets\n");
+        status = AVERROR_EXTERNAL;
+        goto pe_cleanup;
+    }
+
     CFRelease(buf);
-
-
 
 pe_cleanup:
     CVPixelBufferRelease(pix_buf);
@@ -2697,8 +2697,8 @@ pe_cleanup:
     vtctx->frame_ct_out = 0;
 
     av_assert0(status != 0 || (avctx->extradata && avctx->extradata_size > 0));
-    if (!status)
-        vtenc_free_buf_node(node);
+    // NULL once ownership passed to VideoToolbox, so a set node must be freed.
+    vtenc_free_buf_node(node);
 
     return status;
 }
