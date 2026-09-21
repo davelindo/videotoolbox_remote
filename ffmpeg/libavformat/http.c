@@ -91,6 +91,7 @@ typedef struct HTTPContext {
     uint8_t *post_data;
     int post_datalen;
     char *cookies;          ///< holds newline (\n) delimited Set-Cookie header field values (without the "Set-Cookie: " field name)
+    char *host;
     int icy;
     char *icy_metadata_headers;
     char *icy_metadata_packet;
@@ -261,6 +262,11 @@ static int http_open_cnx_internal(URLContext *h, AVDictionary **options)
     av_url_split(proto, sizeof(proto), auth, sizeof(auth),
                  hostname, sizeof(hostname), &port,
                  path1, sizeof(path1), s->location);
+
+    av_freep(&s->host);
+    s->host = av_strdup(hostname);
+    if (!s->host)
+        return AVERROR(ENOMEM);
 
     av_strlcpy(tmp_host, hostname, sizeof(tmp_host));
     // In case of an IPv6 address, we need to strip the Zone ID,
@@ -821,6 +827,7 @@ bail_out:
         av_dict_free(&s->redirect_cache);
         av_freep(&s->new_location);
         av_freep(&s->uri);
+        av_freep(&s->host);
     }
     return ret;
 }
@@ -1096,12 +1103,30 @@ static int parse_set_cookie(const char *set_cookie, AVDictionary **dict)
     return 0;
 }
 
-static int parse_cookie(HTTPContext *s, const char *p, AVDictionary **cookies)
+static const char *cookie_domain(const AVDictionary *cookie_params)
+{
+    const AVDictionaryEntry *e = av_dict_get(cookie_params, "domain", NULL, 0);
+    const char *domain = e ? e->value + (e->value[0] == '.') : "";
+
+    return *domain ? domain : NULL;
+}
+
+static int host_in_cookie_domain(const char *host, const char *domain)
+{
+    int offset = strlen(host) - strlen(domain);
+
+    return offset >= 0 && !av_strcasecmp(host + offset, domain) &&
+           (!offset || host[offset - 1] == '.');
+}
+
+static int parse_cookie(HTTPContext *s, const char *p, const char *host,
+                        AVDictionary **cookies)
 {
     AVDictionary *new_params = NULL;
     const AVDictionaryEntry *e, *cookie_entry;
     const char *eql;
-    char *name;
+    char *name, *value;
+    int len;
 
     // ensure the cookie is parsable
     if (parse_set_cookie(p, &new_params)) {
@@ -1149,6 +1174,13 @@ static int parse_cookie(HTTPContext *s, const char *p, AVDictionary **cookies)
             }
         }
     }
+    const char *domain = host ? cookie_domain(new_params) : NULL;
+    int host_only = host && !domain;
+    if (domain && !host_in_cookie_domain(host, domain)) {
+        av_log(s, AV_LOG_WARNING, "Ignoring cookie for domain %s set by %s\n", domain, host);
+        av_dict_free(&new_params);
+        return 0;
+    }
     av_dict_free(&new_params);
 
     // duplicate the cookie name (dict will dupe the value)
@@ -1156,7 +1188,15 @@ static int parse_cookie(HTTPContext *s, const char *p, AVDictionary **cookies)
     if (!(name = av_strndup(p, eql - p))) return AVERROR(ENOMEM);
 
     // add the cookie to the dictionary
-    av_dict_set(cookies, name, eql, AV_DICT_DONT_STRDUP_KEY);
+    len = strlen(eql);
+    while (len && strchr(WHITESPACES, eql[len - 1]))
+        len--;
+    value = av_asprintf("%.*s%s%s", len, eql, host_only ? "; @hostonly=" : "", host_only ? host : "");
+    if (!value) {
+        av_free(name);
+        return AVERROR(ENOMEM);
+    }
+    av_dict_set(cookies, name, value, AV_DICT_DONT_STRDUP_KEY | AV_DICT_DONT_STRDUP_VAL);
 
     return 0;
 }
@@ -1354,7 +1394,7 @@ static int process_line(URLContext *h, char *line, int line_count, int *parsed_h
             av_free(s->mime_type);
             s->mime_type = av_get_token((const char **)&p, ";");
         } else if (!av_strcasecmp(tag, "Set-Cookie")) {
-            if (parse_cookie(s, p, &s->cookie_dict))
+            if (parse_cookie(s, p, s->host, &s->cookie_dict))
                 av_log(h, AV_LOG_WARNING, "Unable to parse '%s'\n", p);
         } else if (!av_strcasecmp(tag, "Icy-MetaInt")) {
             s->icy_metaint = strtoull(p, NULL, 10);
@@ -1393,8 +1433,7 @@ static int process_line(URLContext *h, char *line, int line_count, int *parsed_h
  *
  * @return a negative value if an error condition occurred, 0 otherwise
  */
-static int get_cookies(HTTPContext *s, char **cookies, const char *path,
-                       const char *domain)
+static int get_cookies(HTTPContext *s, char **cookies, const char *path)
 {
     // cookie strings will look like Set-Cookie header field values.  Multiple
     // Set-Cookie fields will result in multiple values delimited by a newline
@@ -1416,10 +1455,11 @@ static int get_cookies(HTTPContext *s, char **cookies, const char *path,
     while ((cookie = av_strtok(next, "\n", &saveptr)) && !ret) {
         AVDictionary *cookie_params = NULL;
         const AVDictionaryEntry *cookie_entry, *e;
+        const char *domain;
 
         next = NULL;
         // store the cookie in a dict in case it is updated in the response
-        if (parse_cookie(s, cookie, &s->cookie_dict))
+        if (parse_cookie(s, cookie, NULL, &s->cookie_dict))
             av_log(s, AV_LOG_WARNING, "Unable to parse '%s'\n", cookie);
 
         // continue on to the next cookie if this one cannot be parsed
@@ -1441,21 +1481,22 @@ static int get_cookies(HTTPContext *s, char **cookies, const char *path,
         }
 
         // if no domain in the cookie assume it applied to this request
-        if ((e = av_dict_get(cookie_params, "domain", NULL, 0)) && e->value) {
-            // find the offset comparison is on the min domain (b.com, not a.b.com)
-            int domain_offset = strlen(domain) - strlen(e->value);
-            if (domain_offset < 0)
-                goto skip_cookie;
+        domain = cookie_domain(cookie_params);
+        if (domain && !host_in_cookie_domain(s->host, domain))
+            goto skip_cookie;
 
-            // match the cookie domain
-            if (av_strcasecmp(&domain[domain_offset], e->value))
-                goto skip_cookie;
-        }
+        if ((e = av_dict_get(cookie_params, "@hostonly", NULL, 0)) && av_strcasecmp(e->value, s->host))
+            goto skip_cookie;
 
         // if a cookie path is provided, ensure the request path is within that path
         e = av_dict_get(cookie_params, "path", NULL, 0);
-        if (e && av_strncasecmp(path, e->value, strlen(e->value)))
-            goto skip_cookie;
+        if (e) {
+            size_t len = strlen(e->value);
+            if (av_strncasecmp(path, e->value, len) ||
+                (len && path[len] && path[len] != '/' && path[len] != '?' &&
+                 e->value[len - 1] != '/'))
+                goto skip_cookie;
+        }
 
         // cookie parameters match, so copy the value
         if (!*cookies) {
@@ -1689,7 +1730,7 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
         av_bprintf(&request, "Content-Type: %s\r\n", s->content_type);
     if (!has_header(s->headers, "\r\nCookie: ") && s->cookies) {
         char *cookies = NULL;
-        if (!get_cookies(s, &cookies, path, hoststr) && cookies) {
+        if (!get_cookies(s, &cookies, path) && cookies) {
             av_bprintf(&request, "Cookie: %s\r\n", cookies);
             av_free(cookies);
         }
@@ -2141,6 +2182,7 @@ static int http_close(URLContext *h)
     av_dict_free(&s->redirect_cache);
     av_freep(&s->new_location);
     av_freep(&s->uri);
+    av_freep(&s->host);
 
     av_log(h, AV_LOG_DEBUG, "Statistics: %d connection%s, %d request%s, %d retr%s, %d reconnection%s, %d redirect%s\n",
            s->nb_connections, s->nb_connections == 1 ? ""  : "s",

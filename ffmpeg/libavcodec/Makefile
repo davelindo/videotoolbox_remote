@@ -1382,25 +1382,7 @@ TESTPROGS = avcodec                                                     \
             codec_desc                                                  \
             htmlsubtitles                                               \
             jpeg2000dwt                                                 \
-            mathops
-
-TESTPROGS-$(CONFIG_VIDEOTOOLBOX_REMOTE)  += vtremote_proto
-
-VTREMOTE_COMMON-$(CONFIG_H264_VIDEOTOOLBOX_REMOTE_ENCODER) = yes
-VTREMOTE_COMMON-$(CONFIG_HEVC_VIDEOTOOLBOX_REMOTE_ENCODER) = yes
-VTREMOTE_COMMON-$(CONFIG_H264_VIDEOTOOLBOX_REMOTE_DECODER) = yes
-VTREMOTE_COMMON-$(CONFIG_HEVC_VIDEOTOOLBOX_REMOTE_DECODER) = yes
-VTREMOTE_ENC_COMMON-$(CONFIG_H264_VIDEOTOOLBOX_REMOTE_ENCODER) = yes
-VTREMOTE_ENC_COMMON-$(CONFIG_HEVC_VIDEOTOOLBOX_REMOTE_ENCODER) = yes
-VTREMOTE_DEC_COMMON-$(CONFIG_H264_VIDEOTOOLBOX_REMOTE_DECODER) = yes
-VTREMOTE_DEC_COMMON-$(CONFIG_HEVC_VIDEOTOOLBOX_REMOTE_DECODER) = yes
-OBJS-$(CONFIG_VIDEOTOOLBOX_REMOTE)        += vtremote_proto.o
-OBJS-$(VTREMOTE_ENC_COMMON-yes)           += vtremote_enc_common.o
-OBJS-$(VTREMOTE_DEC_COMMON-yes)           += vtremote_dec_common.o
-OBJS-$(CONFIG_H264_VIDEOTOOLBOX_REMOTE_ENCODER) += vtremote_h264.o
-OBJS-$(CONFIG_HEVC_VIDEOTOOLBOX_REMOTE_ENCODER) += vtremote_hevc.o
-OBJS-$(CONFIG_H264_VIDEOTOOLBOX_REMOTE_DECODER) += vtremote_h264_dec.o
-OBJS-$(CONFIG_HEVC_VIDEOTOOLBOX_REMOTE_DECODER) += vtremote_hevc_dec.o
+            mathops                                                    \
 
 TESTPROGS-$(CONFIG_AC3DSP)                += ac3
 TESTPROGS-$(CONFIG_APV_DECODER)           += apv
@@ -1411,6 +1393,7 @@ TESTPROGS-$(CONFIG_GOLOMB)                += golomb
 TESTPROGS-$(CONFIG_IDCTDSP)               += dct
 TESTPROGS-$(CONFIG_DXV_ENCODER)           += hashtable
 TESTPROGS-$(CONFIG_MJPEG_ENCODER)         += mjpegenc_huffman
+TESTPROGS-$(CONFIG_MPEGAUDIOHEADER)       += mpegaudiodecheader
 TESTPROGS-$(CONFIG_MPEGVIDEO)             += mpeg12framerate
 TESTPROGS-$(CONFIG_H264_METADATA_BSF)     += h264_levels
 TESTPROGS-$(CONFIG_HEVC_METADATA_BSF)     += h265_levels
