@@ -1,11 +1,5 @@
 # License
 
-VideoToolbox Remote Copyright (c) 2026 Dave Lindon (copyright@davelindon.me).
-
-The in-tree VA-API driver and experimental C protocol client are licensed
-under the GNU Lesser General Public License version 2.1 or later.
-
-
 Most files in FFmpeg are under the GNU Lesser General Public License version 2.1
 or later (LGPL v2.1+). Read the file `COPYING.LGPLv2.1` for details. Some other
 files have MIT/X11/BSD-style licenses. In combination the LGPL v2.1+ applies to
@@ -111,7 +105,7 @@ The following libraries are under LGPL version 3:
 When combining them with FFmpeg, use the configure option `--enable-version3` to
 upgrade FFmpeg to the LGPL v3.
 
-The VMAF, mbedTLS, RK MPI, OpenCORE and VisualOn libraries are under the Apache License
+The VMAF, mbedTLS, RK MPI, OpenCORE, VisualOn and libastcenc libraries are under the Apache License
 2.0. That license is incompatible with the LGPL v2.1 and the GPL v2, but not with
 version 3 of those licenses. So to combine these libraries with FFmpeg, the
 license version needs to be upgraded by passing `--enable-version3` to configure.
