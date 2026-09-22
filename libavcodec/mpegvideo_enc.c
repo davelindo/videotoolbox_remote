@@ -1301,6 +1301,13 @@ static int load_input_picture(MPVMainEncContext *const m, const AVFrame *pic_arg
         display_picture_number = m->input_picture_number++;
 
         if (pts != AV_NOPTS_VALUE) {
+            if (s->c.codec_id == AV_CODEC_ID_MPEG4 &&
+                (pts > INT64_MAX / 2 / s->c.avctx->time_base.num ||
+                 pts < INT64_MIN / 2 / s->c.avctx->time_base.num)) {
+                av_log(s->c.avctx, AV_LOG_ERROR, "pts %"PRId64" is out of the supported range\n", pts);
+                return AVERROR_PATCHWELCOME;
+            }
+
             if (m->user_specified_pts != AV_NOPTS_VALUE) {
                 int64_t last = m->user_specified_pts;
 
@@ -1721,6 +1728,12 @@ static int set_bframe_chain_length(MPVMainEncContext *const m)
                 return b_frames;
             }
         }
+
+        if (s->c.codec_id == AV_CODEC_ID_MPEG4)
+            while (b_frames &&
+                   m->input_picture[b_frames]->f->pts * s->c.avctx->time_base.num -
+                   s->c.last_non_b_time > UINT16_MAX)
+                b_frames--;
 
         for (int i = b_frames - 1; i >= 0; i--) {
             int type = m->input_picture[i]->f->pict_type;
@@ -3665,9 +3678,9 @@ static void set_frame_distances(MPVEncContext *const s)
         s->c.pb_time = s->c.pp_time - (s->c.last_non_b_time - s->c.time);
         av_assert1(s->c.pb_time > 0 && s->c.pb_time < s->c.pp_time);
     }else{
+        av_assert1(s->picture_number == 0 || s->c.time > s->c.last_non_b_time);
         s->c.pp_time = s->c.time - s->c.last_non_b_time;
         s->c.last_non_b_time = s->c.time;
-        av_assert1(s->picture_number == 0 || s->c.pp_time > 0);
     }
 }
 
@@ -3678,12 +3691,10 @@ static int encode_picture(MPVMainEncContext *const m, const AVPacket *pkt)
     int bits;
     int context_count = s->c.slice_context_count;
 
-    /* we need to initialize some time vars before we can encode B-frames */
-    // RAL: Condition added for MPEG1VIDEO
-    if (s->c.out_format == FMT_MPEG1 || (s->c.h263_pred && s->c.msmpeg4_version == MSMP4_UNUSED))
+    if (CONFIG_MPEG4_ENCODER && s->c.codec_id == AV_CODEC_ID_MPEG4) {
         set_frame_distances(s);
-    if (CONFIG_MPEG4_ENCODER && s->c.codec_id == AV_CODEC_ID_MPEG4)
         ff_set_mpeg4_time(s);
+    }
 
 //    s->lambda = s->c.cur_pic.ptr->quality; //FIXME qscale / ... stuff for ME rate distortion
 
