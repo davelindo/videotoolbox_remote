@@ -70,11 +70,7 @@ jobs:
             exit 1
           fi
 
-          latest_subtree_commit="$(git log HEAD --grep='git-subtree-dir: ffmpeg' --format=%H -n1)"
-          if [[ -z "${latest_subtree_commit}" ]]; then
-            echo "ERROR: no recorded ffmpeg subtree split found in git history" >&2
-            exit 1
-          fi
+          latest_subtree_commit="$(bash scripts/check_ffmpeg_subtree.sh)"
           latest_history_split="$(git show -s --format=%B "${latest_subtree_commit}" | sed -n 's/^git-subtree-split: //p' | tail -n1)"
           if [[ ! "${latest_history_split}" =~ ^[0-9a-f]{40}$ ]]; then
             echo "ERROR: latest ffmpeg subtree commit lacks a valid git-subtree-split trailer" >&2
@@ -151,6 +147,7 @@ jobs:
 
           subtree_body="$(git show -s --format=%B "${after_pull_head}")"
           squash_parent="$(git rev-parse "${after_pull_head}^2")"
+          test "$(bash scripts/check_ffmpeg_subtree.sh)" = "${squash_parent}"
           actual_split="$(git show -s --format=%B "${squash_parent}" | sed -n 's/^git-subtree-split: //p' | tail -n1)"
           if [[ "${actual_split}" != "${REMOTE_FULL_SHA}" ]]; then
             echo "ERROR: pulled subtree split ${actual_split:-<missing>} does not match resolved upstream ${REMOTE_FULL_SHA}" >&2

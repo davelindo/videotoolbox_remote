@@ -119,6 +119,13 @@ VTREMOTED=/bin/true tests/integration/bench_vtremote.sh
 
 ## GitHub Metadata and Release Notes
 
+FFmpeg sync uses a squashed upstream parent to preserve local changes in the
+vendored tree. Keep `git-subtree-dir` and `git-subtree-split` trailers on that
+upstream commit, not on the repository merge commit. Merge subtree updates and
+tracking repairs with a merge commit; squashing or rebasing the PR can discard
+the upstream parent. `bash scripts/check_ffmpeg_subtree.sh` checks the tracking
+record before CI builds and automated syncs.
+
 The repository includes small `gh`-based helpers for keeping the public GitHub surfaces in sync.
 
 Prerequisite:
