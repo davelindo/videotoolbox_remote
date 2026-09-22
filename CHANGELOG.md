@@ -9,6 +9,10 @@ The non-version `nightly` tag is intentionally excluded.
 
 ### Fixed
 
+- Restored pristine FFmpeg subtree tracking so automated upstream syncs preserve
+  the remote codecs, and reject malformed tracking records before building.
+- Selected the MSYS2 x264 library directly to avoid unrelated CLI dependencies
+  preventing Windows builds.
 - Released retained C SDK transport and parameter-set buffers when reconnecting
   after a terminal I/O failure.
 - Preserved VA-API input buffer lengths for map/fill/unmap submissions and
