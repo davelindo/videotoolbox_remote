@@ -352,22 +352,30 @@ static int dxva2_get_decoder_configuration(AVCodecContext *avctx, const GUID *de
     return ret;
 }
 
+static D3DFORMAT dxva2_map_sw_to_hw_format(enum AVPixelFormat pix_fmt)
+{
+    switch (pix_fmt) {
+    case AV_PIX_FMT_NV12:       return MKTAG('N', 'V', '1', '2');
+    case AV_PIX_FMT_P010:       return MKTAG('P', '0', '1', '0');
+    default:                    return D3DFMT_UNKNOWN;
+    }
+}
+
 static int dxva2_create_decoder(AVCodecContext *avctx)
 {
     FFDXVASharedContext *sctx = DXVA_SHARED_CONTEXT(avctx);
     GUID *guid_list;
     unsigned guid_count;
     GUID device_guid;
-    D3DFORMAT surface_format = avctx->sw_pix_fmt == AV_PIX_FMT_YUV420P10 ?
-                               MKTAG('P', '0', '1', '0') : MKTAG('N', 'V', '1', '2');
+    AVHWFramesContext *frames_ctx = (AVHWFramesContext*)avctx->hw_frames_ctx->data;
+    AVDXVA2FramesContext *frames_hwctx = frames_ctx->hwctx;
+    AVDXVA2DeviceContext *device_hwctx = frames_ctx->device_ctx->hwctx;
+    D3DFORMAT surface_format = dxva2_map_sw_to_hw_format(frames_ctx->sw_format);
     DXVA2_VideoDesc desc = { 0 };
     DXVA2_ConfigPictureDecode config;
     HRESULT hr;
     int ret;
     HANDLE device_handle;
-    AVHWFramesContext *frames_ctx = (AVHWFramesContext*)avctx->hw_frames_ctx->data;
-    AVDXVA2FramesContext *frames_hwctx = frames_ctx->hwctx;
-    AVDXVA2DeviceContext *device_hwctx = frames_ctx->device_ctx->hwctx;
 
     hr = IDirect3DDeviceManager9_OpenDeviceHandle(device_hwctx->devmgr,
                                                   &device_handle);
@@ -470,7 +478,16 @@ static DXGI_FORMAT d3d11va_map_sw_to_hw_format(enum AVPixelFormat pix_fmt)
     switch (pix_fmt) {
     case AV_PIX_FMT_NV12:       return DXGI_FORMAT_NV12;
     case AV_PIX_FMT_P010:       return DXGI_FORMAT_P010;
-    case AV_PIX_FMT_P012:       return DXGI_FORMAT_P016;
+    case AV_PIX_FMT_P012:
+    case AV_PIX_FMT_P016:       return DXGI_FORMAT_P016;
+    case AV_PIX_FMT_YUYV422:    return DXGI_FORMAT_YUY2;
+    case AV_PIX_FMT_Y210:       return DXGI_FORMAT_Y210;
+    case AV_PIX_FMT_Y212:
+    case AV_PIX_FMT_Y216:       return DXGI_FORMAT_Y216;
+    case AV_PIX_FMT_VUYX:       return DXGI_FORMAT_AYUV;
+    case AV_PIX_FMT_XV30:       return DXGI_FORMAT_Y410;
+    case AV_PIX_FMT_XV36:
+    case AV_PIX_FMT_XV48:       return DXGI_FORMAT_Y416;
     case AV_PIX_FMT_YUV420P:    return DXGI_FORMAT_420_OPAQUE;
     default:                    return DXGI_FORMAT_UNKNOWN;
     }
@@ -643,6 +660,12 @@ int ff_dxva2_common_frame_params(AVCodecContext *avctx,
     switch (avctx->sw_pix_fmt) {
     case AV_PIX_FMT_YUV420P10: frames_ctx->sw_format = AV_PIX_FMT_P010; break;
     case AV_PIX_FMT_YUV420P12: frames_ctx->sw_format = AV_PIX_FMT_P012; break;
+    case AV_PIX_FMT_YUV422P:   frames_ctx->sw_format = AV_PIX_FMT_YUYV422; break;
+    case AV_PIX_FMT_YUV422P10: frames_ctx->sw_format = AV_PIX_FMT_Y210; break;
+    case AV_PIX_FMT_YUV422P12: frames_ctx->sw_format = AV_PIX_FMT_Y212; break;
+    case AV_PIX_FMT_YUV444P:   frames_ctx->sw_format = AV_PIX_FMT_VUYX; break;
+    case AV_PIX_FMT_YUV444P10: frames_ctx->sw_format = AV_PIX_FMT_XV30; break;
+    case AV_PIX_FMT_YUV444P12: frames_ctx->sw_format = AV_PIX_FMT_XV36; break;
     default:                   frames_ctx->sw_format = AV_PIX_FMT_NV12; break;
     }
     frames_ctx->width = FFALIGN(avctx->coded_width, surface_alignment);
@@ -662,7 +685,7 @@ int ff_dxva2_common_frame_params(AVCodecContext *avctx,
     if (frames_ctx->format == AV_PIX_FMT_D3D11) {
         AVD3D11VAFramesContext *frames_hwctx = frames_ctx->hwctx;
 
-        frames_hwctx->BindFlags |= D3D11_BIND_DECODER;
+        frames_hwctx->BindFlags |= D3D11_BIND_DECODER | D3D11_BIND_SHADER_RESOURCE;
     }
 #endif
 

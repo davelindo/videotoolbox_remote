@@ -23,6 +23,11 @@ The non-version `nightly` tag is intentionally excluded.
 - Copied complete NV12 and P010 chroma pairs for odd-width image uploads and
   downloads without touching row padding.
 
+## [v0.9.2] - 2026-09-23
+
+### Changed
+- Rebased the vendored `ffmpeg/` subtree to upstream `master` snapshot `dc5242441917` (from `8b34c36e61ed`).
+
 ## [v0.9.1] - 2026-09-22
 
 ### Changed

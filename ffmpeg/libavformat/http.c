@@ -1092,7 +1092,10 @@ static int parse_set_cookie(const char *set_cookie, AVDictionary **dict)
         next_param = NULL;
         param += strspn(param, WHITESPACES);
         if ((name = av_strtok(param, "=", &value))) {
-            if (av_dict_set(dict, name, value, 0) < 0) {
+            char *end = name + strlen(name);
+            while (end > name && strchr(WHITESPACES, end[-1]))
+                *--end = '\0';
+            if (av_dict_set(dict, name, value ? value : "", 0) < 0) {
                 av_free(cstr);
                 return -1;
             }
@@ -1111,12 +1114,17 @@ static const char *cookie_domain(const AVDictionary *cookie_params)
     return *domain ? domain : NULL;
 }
 
+static int host_is_ip_literal(const char *host)
+{
+    return !host[strspn(host, "0123456789.")] || strchr(host, ':');
+}
+
 static int host_in_cookie_domain(const char *host, const char *domain)
 {
     int offset = strlen(host) - strlen(domain);
 
     return offset >= 0 && !av_strcasecmp(host + offset, domain) &&
-           (!offset || host[offset - 1] == '.');
+           (!offset || (host[offset - 1] == '.' && !host_is_ip_literal(host)));
 }
 
 static int parse_cookie(HTTPContext *s, const char *p, const char *host,
@@ -1455,7 +1463,7 @@ static int get_cookies(HTTPContext *s, char **cookies, const char *path)
     while ((cookie = av_strtok(next, "\n", &saveptr)) && !ret) {
         AVDictionary *cookie_params = NULL;
         const AVDictionaryEntry *cookie_entry, *e;
-        const char *domain;
+        const char *domain, *eql;
 
         next = NULL;
         // store the cookie in a dict in case it is updated in the response
@@ -1468,8 +1476,14 @@ static int get_cookies(HTTPContext *s, char **cookies, const char *path)
 
         // if the cookie has no value, skip it
         cookie_entry = av_dict_iterate(cookie_params, NULL);
-        if (!cookie_entry || !cookie_entry->value)
+        eql = strchr(cookie, '=');
+        if (!cookie_entry || !eql || eql == cookie + strspn(cookie, WHITESPACES) ||
+            memchr(cookie, ';', eql - cookie))
             goto skip_cookie;
+
+        for (e = cookie_entry; (e = av_dict_iterate(cookie_params, e)); )
+            if (!av_strcasecmp(e->key, "secure") && !av_stristart(s->location, "https:", NULL))
+                goto skip_cookie;
 
         // if the cookie has expired, don't add it
         if ((e = av_dict_get(cookie_params, "expires", NULL, 0)) && e->value) {
@@ -1492,7 +1506,7 @@ static int get_cookies(HTTPContext *s, char **cookies, const char *path)
         e = av_dict_get(cookie_params, "path", NULL, 0);
         if (e) {
             size_t len = strlen(e->value);
-            if (av_strncasecmp(path, e->value, len) ||
+            if (strncmp(path, e->value, len) ||
                 (len && path[len] && path[len] != '/' && path[len] != '?' &&
                  e->value[len - 1] != '/'))
                 goto skip_cookie;
@@ -1730,7 +1744,7 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
         av_bprintf(&request, "Content-Type: %s\r\n", s->content_type);
     if (!has_header(s->headers, "\r\nCookie: ") && s->cookies) {
         char *cookies = NULL;
-        if (!get_cookies(s, &cookies, path) && cookies) {
+        if (!get_cookies(s, &cookies, local_path) && cookies) {
             av_bprintf(&request, "Cookie: %s\r\n", cookies);
             av_free(cookies);
         }
