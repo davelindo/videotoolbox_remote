@@ -83,6 +83,8 @@ typedef struct VulkanEncodeFFv1Context {
     /* Slice data buffer pool */
     AVRefStructPool *slice_data_pool;
     FFVkBuffer *keyframe_slice_data_ref;
+    VkSemaphore prev_sem;
+    uint64_t prev_sem_val;
 
     /* Remap data pool */
     AVRefStructPool *remap_data_pool;
@@ -476,6 +478,13 @@ static int vulkan_encode_ffv1_submit_frame(AVCodecContext *avctx,
                                      VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT));
 
+    /* Inter frames continue the state the previous frame wrote */
+    if (!f->key_frame)
+        ff_vk_exec_add_dep_wait_sem(&fv->s, exec, fv->prev_sem, fv->prev_sem_val,
+                                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+    fv->prev_sem     = exec->sem;
+    fv->prev_sem_val = exec->sem_value;
+
     if (fv->optimize_rct || f->remap_mode) {
         /* Prepare the frame for reading */
         ff_vk_frame_barrier(&fv->s, exec, src, img_bar, &nb_img_bar,
@@ -536,12 +545,12 @@ static int vulkan_encode_ffv1_submit_frame(AVCodecContext *avctx,
                                     slice_data_buf,
                                     0, slice_data_size*f->slice_count,
                                     VK_FORMAT_UNDEFINED);
-    if (f->remap_mode)
-        ff_vk_shader_update_desc_buffer(&fv->s, exec,
-                                        &fv->setup, 1, 1, 0,
-                                        remap_data_buf,
-                                        0, remap_data_size*f->slice_count,
-                                        VK_FORMAT_UNDEFINED);
+    /* The remap table is only read in remap mode, but must be a valid buffer */
+    ff_vk_shader_update_desc_buffer(&fv->s, exec,
+                                    &fv->setup, 1, 1, 0,
+                                    f->remap_mode ? remap_data_buf : slice_data_buf,
+                                    0, VK_WHOLE_SIZE,
+                                    VK_FORMAT_UNDEFINED);
 
     ff_vk_exec_bind_shader(&fv->s, exec, &fv->setup);
     ff_vk_shader_update_push_const(&fv->s, exec, &fv->setup,
