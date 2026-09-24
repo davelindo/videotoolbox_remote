@@ -107,6 +107,9 @@ typedef struct VulkanDeviceFeatures {
 #ifdef VK_KHR_maintenance9
     VkPhysicalDeviceMaintenance9FeaturesKHR maintenance_9;
 #endif
+#ifdef VK_KHR_maintenance11
+    VkPhysicalDeviceMaintenance11FeaturesKHR maintenance_11;
+#endif
 #ifdef VK_KHR_unified_image_layouts
     VkPhysicalDeviceUnifiedImageLayoutsFeaturesKHR unified_layouts;
 #endif
@@ -181,6 +184,9 @@ typedef struct VulkanDevicePriv {
 
     /* Prefer memcpy over dynamic host pointer imports */
     int avoid_host_import;
+
+    /* Alignment the transfer queue needs for buffer offsets in image copies */
+    int transfer_offset_align;
 
     /* Maximum queues */
     int limit_queues;
@@ -286,6 +292,10 @@ static void device_features_init(AVHWDeviceContext *ctx, VulkanDeviceFeatures *f
 #ifdef VK_KHR_maintenance9
     FF_VK_STRUCT_EXT(s, &feats->device, &feats->maintenance_9, FF_VK_EXT_MAINTENANCE_9,
                      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_9_FEATURES_KHR);
+#endif
+#ifdef VK_KHR_maintenance11
+    FF_VK_STRUCT_EXT(s, &feats->device, &feats->maintenance_11, FF_VK_EXT_MAINTENANCE_11,
+                     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_11_FEATURES_KHR);
 #endif
 #ifdef VK_KHR_unified_image_layouts
     FF_VK_STRUCT_EXT(s, &feats->device, &feats->unified_layouts, FF_VK_EXT_UNIFIED_IMAGE_LAYOUTS,
@@ -439,6 +449,9 @@ static void device_features_copy_needed(VulkanDeviceFeatures *dst, VulkanDeviceF
 
 #ifdef VK_KHR_maintenance9
     COPY_VAL(maintenance_9.maintenance9);
+#endif
+#ifdef VK_KHR_maintenance11
+    COPY_VAL(maintenance_11.maintenance11);
 #endif
 #ifdef VK_KHR_unified_image_layouts
     COPY_VAL(unified_layouts.unifiedImageLayouts);
@@ -772,6 +785,9 @@ static const VulkanOptExtension optional_device_exts[] = {
 #endif
 #ifdef VK_KHR_maintenance9
     { VK_KHR_MAINTENANCE_9_EXTENSION_NAME,                    FF_VK_EXT_MAINTENANCE_9          },
+#endif
+#ifdef VK_KHR_maintenance11
+    { VK_KHR_MAINTENANCE_11_EXTENSION_NAME,                   FF_VK_EXT_MAINTENANCE_11         },
 #endif
 #ifdef VK_KHR_unified_image_layouts
     { VK_KHR_UNIFIED_IMAGE_LAYOUTS_EXTENSION_NAME,            FF_VK_EXT_UNIFIED_IMAGE_LAYOUTS  },
@@ -2129,6 +2145,18 @@ FF_ENABLE_DEPRECATION_WARNINGS
     ff_vk_load_props(&p->vkctx);
     p->compute_qf = ff_vk_qf_find(&p->vkctx, VK_QUEUE_COMPUTE_BIT, 0);
     p->transfer_qf = ff_vk_qf_find(&p->vkctx, VK_QUEUE_TRANSFER_BIT, 0);
+
+    /* Transfer-only queues need 4-byte aligned buffer offsets in image copies */
+    p->transfer_offset_align = 1;
+    if (p->transfer_qf) {
+        VkQueueFlags flags = p->vkctx.qf_props[p->transfer_qf->idx].queueFamilyProperties.queueFlags;
+        if (!(flags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)))
+            p->transfer_offset_align = 4;
+    }
+#ifdef VK_KHR_maintenance11
+    if (p->vkctx.maintenance_11_feats.maintenance11)
+        p->transfer_offset_align = 1;
+#endif
 
     /* Re-query device capabilities, in case the device was created externally */
     vk->GetPhysicalDeviceMemoryProperties(hwctx->phys_dev, &p->mprops);
@@ -4762,6 +4790,7 @@ static int host_map_frame(AVHWFramesContext *hwfc, FFVkBuffer **dst, int *nb_buf
 
     int nb_src_bufs;
     const int planes = av_pix_fmt_count_planes(swf->format);
+    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(swf->format);
     VkBufferUsageFlags buf_usage = upload ? VK_BUFFER_USAGE_TRANSFER_SRC_BIT :
                                             VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
@@ -4796,6 +4825,17 @@ static int host_map_frame(AVHWFramesContext *hwfc, FFVkBuffer **dst, int *nb_buf
     } else {
         /* Weird layout (3 planes, 2 buffers), patch welcome, fallback to copy */
         return AVERROR_PATCHWELCOME;
+    }
+
+    /* Buffer-image copies need offsets aligned to the texel block, and
+     * transfer-only queues to 4 bytes; stage anything else, including
+     * texel blocks that are not a power of two */
+    for (int i = 0; i < planes; i++) {
+        int align = FFMAX(desc->comp[i].step, p->transfer_offset_align);
+        if ((align & (align - 1)) || (region[i].bufferOffset & (align - 1))) {
+            err = AVERROR(EINVAL);
+            goto fail;
+        }
     }
 
     return 0;
