@@ -7,8 +7,22 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
+## [v0.9.9] - 2026-10-01
+
 ### Fixed
 
+- Prevented upstream Snow FATE additions from conflicting with the local
+  remote-protocol test during automated FFmpeg subtree syncs.
+- Escaped generated transcode filter options so combined host/port values and
+  authentication tokens with punctuation reach the remote server intact.
+- Joined complementary H.264 PAFF field packets before remote transcoding,
+  preserving packet timing and side data and rejecting incomplete field pairs.
+- Refreshed H.264 decoder formats when in-band sequence parameters change,
+  draining delayed pictures before recreating the VideoToolbox decoder.
+- Forwarded synchronous decode and reorder-depth options from the CLI and
+  preserved transcode presentation order in both decoder modes.
+- Built the Plex transcode filter's H.264 parser from its matching FFmpeg 6.1.1
+  SDK instead of relying on private parser symbols exported by Plex.
 - Restored pristine FFmpeg subtree tracking so automated upstream syncs preserve
   the remote codecs, and reject malformed tracking records before building.
 - Selected the MSYS2 x264 library directly to avoid unrelated CLI dependencies
