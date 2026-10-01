@@ -7,6 +7,15 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
+## [v0.9.10] - 2026-10-01
+
+### Fixed
+
+- Aligned the daemon's reported version with the release metadata and made
+  automated FFmpeg syncs update it alongside the changelog and documentation.
+- Rejected release metadata drift and tagged daemon archives that report a
+  different version from their release tag.
+
 ## [v0.9.9] - 2026-10-01
 
 ### Fixed
