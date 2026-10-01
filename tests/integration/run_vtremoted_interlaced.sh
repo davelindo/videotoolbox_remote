@@ -68,3 +68,37 @@ FRAMES="$("$FFPROBE_BIN" -v error -select_streams v:0 -count_frames \
   -show_entries stream=nb_read_frames -of csv=p=0 "$OUTPUT")"
 [[ "$FRAMES" == "25" ]] || { echo "ERROR: local decode: expected 25 frames, got ${FRAMES}" >&2; exit 1; }
 echo "OK: local decode + bwdif + remote encode: 25 frames"
+
+# Keep real in-band SPS/PPS changes while giving each segment continuous DTS.
+# A decoder configured for the first progressive segment must be rebuilt when
+# interlaced coding changes the sequence parameters, then switch back again.
+INPUT="${RUN_DIR}/scan-switch.ts"
+"$FFMPEG_LOCAL_BIN" -hide_banner -v error -y -dts_delta_threshold 0.1 \
+  -i "concat:${RUN_DIR}/progressive.ts|${RUN_DIR}/tff.ts|${RUN_DIR}/bff.ts|${RUN_DIR}/progressive.ts" \
+  -map 0:v:0 -c:v copy "$INPUT"
+for asynchronous in 0 1; do
+  OUTPUT="${RUN_DIR}/scan-switch-async${asynchronous}-out.mp4"
+  CLIENT_LOG="${RUN_DIR}/scan-switch-async${asynchronous}-client.log"
+  "$FFMPEG_BIN" -hide_banner -v verbose -xerror -y -i "$INPUT" -map 0:v:0 -c:v copy \
+    -vt_remote_transcode:v:0 -vt_remote_host "$VTREMOTE_HOST" -vt_remote_port "$VTREMOTE_PORT" \
+    -vt_remote_decode_async "$asynchronous" -vt_remote_out_codec:v:0 h264 -b:v 8M -g:v 25 \
+    "$OUTPUT" >"$CLIENT_LOG" 2>&1
+  "$FFMPEG_LOCAL_BIN" -hide_banner -v error -xerror -i "$OUTPUT" -f null -
+  FRAMES="$("$FFPROBE_BIN" -v error -select_streams v:0 -count_frames \
+    -show_entries stream=nb_read_frames -of csv=p=0 "$OUTPUT")"
+  [[ "$FRAMES" == "100" ]] || { echo "ERROR: scan switch: expected 100 frames, got ${FRAMES}" >&2; exit 1; }
+  QUALITY_LOG="${RUN_DIR}/scan-switch-async${asynchronous}-ssim.log"
+  "$FFMPEG_LOCAL_BIN" -hide_banner -v info -i "$INPUT" -i "$OUTPUT" \
+    -lavfi '[0:v]setpts=N/(25*TB),format=yuv420p[ref];[1:v]setpts=N/(25*TB),format=yuv420p[out];[ref][out]ssim=shortest=1' \
+    -an -f null - >"$QUALITY_LOG" 2>&1
+  python3 - "$QUALITY_LOG" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+log = Path(sys.argv[1])
+match = re.search(r"SSIM .*All:([0-9.]+)", log.read_text())
+assert match and float(match[1]) > 0.95, f"scan switch pixel/order mismatch: {log}"
+PY
+  echo "OK: progressive -> tff -> bff -> progressive, async=${asynchronous}: 100 frames; pixel comparison passed"
+done

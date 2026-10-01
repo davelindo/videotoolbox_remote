@@ -10,6 +10,7 @@ set -euo pipefail
 #   VTREMOTE_RUN_OBS_PLUGIN=1 include obs-plugin smoke + libobs integration tests
 #   VTREMOTE_RUN_OPTION_PARITY=1 include local-vs-remote encoder option parity check
 #   VTREMOTE_RUN_INTERLACED=1  include synthetic interlaced H.264 checks
+#   VTREMOTE_RUN_PAFF=1       include PAFF conformance fixtures (downloads on first run)
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
@@ -69,6 +70,11 @@ run_step "vtremoted_hdr_side_data" bash "${ROOT}/tests/integration/run_vtremoted
 run_step "transcode_test"      bash "${ROOT}/tests/integration/run_transcode_test.sh"
 if [[ "${VTREMOTE_RUN_INTERLACED:-0}" != "0" ]]; then
   run_step "vtremoted_interlaced" bash "${ROOT}/tests/integration/run_vtremoted_interlaced.sh"
+fi
+if [[ "${VTREMOTE_RUN_PAFF:-0}" != "0" ]]; then
+  run_step "vtremoted_paff" python3 "${ROOT}/tests/integration/run_vtremoted_paff.py" \
+    --ffmpeg "$FFMPEG_BIN" --daemon "$VTREMOTED" \
+    --local-ffmpeg "${FFMPEG_LOCAL_BIN:-ffmpeg}" --ffprobe "${FFPROBE_LOCAL_BIN:-ffprobe}"
 fi
 if [[ "${VTREMOTE_RUN_OPTION_PARITY:-0}" != "0" ]]; then
   run_step "option_surface_parity" bash "${ROOT}/tests/integration/run_option_surface_parity.sh"

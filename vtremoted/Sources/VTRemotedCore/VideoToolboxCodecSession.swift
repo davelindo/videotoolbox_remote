@@ -415,11 +415,9 @@
                 let enforceMonotonicPts = encodeReorderBySeq
                 timestampTracker.reset(enforceMonotonicPts: enforceMonotonicPts)
                 decodeAsyncEnabled = configuration.options.decodeAsync != 0
-                if decodeAsyncEnabled {
-                    let depth = configuration.options.decodeReorderDepth
-                    decodeReorderDepth = depth >= 0 ? depth : 2
-                    transcodeReorderBuffer = DecodeReorderBuffer(depth: decodeReorderDepth)
-                }
+                let depth = configuration.options.decodeReorderDepth
+                decodeReorderDepth = depth >= 0 ? depth : 2
+                transcodeReorderBuffer = DecodeReorderBuffer(depth: decodeReorderDepth)
                 try setupDecoder(configuration)
                 try setupEncoder(configuration, codec: encoderCodec)
                 setupTranscodeTransfer(configuration)
@@ -920,10 +918,6 @@
             try failure.check()
             guard let config else { throw VTRemotedError.protocolViolation("PACKET before CONFIGURE") }
             guard config.mode == .decode || config.mode == .transcode else { return }
-            guard let session = decompressionSession, let fmt = formatDescription else {
-                throw VTRemotedError.videoToolboxUnavailable
-            }
-
             var reader = ByteReader(payload)
             let ptsTicks = try Int64(bitPattern: reader.readBEUInt64())
             let dtsTicks = try Int64(bitPattern: reader.readBEUInt64())
@@ -932,6 +926,13 @@
             let dataLen = try Int(reader.readBEUInt32())
             let annexB = try reader.readBytes(count: dataLen)
             let sideData = try Self.readWireSideData(&reader)
+
+            if config.codec == .h264 {
+                try updateH264DecoderFormat(annexB, config: config)
+            }
+            guard let session = decompressionSession, let fmt = formatDescription else {
+                throw VTRemotedError.videoToolboxUnavailable
+            }
             storePendingDecodeSideData(ptsTicks: ptsTicks, sideData: sideData)
 
             let lengthPrefixed = AnnexB.toLengthPrefixed(annexB, lengthSize: nalLengthField)
@@ -1060,12 +1061,10 @@
             transcodeTransferSession = nil
             transcodeOutputPool = nil
             transcodeNeedsTransfer = false
-            if decodeAsyncEnabled {
-                callbackLock.lock()
-                decodeReorderBuffer = nil
-                transcodeReorderBuffer = nil
-                callbackLock.unlock()
-            }
+            callbackLock.lock()
+            decodeReorderBuffer = nil
+            transcodeReorderBuffer = nil
+            callbackLock.unlock()
         }
 
         // MARK: - Encoder
@@ -2202,26 +2201,17 @@
             let payload = TranscodeFramePayload(pixelBuffer: pixelBuffer, durTicks: durTicks, sideData: sideData)
 
             callbackLock.lock()
-            let frames: [ReorderedDecodedFrame<TranscodeFramePayload>]
-            if !decodeAsyncEnabled {
-                let frame = ReorderedDecodedFrame(originalPtsTicks: ptsTicks,
-                                                  ptsTicks: ptsTicks,
-                                                  durTicks: durTicks,
-                                                  payload: payload,
-                                                  clamped: false)
-                frames = [frame]
-            } else {
-                if transcodeReorderBuffer == nil {
-                    transcodeReorderBuffer = DecodeReorderBuffer(depth: decodeReorderDepth)
-                }
-                frames = transcodeReorderBuffer?.enqueue(ptsTicks: ptsTicks, durTicks: durTicks, payload: payload) ?? []
+            // Synchronous callbacks can still arrive in decode order for B-frames.
+            // Presentation ordering is independent of asynchronous decompression.
+            if transcodeReorderBuffer == nil {
+                transcodeReorderBuffer = DecodeReorderBuffer(depth: decodeReorderDepth)
             }
+            let frames = transcodeReorderBuffer?.enqueue(ptsTicks: ptsTicks, durTicks: durTicks, payload: payload) ?? []
             callbackLock.unlock()
             encodeTranscodeFrames(frames)
         }
 
         private func flushDecodedFrames() {
-            guard decodeAsyncEnabled else { return }
             if config?.mode == .transcode {
                 callbackLock.lock()
                 let frames = transcodeReorderBuffer?.flush() ?? []
@@ -2229,6 +2219,7 @@
                 encodeTranscodeFrames(frames)
                 return
             }
+            guard decodeAsyncEnabled else { return }
             callbackLock.lock()
             let frames = decodeReorderBuffer?.flush() ?? []
             callbackLock.unlock()
@@ -2380,12 +2371,80 @@
                 throw VTRemotedError.videoToolboxUnavailable
             }
 
+            try createDecoder(config, format: fmt)
+        }
+
+        private func h264ParameterSets(_ format: CMFormatDescription) throws -> [Data] {
+            var count = 0
+            var pointer: UnsafePointer<UInt8>?
+            var size = 0
+            var sets: [Data] = []
+            try checkStatus(CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                format, parameterSetIndex: 0, parameterSetPointerOut: &pointer,
+                parameterSetSizeOut: &size, parameterSetCountOut: &count,
+                nalUnitHeaderLengthOut: nil
+            ), "read H.264 parameter sets")
+            for index in 0 ..< count {
+                try checkStatus(CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                    format, parameterSetIndex: index, parameterSetPointerOut: &pointer,
+                    parameterSetSizeOut: &size, parameterSetCountOut: nil,
+                    nalUnitHeaderLengthOut: nil
+                ), "read H.264 parameter set")
+                guard let pointer, size > 0 else {
+                    throw VTRemotedError.protocolViolation("empty H.264 parameter set")
+                }
+                sets.append(Data(bytes: pointer, count: size))
+            }
+            return sets
+        }
+
+        private func updateH264DecoderFormat(_ annexB: Data, config: SessionConfiguration) throws {
+            let parameterSets = AnnexB.splitNALUnits(annexB).filter {
+                guard let byte = $0.first else { return false }
+                let type = byte & 0x1F
+                return type == 7 || type == 8
+            }
+            guard !parameterSets.isEmpty, let currentFormat = formatDescription,
+                  let currentSession = decompressionSession else { return }
+            let currentSets = try h264ParameterSets(currentFormat)
+            guard !parameterSets.allSatisfy({ currentSets.contains($0) }) else { return }
+
+            // Put updated sets first; unchanged SPS/PPS supply the missing half
+            // when a packet updates only one kind of parameter set.
+            let nextFormat = try formatDescriptionH264(units: parameterSets + currentSets,
+                                                       nalLength: nalLengthField)
+            let changedSPS = parameterSets.contains {
+                $0.first.map { $0 & 0x1F == 7 } == true && !currentSets.contains($0)
+            }
+            if !changedSPS, VTDecompressionSessionCanAcceptFormatDescription(currentSession,
+                                                                            formatDescription: nextFormat) {
+                // PPS changes may occur between fields and reference pictures;
+                // keep the decoder's reference state when it accepts the update.
+                formatDescription = nextFormat
+                return
+            }
+            // Release delayed pictures with the old format before replacing the
+            // decoder. A progressive/interlaced transition can change which
+            // VideoToolbox decoder is suitable even when dimensions stay equal.
+            try flushDecoder()
+            try failure.check()
+            VTDecompressionSessionInvalidate(currentSession)
+            decompressionSession = nil
+            formatDescription = nextFormat
+            try createDecoder(config, format: nextFormat)
+            logger.info("DECODE reconfigured H.264 parameter sets")
+        }
+
+        private func createDecoder(_ config: SessionConfiguration, format fmt: CMFormatDescription) throws {
             var callback = VTDecompressionOutputCallbackRecord(
-                decompressionOutputCallback: { refCon, _, status, _, imageBuffer, pts, duration in
+                decompressionOutputCallback: { refCon, _, status, flags, imageBuffer, pts, duration in
                     let unmanaged = Unmanaged<VideoToolboxCodecSession>.fromOpaque(refCon!)
                     let session = unmanaged.takeUnretainedValue()
                     guard status == noErr, let img = imageBuffer else {
-                        session.fail(VTRemotedError.ioError(code: Int32(status), message: "decoder callback produced no frame"))
+                        let detail = "decoder callback produced no frame " +
+                            "(flags=\(flags.rawValue) image=\(imageBuffer != nil) " +
+                            "pts=\(pts.value)/\(pts.timescale) duration=\(duration.value)/\(duration.timescale))"
+                        session.fail(VTRemotedError.ioError(code: Int32(status), message: detail))
                         return
                     }
                     session.handleDecodedFrame(pixelBuffer: img, pts: pts, duration: duration)
@@ -2409,6 +2468,19 @@
             guard status == noErr, let session = decompressionSessionPtr else {
                 throw VTRemotedError.ioError(code: Int32(status), message: "VTDecompressionSessionCreate failed")
             }
+
+            var usingHardware: CFTypeRef?
+            let hardwareStatus = withUnsafeMutablePointer(to: &usingHardware) { pointer in
+                VTSessionCopyProperty(
+                    session,
+                    key: kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder,
+                    allocator: kCFAllocatorDefault,
+                    valueOut: UnsafeMutableRawPointer(pointer)
+                )
+            }
+            let hardwareDescription = hardwareStatus == noErr ?
+                String(describing: usingHardware) : "unknown(status=\(hardwareStatus))"
+            logger.info("DECODE codec=\(config.codec) hardware=\(hardwareDescription) async=\(decodeAsyncEnabled)")
             
             // Apply RealTime property
             let isRealtime: CFBoolean

@@ -58,6 +58,8 @@ static const char *const vtremote_transcode_opt_keys[] = {
     "vt_remote_token",
     "vt_remote_timeout_ms",
     "vt_remote_inflight",
+    "vt_remote_decode_async",
+    "vt_remote_decode_reorder_depth",
     "vt_remote_log_level",
     "vt_remote_out_codec",
     "vt_remote_pix_fmt",
