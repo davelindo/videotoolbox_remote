@@ -59,10 +59,34 @@ if(VTREMOTE_PLEX_FFMPEG_SOURCE_DIR)
         message(FATAL_ERROR
             "VTREMOTE_PLEX_FFMPEG_SOURCE_DIR must be an FFmpeg 6.1 tree after configure")
     endif()
+    file(STRINGS "${VTREMOTE_PLEX_FFMPEG_SOURCE_DIR}/config.h"
+        plex_cbs_h264 REGEX "^#define CONFIG_CBS_H264 1$")
+    if(NOT plex_cbs_h264)
+        message(FATAL_ERROR
+            "Configure the Plex FFmpeg tree with --enable-bsf=h264_metadata for H.264 field parsing")
+    endif()
+    # Plex hides its private codec helpers. Compile CBS from the same 6.1 SDK
+    # as the module's ABI headers instead of depending on hidden runtime symbols
+    # or mixing the repository's newer codec structures with the Plex SDK.
+    add_library(vtremote_plex_h264_parser OBJECT
+        ${VTREMOTE_PLEX_FFMPEG_SOURCE_DIR}/libavcodec/cbs.c
+        ${VTREMOTE_PLEX_FFMPEG_SOURCE_DIR}/libavcodec/cbs_h2645.c
+        ${VTREMOTE_PLEX_FFMPEG_SOURCE_DIR}/libavcodec/cbs_sei.c
+        ${VTREMOTE_PLEX_FFMPEG_SOURCE_DIR}/libavcodec/h2645_parse.c
+        ${VTREMOTE_PLEX_FFMPEG_SOURCE_DIR}/libavcodec/refstruct.c
+    )
+    target_include_directories(vtremote_plex_h264_parser SYSTEM PRIVATE
+        ${VTREMOTE_PLEX_FFMPEG_SOURCE_DIR})
+    target_compile_definitions(vtremote_plex_h264_parser PRIVATE HAVE_AV_CONFIG_H=1)
+    set_target_properties(vtremote_plex_h264_parser PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+        C_VISIBILITY_PRESET hidden
+    )
     add_library(vtremote_plex_bsf SHARED
         tools/plex-vtremote-bsf.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../ffmpeg/libavcodec/bsf/vtremote_transcode.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../ffmpeg/libavcodec/vtremote_proto.c
+        $<TARGET_OBJECTS:vtremote_plex_h264_parser>
     )
     target_include_directories(vtremote_plex_bsf SYSTEM PRIVATE
         ${VTREMOTE_PLEX_FFMPEG_SOURCE_DIR}
@@ -72,7 +96,7 @@ if(VTREMOTE_PLEX_FFMPEG_SOURCE_DIR)
         ${CMAKE_DL_LIBS}
         Threads::Threads
     )
-    target_compile_definitions(vtremote_plex_bsf PRIVATE _POSIX_C_SOURCE=200809L)
+    target_compile_definitions(vtremote_plex_bsf PRIVATE _POSIX_C_SOURCE=200809L HAVE_AV_CONFIG_H=1)
     target_compile_options(vtremote_plex_bsf PRIVATE
         ${VTREMOTE_WARNING_FLAGS}
         -Wno-missing-field-initializers

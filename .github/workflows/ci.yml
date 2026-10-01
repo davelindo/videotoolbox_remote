@@ -617,7 +617,7 @@ jobs:
             | sha256sum -c -
           tar -xJf /tmp/ffmpeg.tar.xz -C /tmp
           cd /tmp/ffmpeg-6.1.1
-          ./configure --disable-everything --disable-x86asm --disable-doc
+          ./configure --disable-everything --disable-x86asm --disable-doc --enable-bsf=h264_metadata
           make libavutil/ffversion.h
       - name: Build, test, and package
         run: |

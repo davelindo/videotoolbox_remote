@@ -28,7 +28,7 @@ RUN curl -fL --retry 3 -o /tmp/ffmpeg.tar.xz \
     && echo "${PLEX_FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c - \
     && tar -xJf /tmp/ffmpeg.tar.xz -C /tmp \
     && cd "/tmp/ffmpeg-${PLEX_FFMPEG_VERSION}" \
-    && ./configure --disable-everything --disable-x86asm --disable-doc \
+    && ./configure --disable-everything --disable-x86asm --disable-doc --enable-bsf=h264_metadata \
     && make libavutil/ffversion.h \
     && rm /tmp/ffmpeg.tar.xz
 WORKDIR /src
