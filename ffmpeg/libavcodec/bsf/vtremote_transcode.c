@@ -1543,8 +1543,10 @@ static int vtremote_h264_single_field(VTRemoteTranscodeContext *s,
         }
         if (!found) {
             *field = (VTRemoteH264Field) {
-                slice->frame_num, slice->pic_parameter_set_id,
-                slice->bottom_field_flag, !!slice->nal_unit_header.nal_ref_idc,
+                .frame_num = slice->frame_num,
+                .pps_id = slice->pic_parameter_set_id,
+                .bottom = slice->bottom_field_flag,
+                .reference = !!slice->nal_unit_header.nal_ref_idc,
             };
             found = 1;
         } else if (field->frame_num != slice->frame_num ||
@@ -1558,6 +1560,40 @@ static int vtremote_h264_single_field(VTRemoteTranscodeContext *s,
 end:
     ff_cbs_fragment_reset(&s->h264_fragment);
     return ret;
+}
+
+static int vtremote_join_h264_fields(AVPacket *first, AVPacket *second)
+{
+    int first_size = first->size;
+    int ret = av_grow_packet(first, second->size);
+    if (ret < 0)
+        return ret;
+    memcpy(first->data + first_size, second->data, second->size);
+    if (first->pts == AV_NOPTS_VALUE)
+        first->pts = second->pts;
+    if (first->dts == AV_NOPTS_VALUE)
+        first->dts = second->dts;
+    if (first->duration > 0 && second->duration > 0) {
+        if (first->duration > INT64_MAX - second->duration)
+            return AVERROR_INVALIDDATA;
+        first->duration += second->duration;
+    } else {
+        first->duration = 0;
+    }
+    first->flags |= second->flags;
+    for (int i = 0; i < second->side_data_elems; i++) {
+        const AVPacketSideData *side = &second->side_data[i];
+        uint8_t *copy;
+        if (av_packet_get_side_data(first, side->type, NULL))
+            continue;
+        copy = av_packet_new_side_data(first, side->type, side->size);
+        if (!copy)
+            return AVERROR(ENOMEM);
+        memcpy(copy, side->data, side->size);
+    }
+    av_packet_unref(second);
+    av_packet_move_ref(second, first);
+    return 0;
 }
 
 /* VideoToolbox treats each compressed sample as an output image. A separately
@@ -1594,37 +1630,7 @@ static int vtremote_get_input_packet(AVBSFContext *ctx, AVPacket *pkt)
         return AVERROR_INVALIDDATA;
     }
 
-    AVPacket *first = &s->pending_field;
-    int first_size = first->size;
-    ret = av_grow_packet(first, pkt->size);
-    if (ret < 0)
-        return ret;
-    memcpy(first->data + first_size, pkt->data, pkt->size);
-    if (first->pts == AV_NOPTS_VALUE)
-        first->pts = pkt->pts;
-    if (first->dts == AV_NOPTS_VALUE)
-        first->dts = pkt->dts;
-    if (first->duration > 0 && pkt->duration > 0) {
-        if (first->duration > INT64_MAX - pkt->duration)
-            return AVERROR_INVALIDDATA;
-        first->duration += pkt->duration;
-    } else {
-        first->duration = 0;
-    }
-    first->flags |= pkt->flags;
-    for (int i = 0; i < pkt->side_data_elems; i++) {
-        const AVPacketSideData *side = &pkt->side_data[i];
-        uint8_t *copy;
-        if (av_packet_get_side_data(first, side->type, NULL))
-            continue;
-        copy = av_packet_new_side_data(first, side->type, side->size);
-        if (!copy)
-            return AVERROR(ENOMEM);
-        memcpy(copy, side->data, side->size);
-    }
-    av_packet_unref(pkt);
-    av_packet_move_ref(pkt, first);
-    return 0;
+    return vtremote_join_h264_fields(&s->pending_field, pkt);
 }
 
 static int vtremote_transcode_init(AVBSFContext *ctx) {

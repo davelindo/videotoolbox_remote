@@ -53,6 +53,54 @@ def fixture(directory, relative, digest):
     return source
 
 
+def wait_for_server(server, port):
+    deadline = time.monotonic() + 5
+    while True:
+        if server.poll() is not None:
+            raise RuntimeError("test daemon exited before listening")
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+                return
+        except OSError:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("test daemon failed to listen")
+            time.sleep(0.05)
+
+
+def check_transcode(args, directory, port, source, transport, *, frames, packets, asynchronous):
+    label = f"{source.stem}-async{asynchronous}"
+    output = directory / f"{label}.ts"
+    client_log = directory / f"{label}-client.log"
+    server_offset = (directory / "server.log").stat().st_size
+    run([args.ffmpeg, "-hide_banner", "-v", "verbose", "-y", "-i", str(transport),
+         "-map", "0:v:0", "-c:v", "copy", "-vt_remote_transcode:v:0",
+         "-vt_remote_host", "127.0.0.1", "-vt_remote_port", str(port),
+         "-vt_remote_decode_async", str(asynchronous), "-vt_remote_inflight", "1",
+         "-vt_remote_out_codec:v:0", "h264", "-b:v", "8M", "-g:v", "50",
+         str(output)], client_log)
+    assert "vtremote server error" not in client_log.read_text(), f"server error: {client_log}"
+    server_log = (directory / "server.log").read_bytes()[server_offset:].decode()
+    expected_mode = "true" if asynchronous else "false"
+    assert re.search(rf"DECODE codec=h264 .* async={expected_mode}\b", server_log), "decode mode was not forwarded"
+    result = probe(args.ffprobe, output, packets=True)
+    assert int(result["streams"][0]["nb_read_frames"]) == frames, f"wrong output frame count: {output}"
+    timing = result["packets"]
+    assert len(timing) == frames, f"wrong output packet count: {output}"
+    pts = [int(packet["pts"]) for packet in timing]
+    assert all(a < b for a, b in zip(pts, pts[1:])), f"unordered output PTS: {output}"
+    run([args.local_ffmpeg, "-v", "error", "-xerror", "-i", str(output),
+         "-map", "0:v:0", "-f", "null", "-"], directory / f"{label}-decode.log")
+    quality_log = directory / f"{label}-ssim.log"
+    run([args.local_ffmpeg, "-hide_banner", "-v", "info", "-i", str(source),
+         "-i", str(output), "-lavfi",
+         "[0:v]setpts=N/(25*TB),format=yuv420p[ref];"
+         "[1:v]setpts=N/(25*TB),format=yuv420p[out];[ref][out]ssim=shortest=1",
+         "-an", "-f", "null", "-"], quality_log)
+    match = re.search(r"SSIM .*All:([0-9.]+)", quality_log.read_text())
+    assert match and float(match[1]) > 0.95, f"pixel/order mismatch: {quality_log}"
+    print(f"OK: {label}: {packets} input packets -> {frames} decoded frames; SSIM={match[1]}", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ffmpeg", default=str(ROOT / "ffmpeg/ffmpeg"))
@@ -74,17 +122,7 @@ def main():
         server = subprocess.Popen([args.daemon, "--listen", f"127.0.0.1:{port}", "--log-level", "1"],
                                   stdout=log, stderr=log)
         try:
-            deadline = time.monotonic() + 5
-            while True:
-                if server.poll() is not None:
-                    raise RuntimeError("test daemon exited before listening")
-                try:
-                    with socket.create_connection(("127.0.0.1", port), timeout=0.1):
-                        break
-                except OSError:
-                    if time.monotonic() >= deadline:
-                        raise RuntimeError("test daemon failed to listen")
-                    time.sleep(0.05)
+            wait_for_server(server, port)
 
             for relative, digest, frames, packets in FIXTURES:
                 source = fixture(fixtures, relative, digest)
@@ -101,37 +139,8 @@ def main():
                          "-i", str(source), "-map", "0:v:0", "-c:v", "copy", "-bsf:v", "dts2pts",
                          str(transport)], directory / f"{name}-remux.log")
                 for asynchronous in (0, 1):
-                    label = f"{name}-async{asynchronous}"
-                    output = directory / f"{label}.ts"
-                    client_log = directory / f"{label}-client.log"
-                    server_offset = (directory / "server.log").stat().st_size
-                    run([args.ffmpeg, "-hide_banner", "-v", "verbose", "-y", "-i", str(transport),
-                         "-map", "0:v:0", "-c:v", "copy", "-vt_remote_transcode:v:0",
-                         "-vt_remote_host", "127.0.0.1", "-vt_remote_port", str(port),
-                         "-vt_remote_decode_async", str(asynchronous), "-vt_remote_inflight", "1",
-                         "-vt_remote_out_codec:v:0", "h264", "-b:v", "8M", "-g:v", "50",
-                         str(output)], client_log)
-                    assert "vtremote server error" not in client_log.read_text(), f"server error: {client_log}"
-                    server_log = (directory / "server.log").read_bytes()[server_offset:].decode()
-                    expected_mode = "true" if asynchronous else "false"
-                    assert re.search(rf"DECODE codec=h264 .* async={expected_mode}\b", server_log), "decode mode was not forwarded"
-                    result = probe(args.ffprobe, output, packets=True)
-                    assert int(result["streams"][0]["nb_read_frames"]) == frames, f"wrong output frame count: {output}"
-                    timing = result["packets"]
-                    assert len(timing) == frames, f"wrong output packet count: {output}"
-                    pts = [int(packet["pts"]) for packet in timing]
-                    assert all(a < b for a, b in zip(pts, pts[1:])), f"unordered output PTS: {output}"
-                    run([args.local_ffmpeg, "-v", "error", "-xerror", "-i", str(output),
-                         "-map", "0:v:0", "-f", "null", "-"], directory / f"{label}-decode.log")
-                    quality_log = directory / f"{label}-ssim.log"
-                    run([args.local_ffmpeg, "-hide_banner", "-v", "info", "-i", str(source),
-                         "-i", str(output), "-lavfi",
-                         "[0:v]setpts=N/(25*TB),format=yuv420p[ref];"
-                         "[1:v]setpts=N/(25*TB),format=yuv420p[out];[ref][out]ssim=shortest=1",
-                         "-an", "-f", "null", "-"], quality_log)
-                    match = re.search(r"SSIM .*All:([0-9.]+)", quality_log.read_text())
-                    assert match and float(match[1]) > 0.95, f"pixel/order mismatch: {quality_log}"
-                    print(f"OK: {label}: {packets} input packets -> {frames} decoded frames; SSIM={match[1]}", flush=True)
+                    check_transcode(args, directory, port, source, transport,
+                                    frames=frames, packets=packets, asynchronous=asynchronous)
 
             field_source = directory / "Sharp_MP_Field_1_B-input.mp4"
             for label, extra, expected_error in (
