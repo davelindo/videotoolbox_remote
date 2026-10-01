@@ -100,15 +100,36 @@ static int vtremote_transcode_key_index(const char *key, int key_len)
     return -1;
 }
 
-static void vtremote_transcode_append_kv(AVBPrint *bp, int *count,
-                                         const char *key, const char *val)
+static int vtremote_transcode_append_kv(AVBPrint *bp, int *count,
+                                        const char *key, const char *val)
 {
+    AVBPrint value;
+    int ret = 0;
+
+    // The AVOption parser consumes ':' and the BSF-list parser consumes ','.
+    // Escape in that order so the outer parser preserves the inner escapes.
+    av_bprint_init(&value, 0, AV_BPRINT_SIZE_UNLIMITED);
+    av_bprint_escape(&value, val, ":", AV_ESCAPE_MODE_BACKSLASH, 0);
+    if (!av_bprint_is_complete(&value)) {
+        ret = AVERROR(ENOMEM);
+        goto done;
+    }
+
     if (*count == 0)
         av_bprint_chars(bp, '=', 1);
     else
         av_bprint_chars(bp, ':', 1);
-    av_bprintf(bp, "%s=%s", key, val);
+    av_bprintf(bp, "%s=", key);
+    av_bprint_escape(bp, value.str, ",", AV_ESCAPE_MODE_BACKSLASH, 0);
+    if (!av_bprint_is_complete(bp)) {
+        ret = AVERROR(ENOMEM);
+        goto done;
+    }
     (*count)++;
+
+done:
+    av_bprint_finalize(&value, NULL);
+    return ret;
 }
 
 static int vtremote_transcode_append_opts(const AVDictionary *opts,
@@ -150,12 +171,10 @@ static int vtremote_transcode_append_opts(const AVDictionary *opts,
         if (key_len == (int)strlen("vt_remote_host") && !strncmp(key, "vt_remote_host", key_len))
             *have_host = 1;
 
-        if (*count == 0)
-            av_bprint_chars(bp, '=', 1);
-        else
-            av_bprint_chars(bp, ':', 1);
-        av_bprintf(bp, "%.*s=%s", key_len, key, t->value);
-        (*count)++;
+        int ret = vtremote_transcode_append_kv(bp, count,
+                                              vtremote_transcode_opt_keys[idx], t->value);
+        if (ret < 0)
+            return ret;
         if (mux)
             av_dict_set(&mux->enc_opts_used, t->key, "", 0);
     }
@@ -254,7 +273,9 @@ static int vtremote_transcode_append_rate_opt(AVBPrint *bp,
         val = buf;
     }
 
-    vtremote_transcode_append_kv(bp, count, remote_key, val);
+    int ret = vtremote_transcode_append_kv(bp, count, remote_key, val);
+    if (ret < 0)
+        return ret;
     used_keys[idx] = 1;
     if (mux)
         av_dict_set(&mux->enc_opts_used, e->key, "", 0);
@@ -439,7 +460,9 @@ static int vtremote_transcode_append_enum_opt(AVBPrint *bp,
         val = buf;
     }
 
-    vtremote_transcode_append_kv(bp, count, remote_key, val);
+    int ret = vtremote_transcode_append_kv(bp, count, remote_key, val);
+    if (ret < 0)
+        return ret;
     used_keys[idx] = 1;
     if (mux)
         av_dict_set(&mux->enc_opts_used, e->key, "", 0);
@@ -501,7 +524,9 @@ static int vtremote_transcode_build_bsf(const OptionsContext *o,
             if (!e)
                 e = vtremote_transcode_find_opt(opts, oc, st, "g");
             if (e) {
-                vtremote_transcode_append_kv(&bp, &count, "vt_remote_gop", e->value);
+                ret = vtremote_transcode_append_kv(&bp, &count, "vt_remote_gop", e->value);
+                if (ret < 0)
+                    goto done;
                 used_keys[idx] = 1;
                 if (mux)
                     av_dict_set(&mux->enc_opts_used, e->key, "", 0);
@@ -514,7 +539,9 @@ static int vtremote_transcode_build_bsf(const OptionsContext *o,
             if (!e)
                 e = vtremote_transcode_find_opt(opts, oc, st, "bf");
             if (e) {
-                vtremote_transcode_append_kv(&bp, &count, "vt_remote_max_b_frames", e->value);
+                ret = vtremote_transcode_append_kv(&bp, &count, "vt_remote_max_b_frames", e->value);
+                if (ret < 0)
+                    goto done;
                 used_keys[idx] = 1;
                 if (mux)
                     av_dict_set(&mux->enc_opts_used, e->key, "", 0);
@@ -527,7 +554,9 @@ static int vtremote_transcode_build_bsf(const OptionsContext *o,
             if (!e)
                 e = vtremote_transcode_find_opt(opts, oc, st, "profile");
             if (e) {
-                vtremote_transcode_append_kv(&bp, &count, "vt_remote_profile", e->value);
+                ret = vtremote_transcode_append_kv(&bp, &count, "vt_remote_profile", e->value);
+                if (ret < 0)
+                    goto done;
                 used_keys[idx] = 1;
                 if (mux)
                     av_dict_set(&mux->enc_opts_used, e->key, "", 0);
@@ -540,7 +569,9 @@ static int vtremote_transcode_build_bsf(const OptionsContext *o,
             if (!e)
                 e = vtremote_transcode_find_opt(opts, oc, st, "level");
             if (e) {
-                vtremote_transcode_append_kv(&bp, &count, "vt_remote_level", e->value);
+                ret = vtremote_transcode_append_kv(&bp, &count, "vt_remote_level", e->value);
+                if (ret < 0)
+                    goto done;
                 used_keys[idx] = 1;
                 if (mux)
                     av_dict_set(&mux->enc_opts_used, e->key, "", 0);
@@ -553,7 +584,9 @@ static int vtremote_transcode_build_bsf(const OptionsContext *o,
             if (!e)
                 e = vtremote_transcode_find_opt(opts, oc, st, "entropy");
             if (e) {
-                vtremote_transcode_append_kv(&bp, &count, "vt_remote_entropy", e->value);
+                ret = vtremote_transcode_append_kv(&bp, &count, "vt_remote_entropy", e->value);
+                if (ret < 0)
+                    goto done;
                 used_keys[idx] = 1;
                 if (mux)
                     av_dict_set(&mux->enc_opts_used, e->key, "", 0);
@@ -566,7 +599,9 @@ static int vtremote_transcode_build_bsf(const OptionsContext *o,
             if (!e)
                 e = vtremote_transcode_find_opt(opts, oc, st, "constant_bit_rate");
             if (e) {
-                vtremote_transcode_append_kv(&bp, &count, "vt_remote_constant_bit_rate", e->value);
+                ret = vtremote_transcode_append_kv(&bp, &count, "vt_remote_constant_bit_rate", e->value);
+                if (ret < 0)
+                    goto done;
                 used_keys[idx] = 1;
                 if (mux)
                     av_dict_set(&mux->enc_opts_used, e->key, "", 0);
@@ -630,12 +665,23 @@ done:
 
 static int vtremote_transcode_bsf_add(char **bsf, const char *key, const char *val)
 {
+    AVBPrint bp;
+    char *tmp;
+    int count, ret;
+
     if (!bsf || !*bsf || !key || !val || !*val)
         return 0;
-    const char *sep = strchr(*bsf, '=') ? ":" : "=";
-    char *tmp = av_asprintf("%s%s%s=%s", *bsf, sep, key, val);
-    if (!tmp)
-        return AVERROR(ENOMEM);
+    count = strchr(*bsf, '=') != NULL;
+    av_bprint_init(&bp, 0, AV_BPRINT_SIZE_UNLIMITED);
+    av_bprintf(&bp, "%s", *bsf);
+    ret = vtremote_transcode_append_kv(&bp, &count, key, val);
+    if (ret < 0) {
+        av_bprint_finalize(&bp, NULL);
+        return ret;
+    }
+    ret = av_bprint_finalize(&bp, &tmp);
+    if (ret < 0)
+        return ret;
     av_freep(bsf);
     *bsf = tmp;
     return 0;
