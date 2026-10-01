@@ -8,20 +8,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FFMPEG_BIN="${FFMPEG_BIN:-${ROOT}/ffmpeg/ffmpeg}"
+source "${ROOT}/tests/integration/mock_vtremoted_common.sh"
 SERVER_TOKEN=${SERVER_TOKEN:-}
-SERVER_ADDR=${SERVER_ADDR:-}
-
-if [[ -z "$SERVER_ADDR" ]]; then
-  PORT=$(python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
-)
-  SERVER_ADDR="127.0.0.1:${PORT}"
-fi
+SERVER_ADDR=${SERVER_ADDR:-127.0.0.1:0}
+RUN_DIR="$(mktemp -d /tmp/mock_vtremoted_roundtrip.XXXXXX)"
+SERVER_LOG="${RUN_DIR}/server.log"
+FFMPEG_LOG="${RUN_DIR}/ffmpeg.log"
+READY_FILE="${RUN_DIR}/server.ready"
 TOKEN_ARGS=()
 
 if [[ ! -x "$FFMPEG_BIN" ]]; then
@@ -29,14 +22,12 @@ if [[ ! -x "$FFMPEG_BIN" ]]; then
   exit 1
 fi
 
-if [[ -n "$SERVER_TOKEN" ]]; then
-  python3 "$(dirname "$0")/mock_vtremoted/mock_vtremoted.py" --listen "$SERVER_ADDR" --token "$SERVER_TOKEN" --once >/tmp/mock_vtremoted.log 2>&1 &
-else
-  python3 "$(dirname "$0")/mock_vtremoted/mock_vtremoted.py" --listen "$SERVER_ADDR" --once >/tmp/mock_vtremoted.log 2>&1 &
-fi
+python3 "${ROOT}/tests/integration/mock_vtremoted/mock_vtremoted.py" \
+  --listen "$SERVER_ADDR" --ready-file "$READY_FILE" \
+  --token "$SERVER_TOKEN" --once >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
-trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
-sleep 0.2
+trap 'vtremote_stop_mock "$SERVER_PID"' EXIT
+SERVER_ADDR="$(vtremote_wait_mock_ready "$SERVER_PID" "$READY_FILE" "$SERVER_LOG")"
 
 if [[ -n "$SERVER_TOKEN" ]]; then
   TOKEN_ARGS=( -vt_remote_token "$SERVER_TOKEN" )
@@ -45,6 +36,6 @@ fi
 "$FFMPEG_BIN" -v info -f lavfi -i testsrc2=size=320x180:rate=5 -t 1 -pix_fmt nv12 \
   -c:v h264_videotoolbox_remote -vt_remote_host "$SERVER_ADDR" \
   -vt_remote_wire_compression none ${TOKEN_ARGS[@]+"${TOKEN_ARGS[@]}"} \
-  -f null - >/tmp/mock_vtremoted_ffmpeg.log 2>&1
+  -f null - >"$FFMPEG_LOG" 2>&1 || { cat "$FFMPEG_LOG" >&2; exit 1; }
 
-echo "OK: vtremote framing exercised; logs at /tmp/mock_vtremoted*.log"
+echo "OK: vtremote framing exercised; logs at ${RUN_DIR}"

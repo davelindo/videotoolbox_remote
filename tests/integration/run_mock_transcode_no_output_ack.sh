@@ -8,6 +8,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FFMPEG_BIN="${FFMPEG_BIN:-${ROOT}/ffmpeg/ffmpeg}"
+source "${ROOT}/tests/integration/mock_vtremoted_common.sh"
 
 if [[ ! -x "$FFMPEG_BIN" ]]; then
   echo "ffmpeg binary not found at $FFMPEG_BIN" >&2
@@ -48,25 +49,18 @@ else
   exit 1
 fi
 
-PORT=$(python3 - <<'PYPORT'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PYPORT
-)
-SERVER_ADDR="127.0.0.1:${PORT}"
-SERVER_LOG=/tmp/mock_vtremoted_transcode_no_output_ack.log
-FFMPEG_LOG=/tmp/mock_vtremoted_transcode_no_output_ack_ffmpeg.log
+RUN_DIR="$(mktemp -d /tmp/mock_vtremoted_transcode_no_output_ack.XXXXXX)"
+SERVER_LOG="${RUN_DIR}/server.log"
+FFMPEG_LOG="${RUN_DIR}/ffmpeg.log"
+READY_FILE="${RUN_DIR}/server.ready"
 
 python3 "${ROOT}/tests/integration/mock_vtremoted/mock_vtremoted.py" \
-  --listen "$SERVER_ADDR" \
+  --listen "127.0.0.1:0" --ready-file "$READY_FILE" \
   --packet-reply none \
   --once >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
-trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
-sleep 0.2
+trap 'vtremote_stop_mock "$SERVER_PID"' EXIT
+SERVER_ADDR="$(vtremote_wait_mock_ready "$SERVER_PID" "$READY_FILE" "$SERVER_LOG")"
 
 python3 - "$FFMPEG_BIN" "$SERVER_ADDR" "$ENCODER" "$PIX_FMT" "$FFMPEG_LOG" "${ENC_ARGS[@]}" <<'PYRUN'
 import subprocess

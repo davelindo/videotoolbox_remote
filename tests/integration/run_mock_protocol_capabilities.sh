@@ -7,62 +7,50 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FFMPEG_BIN="${FFMPEG_BIN:-${ROOT}/ffmpeg/ffmpeg}"
+source "${ROOT}/tests/integration/mock_vtremoted_common.sh"
 
 if [[ ! -x "$FFMPEG_BIN" ]]; then
   echo "ffmpeg binary not found at $FFMPEG_BIN" >&2
   exit 1
 fi
 
-free_port() {
-  python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
-}
+RUN_DIR="$(mktemp -d /tmp/mock_vtremote_caps.XXXXXX)"
+SERVER_PID=""
+trap 'vtremote_stop_mock "$SERVER_PID"' EXIT
 
 run_mock() {
-  local port="$1"
-  local caps="$2"
-  local log="$3"
+  local caps="$1"
+  local log="$2"
+  local ready_file="${log}.ready"
   python3 "${ROOT}/tests/integration/mock_vtremoted/mock_vtremoted.py" \
-    --listen "127.0.0.1:${port}" \
+    --listen "127.0.0.1:0" --ready-file "$ready_file" \
     --strict-config-options \
     --capabilities "$caps" \
     --once >"$log" 2>&1 &
   SERVER_PID=$!
+  SERVER_ADDR="$(vtremote_wait_mock_ready "$SERVER_PID" "$ready_file" "$log")"
 }
 
 BASE_CAPS="h264,hevc,pixfmt.nv12,pixfmt.p010,side_data.v2"
 
-PORT="$(free_port)"
-SERVER_LOG="/tmp/mock_vtremote_caps_success.log"
-SERVER_PID=""
-run_mock "$PORT" "$BASE_CAPS" "$SERVER_LOG"
-trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
-sleep 0.2
+SERVER_LOG="${RUN_DIR}/success.log"
+run_mock "$BASE_CAPS" "$SERVER_LOG"
 
 "$FFMPEG_BIN" -hide_banner -v warning -xerror \
   -f lavfi -i testsrc2=size=160x90:rate=5 -frames:v 3 -pix_fmt nv12 \
   -c:v h264_videotoolbox_remote \
-  -vt_remote_host "127.0.0.1:${PORT}" \
+  -vt_remote_host "$SERVER_ADDR" \
   -vt_remote_wire_compression lz4 \
   -b:v 500k -g 10 \
-  -f null - >/tmp/mock_vtremote_caps_success_ffmpeg.log 2>&1
+  -f null - >"${RUN_DIR}/success_ffmpeg.log" 2>&1
 wait "$SERVER_PID"
-trap - EXIT
-
-PORT="$(free_port)"
-SERVER_LOG="/tmp/mock_vtremote_caps_missing.log"
 SERVER_PID=""
-run_mock "$PORT" "$BASE_CAPS" "$SERVER_LOG"
-trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
-sleep 0.2
+
+SERVER_LOG="${RUN_DIR}/missing.log"
+run_mock "$BASE_CAPS" "$SERVER_LOG"
 
 set +e
-python3 - "$FFMPEG_BIN" "127.0.0.1:${PORT}" >/tmp/mock_vtremote_caps_missing_ffmpeg.log 2>&1 <<'PY'
+python3 - "$FFMPEG_BIN" "$SERVER_ADDR" >"${RUN_DIR}/missing_ffmpeg.log" 2>&1 <<'PY'
 import subprocess
 import sys
 
@@ -89,12 +77,12 @@ if [[ "$missing_status" -eq 0 ]]; then
   exit 1
 fi
 wait "$SERVER_PID" || true
-trap - EXIT
+SERVER_PID=""
 
 if ! grep -Eq "missing capability pixfmt.bgra|required capability for bgra" \
-  /tmp/mock_vtremote_caps_missing_ffmpeg.log "$SERVER_LOG"; then
+  "${RUN_DIR}/missing_ffmpeg.log" "$SERVER_LOG"; then
   echo "ERROR: missing-capability failure did not name pixfmt.bgra" >&2
-  cat /tmp/mock_vtremote_caps_missing_ffmpeg.log >&2
+  cat "${RUN_DIR}/missing_ffmpeg.log" >&2
   cat "$SERVER_LOG" >&2
   exit 1
 fi
