@@ -1888,7 +1888,7 @@ restart:
     if (v->init_sec_buf_read_offset < v->init_sec_data_len) {
         /* Push init section out first before first actual fragment */
         int copy_size = FFMIN(v->init_sec_data_len - v->init_sec_buf_read_offset, buf_size);
-        memcpy(buf, v->init_sec_buf, copy_size);
+        memcpy(buf, v->init_sec_buf + v->init_sec_buf_read_offset, copy_size);
         v->init_sec_buf_read_offset += copy_size;
         ret = copy_size;
         goto end;
@@ -1964,12 +1964,16 @@ static int reopen_demux_for_component(AVFormatContext *s, struct representation 
         pls->ctx = NULL;
         goto fail;
     }
+    av_freep(&pls->pb.pub.buffer);
     ffio_init_context(&pls->pb, avio_ctx_buffer, INITIAL_BUFFER_SIZE, 0,
                       pls, read_data, NULL, c->is_live ? NULL : seek_data);
     pls->pb.pub.seekable = 0;
 
-    if ((ret = ff_copy_whiteblacklists(pls->ctx, s)) < 0)
+    if ((ret = ff_copy_whiteblacklists(pls->ctx, s)) < 0) {
+        avformat_free_context(pls->ctx);
+        pls->ctx = NULL;
         goto fail;
+    }
 
     pls->ctx->flags = AVFMT_FLAG_CUSTOM_IO;
     pls->ctx->probesize = s->probesize > 0 ? s->probesize : 1024 * 4;
