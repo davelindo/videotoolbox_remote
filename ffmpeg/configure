@@ -3749,6 +3749,7 @@ mpeg2_metadata_bsf_select="cbs_mpeg2"
 smpte436m_to_eia608_bsf_select="smpte_436m"
 trace_headers_bsf_select="cbs cbs_vp8"
 vp9_metadata_bsf_select="cbs_vp9"
+vtremote_transcode_bsf_select="cbs_h264"
 vvc_metadata_bsf_select="cbs_h266"
 
 # external libraries

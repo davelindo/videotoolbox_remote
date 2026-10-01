@@ -106,6 +106,68 @@ Common issues and their solutions.
 
 ## Encoding/Decoding
 
+### Remote transcode decoder fails on interlaced H.264
+
+If `-vt_remote_transcode` reports `decoder callback produced no frame`, retain
+the numeric decoder status, full server log, `vtremoted --version`, macOS
+version, and a short failing source sample. The message alone does not establish
+that all interlaced H.264 is unsupported. The server logs whether the decoder
+reports hardware use, plus callback flags and timestamps on failure. An
+`unknown(status=...)` hardware property is inconclusive.
+
+The synthetic regression checks progressive and MBAFF H.264, both field orders,
+and both MP4 and MPEG-TS:
+
+```bash
+bash tests/integration/run_vtremoted_interlaced.sh
+```
+
+MBAFF does not cover separately coded PAFF fields. The transcode filter joins
+complementary H.264 fields before submitting a complete picture to VideoToolbox.
+It preserves packets already containing both fields and frame-coded pictures
+within mixed PAFF streams. A missing or mismatched complementary field produces
+an explicit input error rather than encoding a field as a full frame. Test that
+path with the pinned public FFmpeg conformance samples:
+
+```bash
+python3 tests/integration/run_vtremoted_paff.py --fixtures /tmp/vtremote-paff-fixtures
+```
+
+This downloads four hash-checked fixtures and checks frame counts, timestamps,
+independent decoding and pixel similarity with synchronous and asynchronous
+decode. The local reference FFmpeg needs `dts2pts` and `ssim`. Raw H.264 samples
+need picture-order PTS before remuxing: assigning decode-order timestamps can
+misorder B-frames and invalidate a comparison.
+
+The daemon also refreshes the decoder when H.264 sequence parameters change.
+It drains delayed frames before replacing the session, which lets a stream
+switch between progressive and interlaced coding without feeding the new
+sequence to the previous decoder. Compatible PPS updates keep reference state.
+The synthetic regression includes a progressive → top-first → bottom-first →
+progressive transition and verifies all 100 output frames against software decode.
+
+These changes do not establish the cause of issue #24's `-12350` status. A
+damaged public PAFF capture reproduces that status even after keyframe remuxing;
+software decode also reports reference and macroblock errors for that capture.
+Retain the reporter's source and macOS version to distinguish a codec limitation,
+damaged input, and parameter changes. Use `-xerror` in reproductions and inspect
+the server log and decoded frame count: FFmpeg can otherwise return zero after
+a transcode filter error.
+
+For a source that the server's VideoToolbox decoder cannot handle, use local
+software decode and deinterlace, then send frames to the remote encoder:
+
+```bash
+ffmpeg -i interlaced.ts -map 0:v:0 -map '0:a:0?' -c:a copy \
+  -vf bwdif=mode=send_frame -pix_fmt nv12 -c:v h264_videotoolbox_remote \
+  -vt_remote_host mac-host:5555 -b:v 8M -g:v 50 \
+  -f mpegts out.ts
+```
+
+This path uses client CPU for decode and deinterlace and sends raw frames over
+the network. `send_frame` preserves the input frame rate. Remote transcode has
+no automatic software decode or deinterlace fallback.
+
 ### VA-API driver does not load
 
 Confirm that `VTREMOTE_HOST` is set, a render node is accessible to the process,

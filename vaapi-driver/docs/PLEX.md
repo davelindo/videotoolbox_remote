@@ -33,7 +33,11 @@ existing Plex configuration as required by the official image. Do not add a
 render device for the remote path.
 
 The integration builds its injected filter against official FFmpeg 6.1.1
-headers. Container startup checks the bundled `libavcodec` against an explicit
+headers and includes that SDK's H.264 coded-bitstream parser in the preload
+module. Configure the SDK with `--enable-bsf=h264_metadata` so CBS H.264 is
+enabled; the supplied Dockerfile and CI prepare it this way. The parser does
+not depend on Plex exporting private codec helpers. Container startup checks
+the bundled `libavcodec` against an explicit
 allowlist of tested fingerprints before installing the wrapper, and each
 wrapper invocation checks the full runtime `avcodec_version()` before rewriting
 arguments. The preload module repeats the full-version check before accessing

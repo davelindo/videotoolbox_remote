@@ -34,6 +34,9 @@ This tree holds VideoToolbox Remote integration tests and benchmarks.
 - `run_vtremoted_hdr_side_data.sh`: launches `vtremoted` on loopback and verifies remote HEVC Main10 output keeps HDR color signaling (`hvc1`, BT.2020, PQ, limited range) and decodes cleanly.
 - `run_vtremoted_decode.sh`: generates short local H.264/HEVC inputs and validates remote decode with `h264_videotoolbox_remote` / `hevc_videotoolbox_remote`.
 - `run_transcode_test.sh`: simultaneous remote decode + encode pipeline (sanity + stability).
+- `run_mock_transcode_cli_options.py`: verifies CLI `host:port`, stream-specific options, and exact authentication tokens through automatic transcode BSF construction.
+- `run_vtremoted_interlaced.sh`: checks synthetic progressive and both field orders of interlaced H.264 in MP4 and MPEG-TS, local `bwdif` with remote encode, and progressive/interlaced sequence changes with frame counts and pixel comparisons in both decode modes. Requires macOS, `vtremoted`, and a local FFmpeg with `libx264` and `ssim`.
+- `run_vtremoted_paff.py`: downloads four SHA-256-pinned FFmpeg FATE fixtures, checks separate fields, mixed PAFF and fields already paired in a packet, and verifies output frame/packet counts, ordered PTS, independent decode and SSIM against software decode. Runs synchronous and asynchronous decode with one input credit. Requires macOS and a local FFmpeg with `dts2pts` and `ssim`; `--fixtures DIR` reuses downloaded samples.
 - `run_option_surface_parity.sh`: compares local (`*_videotoolbox`) vs remote (`*_videotoolbox_remote`) encoder option surfaces for H.264/HEVC and fails on drift (ignoring `vt_remote_*` transport-only options).
 - `run_vtremoted_transcode_bsf_long.sh`: long-run vtremote_transcode bitstream filter test (optional; 10 minutes by default) to catch timestamp/ordering bugs that only appear after many frames.
 - `run_speed_decode_async.sh`: sync vs async remote decode speed test.
@@ -87,6 +90,8 @@ Bench defaults:
 Run-all toggles:
 - `VTREMOTE_RUN_OBS_PLUGIN=1` runs the OBS plugin client protocol smoke test.
 - `VTREMOTE_RUN_OPTION_PARITY=1` runs local-vs-remote encoder option parity checks.
+- `VTREMOTE_RUN_INTERLACED=1` runs the synthetic interlaced H.264 checks.
+- `VTREMOTE_RUN_PAFF=1` runs the field-packet conformance checks; this downloads about 8 MB on first run. `FFMPEG_LOCAL_BIN` and `FFPROBE_LOCAL_BIN` select the local reference tools.
 
 FFmpeg build note: enable the local + remote codecs during configure on macOS, e.g.
 `./configure --enable-videotoolbox --enable-videotoolbox-remote`

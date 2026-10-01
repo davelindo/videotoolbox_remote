@@ -42,6 +42,11 @@ fate-codec_desc: libavcodec/tests/codec_desc$(EXESUF)
 fate-codec_desc: CMD = run libavcodec/tests/codec_desc$(EXESUF)
 fate-codec_desc: CMP = null
 
+FATE_LIBAVCODEC-$(CONFIG_VIDEOTOOLBOX_REMOTE) += fate-vtremote-proto
+fate-vtremote-proto: libavcodec/tests/vtremote_proto$(EXESUF)
+fate-vtremote-proto: CMD = run libavcodec/tests/vtremote_proto$(EXESUF)
+fate-vtremote-proto: CMP = null
+
 FATE_LIBAVCODEC-$(CONFIG_GOLOMB) += fate-golomb
 fate-golomb: libavcodec/tests/golomb$(EXESUF)
 fate-golomb: CMD = run libavcodec/tests/golomb$(EXESUF)
@@ -117,11 +122,6 @@ fate-libavcodec-huffman: CMP = null
 FATE_LIBAVCODEC-yes += fate-libavcodec-htmlsubtitles
 fate-libavcodec-htmlsubtitles: libavcodec/tests/htmlsubtitles$(EXESUF)
 fate-libavcodec-htmlsubtitles: CMD = run libavcodec/tests/htmlsubtitles$(EXESUF)
-
-FATE_LIBAVCODEC-$(CONFIG_VIDEOTOOLBOX_REMOTE) += fate-vtremote-proto
-fate-vtremote-proto: libavcodec/tests/vtremote_proto$(EXESUF)
-fate-vtremote-proto: CMD = run libavcodec/tests/vtremote_proto$(EXESUF)
-fate-vtremote-proto: CMP = null
 
 FATE-$(CONFIG_AVCODEC) += $(FATE_LIBAVCODEC-yes)
 fate-libavcodec: $(FATE_LIBAVCODEC-yes)

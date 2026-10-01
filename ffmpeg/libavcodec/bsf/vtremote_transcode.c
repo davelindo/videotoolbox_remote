@@ -28,6 +28,8 @@
 #include "avcodec.h"
 #include "bsf.h"
 #include "bsf_internal.h"
+#include "libavcodec/cbs.h"
+#include "libavcodec/cbs_h264.h"
 #include "libavutil/avstring.h"
 #include "libavutil/common.h"
 #include "libavutil/error.h"
@@ -67,6 +69,13 @@ static int vtremote_sock_errno(void) { return errno; }
 #endif
 
 #define MIN_HVCC_LENGTH 23
+
+typedef struct VTRemoteH264Field {
+    int frame_num;
+    int pps_id;
+    int bottom;
+    int reference;
+} VTRemoteH264Field;
 
 typedef struct VTRemoteTranscodeContext {
     const AVClass *class;
@@ -136,6 +145,10 @@ typedef struct VTRemoteTranscodeContext {
     int pkt_q_head;
     int pkt_q_count;
     AVBSFContext *annexb_bsf;
+    CodedBitstreamContext *h264_cbs;
+    CodedBitstreamFragment h264_fragment;
+    AVPacket pending_field;
+    VTRemoteH264Field pending_field_header;
 } VTRemoteTranscodeContext;
 
 static void configure_socket_buffers(int fd) {
@@ -1503,6 +1516,123 @@ static int maybe_convert_to_annexb(VTRemoteTranscodeContext *s, AVPacket *pkt) {
     return 0;
 }
 
+static const CodedBitstreamUnitType h264_field_unit_types[] = {
+    H264_NAL_SPS, H264_NAL_PPS, H264_NAL_SLICE, H264_NAL_IDR_SLICE,
+};
+
+/* Return one only if every slice in the packet belongs to a single field.
+ * Already-paired fields, progressive frames and MBAFF frames stay intact. */
+static int vtremote_h264_single_field(VTRemoteTranscodeContext *s,
+                                      const AVPacket *pkt,
+                                      VTRemoteH264Field *field)
+{
+    int found = 0, single = 1;
+    int ret = ff_cbs_read_packet(s->h264_cbs, &s->h264_fragment, pkt);
+    if (ret < 0)
+        goto end;
+
+    for (int i = 0; i < s->h264_fragment.nb_units; i++) {
+        const CodedBitstreamUnit *unit = &s->h264_fragment.units[i];
+        const H264RawSliceHeader *slice;
+        if (unit->type != H264_NAL_SLICE && unit->type != H264_NAL_IDR_SLICE)
+            continue;
+        slice = &((const H264RawSlice *)unit->content)->header;
+        if (!slice->field_pic_flag) {
+            single = 0;
+            continue;
+        }
+        if (!found) {
+            *field = (VTRemoteH264Field) {
+                .frame_num = slice->frame_num,
+                .pps_id = slice->pic_parameter_set_id,
+                .bottom = slice->bottom_field_flag,
+                .reference = !!slice->nal_unit_header.nal_ref_idc,
+            };
+            found = 1;
+        } else if (field->frame_num != slice->frame_num ||
+                   field->pps_id != slice->pic_parameter_set_id ||
+                   field->bottom != slice->bottom_field_flag ||
+                   field->reference != !!slice->nal_unit_header.nal_ref_idc) {
+            single = 0;
+        }
+    }
+    ret = found && single;
+end:
+    ff_cbs_fragment_reset(&s->h264_fragment);
+    return ret;
+}
+
+static int vtremote_join_h264_fields(AVPacket *first, AVPacket *second)
+{
+    int first_size = first->size;
+    int ret = av_grow_packet(first, second->size);
+    if (ret < 0)
+        return ret;
+    memcpy(first->data + first_size, second->data, second->size);
+    if (first->pts == AV_NOPTS_VALUE)
+        first->pts = second->pts;
+    if (first->dts == AV_NOPTS_VALUE)
+        first->dts = second->dts;
+    if (first->duration > 0 && second->duration > 0) {
+        if (first->duration > INT64_MAX - second->duration)
+            return AVERROR_INVALIDDATA;
+        first->duration += second->duration;
+    } else {
+        first->duration = 0;
+    }
+    first->flags |= second->flags;
+    for (int i = 0; i < second->side_data_elems; i++) {
+        const AVPacketSideData *side = &second->side_data[i];
+        uint8_t *copy;
+        if (av_packet_get_side_data(first, side->type, NULL))
+            continue;
+        copy = av_packet_new_side_data(first, side->type, side->size);
+        if (!copy)
+            return AVERROR(ENOMEM);
+        memcpy(copy, side->data, side->size);
+    }
+    av_packet_unref(second);
+    av_packet_move_ref(second, first);
+    return 0;
+}
+
+/* VideoToolbox treats each compressed sample as an output image. A separately
+ * packetized PAFF field must be joined with its complementary field before it
+ * becomes that sample, otherwise half a picture is encoded as a whole frame. */
+static int vtremote_get_input_packet(AVBSFContext *ctx, AVPacket *pkt)
+{
+    VTRemoteTranscodeContext *s = ctx->priv_data;
+    VTRemoteH264Field field;
+    int ret = ff_bsf_get_packet_ref(ctx, pkt);
+    if (ret == AVERROR_EOF && s->pending_field.size) {
+        av_log(ctx, AV_LOG_ERROR, "H.264 input ended with an unpaired field\n");
+        return AVERROR_INVALIDDATA;
+    }
+    if (ret < 0 || !s->h264_cbs)
+        return ret;
+
+    ret = vtremote_h264_single_field(s, pkt, &field);
+    if (ret < 0)
+        return ret;
+    if (!s->pending_field.size) {
+        if (!ret)
+            return 0;
+        av_packet_move_ref(&s->pending_field, pkt);
+        s->pending_field_header = field;
+        return AVERROR(EAGAIN);
+    }
+
+    if (!ret || field.frame_num != s->pending_field_header.frame_num ||
+        field.pps_id != s->pending_field_header.pps_id ||
+        field.reference != s->pending_field_header.reference ||
+        field.bottom == s->pending_field_header.bottom) {
+        av_log(ctx, AV_LOG_ERROR, "H.264 input has non-complementary field packets\n");
+        return AVERROR_INVALIDDATA;
+    }
+
+    return vtremote_join_h264_fields(&s->pending_field, pkt);
+}
+
 static int vtremote_transcode_init(AVBSFContext *ctx) {
     VTRemoteTranscodeContext *s = ctx->priv_data;
     int ret;
@@ -1583,6 +1713,20 @@ static int vtremote_transcode_init(AVBSFContext *ctx) {
 
     vtremote_wbuf_init(&s->pkt_buf);
 
+    if (s->codec_id_in == AV_CODEC_ID_H264) {
+        ret = ff_cbs_init(&s->h264_cbs, AV_CODEC_ID_H264, ctx);
+        if (ret < 0)
+            return ret;
+        s->h264_cbs->decompose_unit_types = h264_field_unit_types;
+        s->h264_cbs->nb_decompose_unit_types = FF_ARRAY_ELEMS(h264_field_unit_types);
+        if (ctx->par_in->extradata_size) {
+            ret = ff_cbs_read_extradata(s->h264_cbs, &s->h264_fragment, ctx->par_in);
+            ff_cbs_fragment_reset(&s->h264_fragment);
+            if (ret < 0)
+                return ret;
+        }
+    }
+
     if (ctx->par_in->extradata_size > 0 && ctx->par_in->extradata && ctx->par_in->extradata[0] == 1) {
         const char *bsf_name = (s->codec_id_in == AV_CODEC_ID_H264) ? "h264_mp4toannexb" : "hevc_mp4toannexb";
         const AVBitStreamFilter *filter = av_bsf_get_by_name(bsf_name);
@@ -1650,7 +1794,7 @@ static int vtremote_transcode_filter(AVBSFContext *ctx, AVPacket *pkt) {
         return AVERROR_EOF;
 
     AVPacket in_pkt = { 0 };
-    ret = ff_bsf_get_packet_ref(ctx, &in_pkt);
+    ret = vtremote_get_input_packet(ctx, &in_pkt);
     if (ret == AVERROR_EOF) {
         av_packet_unref(&in_pkt);
         if (!s->flushing) {
@@ -1669,6 +1813,8 @@ static int vtremote_transcode_filter(AVBSFContext *ctx, AVPacket *pkt) {
         return AVERROR_EOF;
     } else if (ret < 0) {
         av_packet_unref(&in_pkt);
+        if (ret != AVERROR(EAGAIN))
+            s->done = 1;
         return ret;
     }
 
@@ -1713,6 +1859,13 @@ static void vtremote_transcode_flush(AVBSFContext *ctx) {
     }
     if (s->annexb_bsf)
         av_bsf_flush(s->annexb_bsf);
+    av_packet_unref(&s->pending_field);
+    if (s->h264_cbs) {
+        ff_cbs_flush(s->h264_cbs);
+        if (ctx->par_in->extradata_size)
+            ff_cbs_read_extradata(s->h264_cbs, &s->h264_fragment, ctx->par_in);
+        ff_cbs_fragment_reset(&s->h264_fragment);
+    }
 }
 
 static void vtremote_transcode_close(AVBSFContext *ctx) {
@@ -1731,6 +1884,9 @@ static void vtremote_transcode_close(AVBSFContext *ctx) {
     }
     if (s->annexb_bsf)
         av_bsf_free(&s->annexb_bsf);
+    av_packet_unref(&s->pending_field);
+    ff_cbs_fragment_free(&s->h264_fragment);
+    ff_cbs_close(&s->h264_cbs);
 }
 
 #define OFFSET(x) offsetof(VTRemoteTranscodeContext, x)
