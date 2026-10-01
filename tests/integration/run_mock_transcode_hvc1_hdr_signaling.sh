@@ -9,24 +9,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FFMPEG_BIN="${FFMPEG_BIN:-${ROOT}/ffmpeg/ffmpeg}"
+source "${ROOT}/tests/integration/mock_vtremoted_common.sh"
 FFPROBE_BIN="${FFPROBE_BIN:-${ROOT}/ffmpeg/ffprobe}"
 SERVER_TOKEN=${SERVER_TOKEN:-}
-SERVER_ADDR=${SERVER_ADDR:-}
-
-if [[ -z "$SERVER_ADDR" ]]; then
-  PORT=$(python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
-)
-  SERVER_ADDR="127.0.0.1:${PORT}"
-fi
-
-SERVER_HOST="${SERVER_ADDR%:*}"
-SERVER_PORT="${SERVER_ADDR##*:}"
+MOCK_LISTEN_ADDR=${SERVER_ADDR:-127.0.0.1:0}
 FIXTURE_DIR="${ROOT}/tests/integration/mock_vtremoted/fixtures"
 HVCC_FIXTURE="${FIXTURE_DIR}/hevc_main10_bt2020_pq_hvcc.hex"
 PACKET_FIXTURE="${FIXTURE_DIR}/hevc_main10_bt2020_pq_packet.hex"
@@ -61,7 +47,7 @@ else
 fi
 
 TMPDIR=$(mktemp -d /tmp/mock_vtremoted_hvc1_hdr.XXXXXX)
-trap 'rm -rf "$TMPDIR"; kill "${SERVER_PID:-}" 2>/dev/null || true' EXIT
+trap 'vtremote_stop_mock "${SERVER_PID:-}"; rm -rf "$TMPDIR"' EXIT
 
 assert_probe_fields() {
   local target="$1"
@@ -108,10 +94,12 @@ PY
 
 start_mock_server() {
   local server_log="$1"
+  local ready_file="${server_log}.ready"
   shift
   local server_cmd=(
     python3 "${ROOT}/tests/integration/mock_vtremoted/mock_vtremoted.py"
-    --listen "$SERVER_ADDR"
+    --listen "$MOCK_LISTEN_ADDR"
+    --ready-file "$ready_file"
     --packet-reply packet
     --configure-extradata-hex-file "$HVCC_FIXTURE"
     --packet-data-hex-file "$PACKET_FIXTURE"
@@ -123,7 +111,9 @@ start_mock_server() {
   server_cmd+=( "$@" )
   "${server_cmd[@]}" >"$server_log" 2>&1 &
   SERVER_PID=$!
-  sleep 0.2
+  SERVER_ADDR="$(vtremote_wait_mock_ready "$SERVER_PID" "$ready_file" "$server_log")"
+  SERVER_HOST="${SERVER_ADDR%:*}"
+  SERVER_PORT="${SERVER_ADDR##*:}"
 }
 
 wait_mock_server() {
@@ -135,8 +125,7 @@ wait_mock_server() {
 
 stop_mock_server() {
   if [[ -n "${SERVER_PID:-}" ]]; then
-    kill "$SERVER_PID" 2>/dev/null || true
-    wait "$SERVER_PID" 2>/dev/null || true
+    vtremote_stop_mock "$SERVER_PID"
     unset SERVER_PID
   fi
 }
