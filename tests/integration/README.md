@@ -34,6 +34,8 @@ This tree holds VideoToolbox Remote integration tests and benchmarks.
 - `run_vtremoted_hdr_side_data.sh`: launches `vtremoted` on loopback and verifies remote HEVC Main10 output keeps HDR color signaling (`hvc1`, BT.2020, PQ, limited range) and decodes cleanly.
 - `run_vtremoted_decode.sh`: generates short local H.264/HEVC inputs and validates remote decode with `h264_videotoolbox_remote` / `hevc_videotoolbox_remote`.
 - `run_transcode_test.sh`: simultaneous remote decode + encode pipeline (sanity + stability).
+- `run_mock_transcode_cli_options.py`: verifies CLI `host:port`, stream-specific options, and exact authentication tokens through automatic transcode BSF construction.
+- `run_vtremoted_interlaced.sh`: checks synthetic progressive and both field orders of interlaced H.264 in MP4 and MPEG-TS, with exact decoded frame counts, plus local `bwdif` and remote encode. Requires macOS, `vtremoted`, and a local FFmpeg with `libx264`.
 - `run_option_surface_parity.sh`: compares local (`*_videotoolbox`) vs remote (`*_videotoolbox_remote`) encoder option surfaces for H.264/HEVC and fails on drift (ignoring `vt_remote_*` transport-only options).
 - `run_vtremoted_transcode_bsf_long.sh`: long-run vtremote_transcode bitstream filter test (optional; 10 minutes by default) to catch timestamp/ordering bugs that only appear after many frames.
 - `run_speed_decode_async.sh`: sync vs async remote decode speed test.
@@ -87,6 +89,7 @@ Bench defaults:
 Run-all toggles:
 - `VTREMOTE_RUN_OBS_PLUGIN=1` runs the OBS plugin client protocol smoke test.
 - `VTREMOTE_RUN_OPTION_PARITY=1` runs local-vs-remote encoder option parity checks.
+- `VTREMOTE_RUN_INTERLACED=1` runs the synthetic interlaced H.264 checks.
 
 FFmpeg build note: enable the local + remote codecs during configure on macOS, e.g.
 `./configure --enable-videotoolbox --enable-videotoolbox-remote`

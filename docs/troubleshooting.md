@@ -106,6 +106,32 @@ Common issues and their solutions.
 
 ## Encoding/Decoding
 
+### Remote transcode decoder fails on interlaced H.264
+
+If `-vt_remote_transcode` reports `decoder callback produced no frame`, retain
+the numeric decoder status, full server log, `vtremoted --version`, macOS
+version, and a short failing source sample. The message alone does not establish
+that all interlaced H.264 is unsupported. The synthetic regression checks both
+field orders and both MP4 and MPEG-TS:
+
+```bash
+bash tests/integration/run_vtremoted_interlaced.sh
+```
+
+For a source that the server's VideoToolbox decoder cannot handle, use local
+software decode and deinterlace, then send frames to the remote encoder:
+
+```bash
+ffmpeg -i interlaced.ts -map 0:v:0 -map '0:a:0?' -c:a copy \
+  -vf bwdif=mode=send_frame -pix_fmt nv12 -c:v h264_videotoolbox_remote \
+  -vt_remote_host mac-host:5555 -b:v 8M -g:v 50 \
+  -f mpegts out.ts
+```
+
+This path uses client CPU for decode and deinterlace and sends raw frames over
+the network. `send_frame` preserves the input frame rate. Remote transcode has
+no automatic software decode or deinterlace fallback.
+
 ### VA-API driver does not load
 
 Confirm that `VTREMOTE_HOST` is set, a render node is accessible to the process,

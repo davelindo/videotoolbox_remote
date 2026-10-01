@@ -9,6 +9,7 @@ set -euo pipefail
 #   VTREMOTE_RUN_LONG=1       include long vtremote_transcode test (10min by default)
 #   VTREMOTE_RUN_OBS_PLUGIN=1 include obs-plugin smoke + libobs integration tests
 #   VTREMOTE_RUN_OPTION_PARITY=1 include local-vs-remote encoder option parity check
+#   VTREMOTE_RUN_INTERLACED=1  include synthetic interlaced H.264 checks
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
@@ -47,6 +48,7 @@ run_step "mock_wire_compression" bash "${ROOT}/tests/integration/run_mock_wire_c
 run_step "mock_pts_dts"        bash "${ROOT}/tests/integration/run_mock_pts_dts_semantics.sh"
 run_step "mock_transcode_pts_dts" bash "${ROOT}/tests/integration/run_mock_transcode_pts_dts_semantics.sh"
 run_step "mock_transcode_no_output_ack" bash "${ROOT}/tests/integration/run_mock_transcode_no_output_ack.sh"
+run_step "mock_transcode_cli_options" python3 "${ROOT}/tests/integration/run_mock_transcode_cli_options.py"
 run_step "mock_transcode_hvc1_hdr" bash "${ROOT}/tests/integration/run_mock_transcode_hvc1_hdr_signaling.sh"
 run_step "mock_decode"         bash "${ROOT}/tests/integration/run_mock_decode.sh"
 run_step "mock_protocol_capabilities" bash "${ROOT}/tests/integration/run_mock_protocol_capabilities.sh"
@@ -65,6 +67,9 @@ run_step "vtremoted_transcode_hardware_ingest" bash "${ROOT}/tests/integration/r
 run_step "vtremoted_hevc_pixfmts" bash "${ROOT}/tests/integration/run_vtremoted_hevc_pixfmts.sh"
 run_step "vtremoted_hdr_side_data" bash "${ROOT}/tests/integration/run_vtremoted_hdr_side_data.sh"
 run_step "transcode_test"      bash "${ROOT}/tests/integration/run_transcode_test.sh"
+if [[ "${VTREMOTE_RUN_INTERLACED:-0}" != "0" ]]; then
+  run_step "vtremoted_interlaced" bash "${ROOT}/tests/integration/run_vtremoted_interlaced.sh"
+fi
 if [[ "${VTREMOTE_RUN_OPTION_PARITY:-0}" != "0" ]]; then
   run_step "option_surface_parity" bash "${ROOT}/tests/integration/run_option_surface_parity.sh"
 fi
