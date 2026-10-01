@@ -111,7 +111,13 @@ case "$kind" in
       exit 1
     fi
 
-    "$vtremoted_bin" --version | grep -Eq '^vtremoted [0-9]+\.[0-9]+\.[0-9]+'
+    actual_version="$("$vtremoted_bin" --version)"
+    printf '%s\n' "${actual_version}" | grep -Eq '^vtremoted [0-9]+\.[0-9]+\.[0-9]+'
+    if [[ "${GITHUB_REF:-}" == refs/tags/v* &&
+          "${actual_version}" != "vtremoted ${GITHUB_REF#refs/tags/v}" ]]; then
+      echo "daemon artifact version (${actual_version}) does not match release tag (${GITHUB_REF#refs/tags/})" >&2
+      exit 1
+    fi
     "$vtremoted_bin" --help | grep -q -- '--listen HOST:PORT'
     ;;
 

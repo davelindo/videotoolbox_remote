@@ -36,6 +36,11 @@ config_version="$(
   ' docs/_config.yml
 )"
 
+daemon_version="$(
+  awk -F'"' '/^[[:space:]]*public static let version = "/ { print $2; exit }' \
+    vtremoted/Sources/VTRemotedCore/Arguments.swift
+)"
+
 if [[ -z "${latest_changelog_tag}" ]]; then
   echo "ERROR: could not find latest semver release in CHANGELOG.md" >&2
   exit 1
@@ -61,4 +66,9 @@ if [[ "${config_version}" != "${latest_changelog_tag}" ]]; then
   exit 1
 fi
 
-echo "docs release metadata matches ${latest_changelog_tag}"
+if [[ "v${daemon_version}" != "${latest_changelog_tag}" ]]; then
+  echo "ERROR: daemon version (${daemon_version:-<missing>}) does not match latest CHANGELOG.md release (${latest_changelog_tag})" >&2
+  exit 1
+fi
+
+echo "daemon and docs release metadata match ${latest_changelog_tag}"

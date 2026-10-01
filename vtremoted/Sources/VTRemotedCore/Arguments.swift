@@ -23,10 +23,9 @@ public struct Arguments: Equatable, Sendable {
 
     public init() {}
 
-    public static let version = "0.9.0"
-
     /// Single source of truth for the packaged version, mirrored from the
     /// repository release tag (see CHANGELOG.md and docs/llms.txt).
+    public static let version = "0.9.10"
 
     public static let usage = """
     Usage: vtremoted [options]

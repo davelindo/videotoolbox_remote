@@ -227,6 +227,14 @@ jobs:
                 ;;
               docs/_config.yml|docs/llms.txt)
                 ;;
+              vtremoted/Sources/VTRemotedCore/Arguments.swift)
+                expected_version_source="$(git show "${base_sha}:${path}" |
+                  DAEMON_VERSION="${target_tag#v}" perl -0pe 's/public static let version = "[^"]+"/public static let version = "$ENV{DAEMON_VERSION}"/')"
+                if [[ "$(cat "${path}")" != "${expected_version_source}" ]]; then
+                  echo "ERROR: promotion candidate changed daemon source beyond its release version" >&2
+                  exit 1
+                fi
+                ;;
               *)
                 echo "ERROR: ineligible promotion candidate touched unexpected path: ${path}" >&2
                 exit 1

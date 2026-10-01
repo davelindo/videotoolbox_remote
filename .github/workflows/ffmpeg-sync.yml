@@ -163,7 +163,9 @@ jobs:
           FFMPEG_UPSTREAM_REF="${FFMPEG_UPSTREAM_REF}" bash scripts/update_changelog_for_ffmpeg_sync.sh "${NEXT_TAG}" "${OLD_SHA}" "${new_sha}"
           perl -0pi -e 's/current_release: "[^"]+"/current_release: "$ENV{NEXT_TAG}"/' docs/_config.yml
           perl -0pi -e 's/^\*\*Version\*\*: v[0-9]+\.[0-9]+\.[0-9]+/**Version**: $ENV{NEXT_TAG}/m' docs/llms.txt
-          git add ffmpeg/.subtree-sync.env CHANGELOG.md docs/_config.yml docs/llms.txt ffmpeg
+          DAEMON_VERSION="${NEXT_TAG#v}" perl -0pi -e 's/public static let version = "[^"]+"/public static let version = "$ENV{DAEMON_VERSION}"/' vtremoted/Sources/VTRemotedCore/Arguments.swift
+          bash tests/test_llms_release_version.sh
+          git add ffmpeg/.subtree-sync.env CHANGELOG.md docs/_config.yml docs/llms.txt vtremoted/Sources/VTRemotedCore/Arguments.swift ffmpeg
           message_file="$(mktemp)"
           trap 'rm -f "${message_file}"' EXIT
           {
