@@ -272,6 +272,7 @@ jobs:
             "Swift (vtremoted) macOS arm64"
             "Swift (vtremoted) macOS x86_64"
             "FFmpeg (linux-x86_64)"
+            "FFmpeg (linux-arm64)"
             "FFmpeg (windows-x86_64)"
             "FFmpeg (macos-x86_64)"
             "FFmpeg (macos-arm64)"

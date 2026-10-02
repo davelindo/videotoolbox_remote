@@ -7,10 +7,13 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
+## [v0.9.12] - 2026-10-02
+
 ### Added
 
 - Native Linux arm64 FFmpeg CI builds and `ffmpeg-linux-arm64.tar.gz` release
   assets, including mock integration checks and packaged-artifact smoke tests.
+  Automated FFmpeg sync promotion requires the arm64 job to succeed.
 - Documented the Ubuntu 24.04 shared-library and glibc 2.39 runtime baseline for
   the arm64 client; the VA-API driver remains Linux x86_64 only.
 
