@@ -15,7 +15,7 @@ Follow these steps to set up the macOS server and a matching FFmpeg client.
 ## Prerequisites
 
 - **Server**: A Mac with Apple Silicon or a T2 Security Chip running macOS 13 or newer, including macOS 27.
-- **Client**: Linux, Windows, or macOS. Prebuilt Linux artifacts target `x86_64`; 32-bit `i686` builds are not part of the supported release matrix.
+- **Client**: Linux, Windows, or macOS. Prebuilt Linux FFmpeg artifacts target `x86_64` and `arm64` (`aarch64`); 32-bit `i686` builds are not part of the supported release matrix.
 - **Network**: Wired LAN is strongly recommended (1GbE minimum, 2.5GbE+ for 4K).
 
 ## Step 1: Prepare the Mac (Server)
@@ -70,6 +70,37 @@ For the fastest first run, download `vtremoted-macos-arm64.tar.gz` or `vtremoted
 ## Step 2: Build FFmpeg (Client)
 
 For the fastest first run, download the matching `ffmpeg-*` client tarball for your client OS from the [latest release](https://github.com/davelindo/videotoolbox_remote/releases/latest).
+
+### Linux arm64 release runtime
+
+Choose `ffmpeg-linux-arm64.tar.gz` for a 64-bit arm64/aarch64 Linux client.
+CI builds this archive natively on `ubuntu-24.04-arm`. It contains `ffmpeg`,
+`ffprobe`, and `ffplay`, plus a separate `.sha256` checksum file.
+
+This is a dynamically linked build, not a standalone static binary. Use
+Ubuntu 24.04 or a compatible arm64 environment with glibc 2.39 or newer and
+matching codec, compression, font, and SDL2 shared libraries. These include
+x264, x265, libvpx, dav1d, libaom, Opus, Vorbis, MP3 LAME, LZ4, Zstd, libass,
+and libvmaf. CI builds libvmaf 3.0.0 from source and installs it under
+`/usr/local`; that shared library must also be installed on the client.
+SVT-AV1 4.0.1 is linked statically into this build.
+
+Debian 12 and Raspberry Pi OS Bookworm use an older glibc and cannot run this
+Ubuntu 24.04 binary. A newer glibc alone does not guarantee matching shared
+library versions. Build FFmpeg from source on your target distribution, or
+use an Ubuntu 24.04 arm64 container with the required libraries. To inspect
+missing runtime dependencies after unpacking, run:
+
+```bash
+ldd ffmpeg-client/ffmpeg
+ldd ffmpeg-client/ffprobe
+ldd ffmpeg-client/ffplay
+```
+
+The arm64 asset provides the FFmpeg client only. VA-API driver release assets
+remain Linux x86_64 only.
+
+### Build from source
 
 On your Linux or Windows machine (or the same Mac if testing locally):
 
