@@ -912,3 +912,67 @@ jobs:
           NIGHTLY_HEAD_TAG: nightly-main
         run: |
           bash scripts/apply_release_notes.sh "${RELEASE_TAG}" "${GITHUB_REPOSITORY}"
+
+  verify-published-linux-arm64:
+    name: Verify published FFmpeg (linux-arm64)
+    needs: [changes, publish-assets]
+    if: github.event_name != 'pull_request' && ((github.event_name == 'schedule' && needs.changes.outputs.publishable == 'true') || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || needs.changes.outputs.semver_tag == 'true')
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - name: Check runner platform
+        run: |
+          test "${RUNNER_OS}" = "Linux"
+          test "${RUNNER_ARCH}" = "ARM64"
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install dependencies (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yasm nasm pkg-config meson ninja-build cmake gh liblz4-dev libzstd-dev ccache \
+            libaom-dev libdav1d-dev \
+            libopus-dev libvorbis-dev libmp3lame-dev libx264-dev libx265-dev libvpx-dev \
+            libass-dev libfreetype6-dev libfontconfig1-dev libfribidi-dev libharfbuzz-dev \
+            libxml2-dev libzimg-dev libwebp-dev libsdl2-dev
+
+      - name: Build libvmaf (Linux)
+        run: |
+          git clone --depth=1 --branch v3.0.0 https://github.com/Netflix/vmaf.git
+          cd vmaf/libvmaf
+          meson setup build --buildtype release --prefix=/usr/local
+          ninja -C build
+          sudo ninja -C build install
+          sudo ldconfig
+
+      - name: Download and verify published arm64 archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH_NIGHTLY: ${{ inputs.publish_nightly }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] || { [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ "${PUBLISH_NIGHTLY}" = "true" ]; }; then
+            release_tag=nightly
+          else
+            release_tag="${GITHUB_REF#refs/tags/}"
+          fi
+          mkdir -p published
+          cd published
+          gh release download "${release_tag}" -R "${GITHUB_REPOSITORY}" \
+            -p ffmpeg-linux-arm64.tar.gz \
+            -p ffmpeg-linux-arm64.tar.gz.sha256 -p SHA256SUMS.txt
+          sha256sum -c ffmpeg-linux-arm64.tar.gz.sha256
+          awk '$2 == "ffmpeg-linux-arm64.tar.gz" { print; found=1 } END { exit !found }' SHA256SUMS.txt > arm64-checksum.txt
+          sha256sum -c arm64-checksum.txt
+          bash ../scripts/smoke_release_artifact.sh ffmpeg ffmpeg-linux-arm64.tar.gz
+          tar -xzf ffmpeg-linux-arm64.tar.gz
+          readelf -h ffmpeg | grep -Eq 'Machine:[[:space:]]+AArch64'
+          ./ffprobe -hide_banner -version
+          ./ffplay -hide_banner -version
+      - name: Test published client against mock daemon
+        env:
+          FFMPEG_BIN: ${{ github.workspace }}/published/ffmpeg
+          FFPROBE_BIN: ${{ github.workspace }}/published/ffprobe
+        run: |
+          bash tests/integration/run_mock_roundtrip.sh
+          bash tests/integration/run_mock_wire_compression.sh
+          bash tests/integration/run_mock_decode.sh

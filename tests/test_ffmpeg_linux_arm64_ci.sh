@@ -30,6 +30,7 @@ arm = job("ffmpeg-build-linux-arm64")
 x86 = job("ffmpeg-build-linux")
 hosted = job("ffmpeg-build")
 publish = job("publish-assets")
+published = job("verify-published-linux-arm64")
 require(arm, "runs-on: ubuntu-24.04-arm")
 require(arm, "FFMPEG_BUILD_LABEL: linux-arm64")
 require(x86, "runs-on: videotoolbox-remote-runner")
@@ -42,6 +43,20 @@ condition = lambda block: re.search(r"^    if: (.+)$", block, re.M).group(1)
 assert condition(arm) == condition(hosted), "arm64 event gating differs from hosted FFmpeg builds"
 needs = re.search(r"^    needs: \[([^\]]+)\]$", publish, re.M).group(1)
 assert "ffmpeg-build-linux-arm64" in [item.strip() for item in needs.split(",")], "release publication must wait for arm64 artifacts"
+
+require(published, "runs-on: ubuntu-24.04-arm")
+require(published, "needs: [changes, publish-assets]")
+assert condition(published) == condition(publish), "published-asset verification must follow release event gating"
+for value in [
+    'gh release download "${release_tag}"',
+    'sha256sum -c ffmpeg-linux-arm64.tar.gz.sha256',
+    'sha256sum -c arm64-checksum.txt',
+    'bash ../scripts/smoke_release_artifact.sh ffmpeg ffmpeg-linux-arm64.tar.gz',
+    'FFMPEG_BIN: ${{ github.workspace }}/published/ffmpeg',
+    'bash tests/integration/run_mock_roundtrip.sh',
+    'bash tests/integration/run_mock_decode.sh',
+]:
+    require(published, value)
 
 # Promotion must require success from the new platform before creating a tag.
 # Execute the actual job-conclusion gate with a fake read-only gh response.
