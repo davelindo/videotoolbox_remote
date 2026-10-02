@@ -36,14 +36,18 @@ The `vtremoted` binary must not hard-link Homebrew `liblz4` or `libzstd`; those 
 
 ### Linux / Windows (Client Only)
 
-Linux CI and release artifacts target `x86_64`. The project does not publish or test 32-bit `i686` Linux builds.
+Linux FFmpeg CI and release artifacts target `x86_64` and `arm64` (`aarch64`).
+The arm64 job runs natively on GitHub-hosted `ubuntu-24.04-arm`, with the same
+codec/filter, mock integration, and packaged-artifact smoke checks as x86_64.
+See [arm64 runtime requirements](getting-started.md#linux-arm64-release-runtime)
+for the Ubuntu 24.04 shared-library baseline. The project does not publish or test 32-bit `i686` Linux builds.
 
 The VA-API driver job runs in Ubuntu 20.04 and builds the pinned libva 2.22 /
 VA-API 1.22 headers from source. This preserves the GLIBC 2.17 release-artifact
 baseline. Locally on Linux, run `make test-vaapi-driver`. The test suite uses
 the shared repository mock and stock FFmpeg's VA-API encoders.
 
-1.  **Install assembler and library dependencies**:
+1.  **Install assembler and library dependencies** (assemblers are needed for x86 builds):
     ```bash
     nasm -v
     yasm --version
@@ -158,12 +162,19 @@ Release checklist:
 - Confirm the README, landing page CTA, and release notes still point to the latest release and getting-started flow.
 - Run `make sync-github-metadata` if description, homepage, or topics changed.
 
+The dependency-free CI wiring regression runs with:
+
+```bash
+bash tests/test_ffmpeg_linux_arm64_ci.sh
+```
+
 ## Artifact Smoke Checks
 
 CI smoke-tests packaged tarballs after creating them. To reproduce locally:
 
 ```bash
 bash scripts/smoke_release_artifact.sh ffmpeg ffmpeg-linux-x86_64.tar.gz
+bash scripts/smoke_release_artifact.sh ffmpeg ffmpeg-linux-arm64.tar.gz
 bash scripts/smoke_release_artifact.sh vtremoted vtremoted-macos-arm64.tar.gz
 ```
 

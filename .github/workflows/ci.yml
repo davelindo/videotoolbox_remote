@@ -94,6 +94,7 @@ jobs:
           bash tests/test_is_semver_tag.sh
           bash tests/test_macos_deployment_target.sh
           bash tests/test_vtremoted_package_shape.sh
+          bash tests/test_ffmpeg_linux_arm64_ci.sh
           bash tests/test_ffmpeg_sync_subtree_shape.sh
           bash tests/test_next_patch_release.sh
           bash tests/test_llms_release_version.sh
@@ -291,6 +292,121 @@ jobs:
         run: |
           test "${RUNNER_OS}" = "Linux"
           test "${RUNNER_ARCH}" = "X64"
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install dependencies (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yasm nasm pkg-config meson ninja-build cmake liblz4-dev libzstd-dev ccache \
+            libaom-dev libdav1d-dev \
+            libopus-dev libvorbis-dev libmp3lame-dev libx264-dev libx265-dev libvpx-dev \
+            libass-dev libfreetype6-dev libfontconfig1-dev libfribidi-dev libharfbuzz-dev \
+            libxml2-dev libzimg-dev libwebp-dev libsdl2-dev
+
+      - name: Build libvmaf (Linux)
+        run: |
+          git clone --depth=1 --branch v3.0.0 https://github.com/Netflix/vmaf.git
+          cd vmaf/libvmaf
+          meson setup build --buildtype release --prefix=/usr/local
+          ninja -C build
+          sudo ninja -C build install
+          sudo ldconfig
+
+      - name: Build SVT-AV1 (Linux)
+        run: |
+          git clone --depth=1 --branch v4.0.1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
+          cmake -S SVT-AV1 -B svtav1-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${RUNNER_TEMP}/vtremote-svtav1" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DBUILD_SHARED_LIBS=OFF
+          ninja -C svtav1-build
+          ninja -C svtav1-build install
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ runner.os }}-${{ env.FFMPEG_BUILD_LABEL }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ env.FFMPEG_BUILD_LABEL }}-
+
+      - name: Configure + build (Linux)
+        run: |
+          export CCACHE_DIR="${GITHUB_WORKSPACE}/.ccache"
+          ccache -M 2G
+          ccache -z
+          export CC="ccache gcc"
+          export CXX="ccache g++"
+          export PKG_CONFIG_PATH="${RUNNER_TEMP}/vtremote-svtav1/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig:${PKG_CONFIG_PATH}"
+          make build-ffmpeg
+          ccache -s
+
+      - name: Verify quality metrics filters (Linux)
+        run: |
+          ./ffmpeg/ffmpeg -hide_banner -filters | grep -Eq '(^|[[:space:]])psnr([[:space:]]|$)'
+          ./ffmpeg/ffmpeg -hide_banner -filters | grep -Eq '(^|[[:space:]])ssim([[:space:]]|$)'
+          ./ffmpeg/ffmpeg -hide_banner -filters | grep -Eq '(^|[[:space:]])libvmaf([[:space:]]|$)'
+          ./ffmpeg/ffmpeg -hide_banner -encoders | grep -Eq '(^|[[:space:]])h264_videotoolbox_remote([[:space:]]|$)'
+          ./ffmpeg/ffmpeg -hide_banner -encoders | grep -Eq '(^|[[:space:]])hevc_videotoolbox_remote([[:space:]]|$)'
+          ./ffmpeg/ffmpeg -hide_banner -decoders | grep -Eq '(^|[[:space:]])h264_videotoolbox_remote([[:space:]]|$)'
+          ./ffmpeg/ffmpeg -hide_banner -decoders | grep -Eq '(^|[[:space:]])hevc_videotoolbox_remote([[:space:]]|$)'
+          ./ffmpeg/ffmpeg -hide_banner -bsfs | grep -Eq '(^|[[:space:]])vtremote_transcode([[:space:]]|$)'
+
+      - name: Run mock integration tests (Linux)
+        run: |
+          python3 tests/integration/run_transport_regressions.py --skip-daemon
+          python3 tests/integration/run_decode_duplex.py
+          python3 tests/integration/bench_inflight.py --frames 600 --repeats 1 --depths 0 --changing-capacity --output vtremote-inflight.json
+          bash tests/integration/run_mock_roundtrip.sh
+          bash tests/integration/run_mock_wire_compression.sh
+          bash tests/integration/run_mock_decode.sh
+          bash tests/integration/run_mock_pts_dts_semantics.sh
+          bash tests/integration/run_mock_transcode_pts_dts_semantics.sh
+          python3 tests/integration/run_mock_transcode_cli_options.py
+          bash tests/integration/run_mock_transcode_hvc1_hdr_signaling.sh
+          bash tests/integration/run_mock_protocol_capabilities.sh
+          bash tests/integration/run_mock_side_data_roundtrip.sh
+          bash tests/integration/run_mock_hevc_pixfmt_negotiation.sh
+
+      - name: Package ffmpeg (Linux)
+        run: |
+          mkdir -p dist
+          cp ffmpeg/ffmpeg ffmpeg/ffprobe dist/
+          if [ -f ffmpeg/ffplay ]; then
+            cp ffmpeg/ffplay dist/
+          fi
+          tar -C dist -czf ffmpeg-${{ env.FFMPEG_BUILD_LABEL }}.tar.gz .
+          shasum -a 256 ffmpeg-${{ env.FFMPEG_BUILD_LABEL }}.tar.gz > ffmpeg-${{ env.FFMPEG_BUILD_LABEL }}.tar.gz.sha256
+      - name: Smoke packaged ffmpeg artifact (Linux)
+        run: |
+          bash scripts/smoke_release_artifact.sh ffmpeg ffmpeg-${{ env.FFMPEG_BUILD_LABEL }}.tar.gz
+
+      - name: Upload ffmpeg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-${{ env.FFMPEG_BUILD_LABEL }}
+          path: |
+            ffmpeg-${{ env.FFMPEG_BUILD_LABEL }}.tar.gz
+            ffmpeg-${{ env.FFMPEG_BUILD_LABEL }}.tar.gz.sha256
+
+  ffmpeg-build-linux-arm64:
+    # Native hosted build; the self-hosted x86_64 runner stays unchanged.
+    name: FFmpeg (linux-arm64)
+    needs: changes
+    if: needs.changes.outputs.release_candidate == 'true' || (github.event_name == 'schedule' && needs.changes.outputs.publishable == 'true') || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || needs.changes.outputs.semver_tag == 'true' || (github.event_name != 'schedule' && (needs.changes.outputs.ffmpeg == 'true' || needs.changes.outputs.ci == 'true'))
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    env:
+      FFMPEG_BUILD_LABEL: linux-arm64
+    steps:
+      - name: Check runner platform
+        run: |
+          test "${RUNNER_OS}" = "Linux"
+          test "${RUNNER_ARCH}" = "ARM64"
 
       - uses: actions/checkout@v4
         with:
@@ -726,7 +842,7 @@ jobs:
   publish-assets:
     name: Publish nightly / release assets
     runs-on: videotoolbox-remote-runner
-    needs: [changes, swift-macos-arm64, swift-macos-x86_64, ffmpeg-build-linux, ffmpeg-build, vaapi-driver-linux]
+    needs: [changes, swift-macos-arm64, swift-macos-x86_64, ffmpeg-build-linux, ffmpeg-build-linux-arm64, ffmpeg-build, vaapi-driver-linux]
     if: github.event_name != 'pull_request' && ((github.event_name == 'schedule' && needs.changes.outputs.publishable == 'true') || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || needs.changes.outputs.semver_tag == 'true')
     permissions:
       contents: write
@@ -796,3 +912,67 @@ jobs:
           NIGHTLY_HEAD_TAG: nightly-main
         run: |
           bash scripts/apply_release_notes.sh "${RELEASE_TAG}" "${GITHUB_REPOSITORY}"
+
+  verify-published-linux-arm64:
+    name: Verify published FFmpeg (linux-arm64)
+    needs: [changes, publish-assets]
+    if: github.event_name != 'pull_request' && ((github.event_name == 'schedule' && needs.changes.outputs.publishable == 'true') || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || needs.changes.outputs.semver_tag == 'true')
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - name: Check runner platform
+        run: |
+          test "${RUNNER_OS}" = "Linux"
+          test "${RUNNER_ARCH}" = "ARM64"
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install dependencies (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yasm nasm pkg-config meson ninja-build cmake gh liblz4-dev libzstd-dev ccache \
+            libaom-dev libdav1d-dev \
+            libopus-dev libvorbis-dev libmp3lame-dev libx264-dev libx265-dev libvpx-dev \
+            libass-dev libfreetype6-dev libfontconfig1-dev libfribidi-dev libharfbuzz-dev \
+            libxml2-dev libzimg-dev libwebp-dev libsdl2-dev
+
+      - name: Build libvmaf (Linux)
+        run: |
+          git clone --depth=1 --branch v3.0.0 https://github.com/Netflix/vmaf.git
+          cd vmaf/libvmaf
+          meson setup build --buildtype release --prefix=/usr/local
+          ninja -C build
+          sudo ninja -C build install
+          sudo ldconfig
+
+      - name: Download and verify published arm64 archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH_NIGHTLY: ${{ inputs.publish_nightly }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] || { [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ "${PUBLISH_NIGHTLY}" = "true" ]; }; then
+            release_tag=nightly
+          else
+            release_tag="${GITHUB_REF#refs/tags/}"
+          fi
+          mkdir -p published
+          cd published
+          gh release download "${release_tag}" -R "${GITHUB_REPOSITORY}" \
+            -p ffmpeg-linux-arm64.tar.gz \
+            -p ffmpeg-linux-arm64.tar.gz.sha256 -p SHA256SUMS.txt
+          sha256sum -c ffmpeg-linux-arm64.tar.gz.sha256
+          awk '$2 == "ffmpeg-linux-arm64.tar.gz" { print; found=1 } END { exit !found }' SHA256SUMS.txt > arm64-checksum.txt
+          sha256sum -c arm64-checksum.txt
+          bash ../scripts/smoke_release_artifact.sh ffmpeg ffmpeg-linux-arm64.tar.gz
+          tar -xzf ffmpeg-linux-arm64.tar.gz
+          readelf -h ffmpeg | grep -Eq 'Machine:[[:space:]]+AArch64'
+          ./ffprobe -hide_banner -version
+          ./ffplay -hide_banner -version
+      - name: Test published client against mock daemon
+        env:
+          FFMPEG_BIN: ${{ github.workspace }}/published/ffmpeg
+          FFPROBE_BIN: ${{ github.workspace }}/published/ffprobe
+        run: |
+          bash tests/integration/run_mock_roundtrip.sh
+          bash tests/integration/run_mock_wire_compression.sh
+          bash tests/integration/run_mock_decode.sh

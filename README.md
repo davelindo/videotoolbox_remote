@@ -45,12 +45,15 @@ Start with the [getting started guide](docs/getting-started.md) for setup, secur
 | `vtremoted-macos-arm64.tar.gz` | macOS server binary for Apple Silicon Macs |
 | `vtremoted-macos-x86_64.tar.gz` | macOS server binary for Intel Macs |
 | `ffmpeg-linux-x86_64.tar.gz` | FFmpeg client build for Linux x86_64 |
+| `ffmpeg-linux-arm64.tar.gz` | FFmpeg client build for Linux arm64 (aarch64), built on Ubuntu 24.04 |
 | `vtremote-vaapi-linux-x86_64.tar.gz` | Encode-only VA-API driver, Plex packet shim, and experimental static C SDK for Linux |
 | `vtremote-vaapi-*-source.tar.gz` | Matching VA-API driver source bundle |
 | `ffmpeg-macos-arm64.tar.gz` | FFmpeg client build for Apple Silicon Macs |
 | `ffmpeg-macos-x86_64.tar.gz` | FFmpeg client build for Intel Macs |
 | `ffmpeg-windows-x86_64.tar.gz` | FFmpeg client build for Windows x86_64 |
 | `SHA256SUMS.txt` | Checksums for release tarballs |
+
+The Linux arm64 client requires Ubuntu 24.04-compatible shared libraries and glibc 2.39 or newer. See [Linux arm64 runtime requirements](docs/getting-started.md#linux-arm64-release-runtime) before downloading it for Debian or Raspberry Pi OS.
 
 ## When to Use It
 
@@ -147,7 +150,7 @@ The Swift package and top-level Makefile default to a macOS 13.0 deployment targ
 make build-ffmpeg
 ```
 
-The standard build enables VMAF, SSIM/PSNR, and common codec libraries, including AV1. Linux release artifacts and CI builds target `x86_64`; 32-bit `i686` builds are not part of the supported matrix.
+The standard build enables VMAF, SSIM/PSNR, and common codec libraries, including AV1. Linux FFmpeg release artifacts and CI builds target `x86_64` and `arm64` (`aarch64`); 32-bit `i686` builds are not part of the supported matrix. The VA-API driver remains Linux `x86_64` only.
 
 ### VA-API driver on Linux
 

@@ -4,7 +4,7 @@ permalink: /llms.txt
 ---
 # VideoToolbox Remote (`videotoolbox_remote`) Briefing
 
-**Version**: v0.9.11
+**Version**: v0.9.12
 **License**: LGPL v2.1+
 **Goal**: Offload FFmpeg H.264/HEVC encoding/decoding to a remote macOS 13+ machine, including macOS 27, over LAN.
 
@@ -83,7 +83,7 @@ make -j$(nproc)
 - **Encoding**: H.264 (Baseline/Main/High), HEVC (Main, Main10)
 - **Decoding**: H.264, HEVC
 - **Pixel Formats**: NV12, YUV420P, P010LE, YUV420P10LE, YUV420P10BE; HEVC expanded paths also negotiate BGRA, AYUV, and P210LE where the server/runtime supports them.
-- **Platforms**: macOS (server), Linux/Windows/macOS (client)
+- **Platforms**: macOS (server), Linux x86_64/arm64, Windows x86_64, macOS x86_64/arm64 (FFmpeg client). The Linux arm64 release requires Ubuntu 24.04-compatible shared libraries and glibc 2.39 or newer; build from source on Debian 12 / Raspberry Pi OS Bookworm. VA-API release assets remain Linux x86_64 only.
 
 ## Release and Download Surface
 - Latest release: https://github.com/davelindo/videotoolbox_remote/releases/latest

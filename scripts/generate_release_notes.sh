@@ -87,7 +87,7 @@ Remote VideoToolbox for FFmpeg: use a Mac or Apple Silicon system over LAN as an
 ## 1-minute quickstart
 
 1. On the Mac server, download \`vtremoted-macos-arm64.tar.gz\` (Apple Silicon) or \`vtremoted-macos-x86_64.tar.gz\` (Intel Mac).
-2. On the client, download the FFmpeg build for your platform: \`ffmpeg-linux-x86_64.tar.gz\`, \`ffmpeg-macos-arm64.tar.gz\`, \`ffmpeg-macos-x86_64.tar.gz\`, or \`ffmpeg-windows-x86_64.tar.gz\`.
+2. On the client, download the FFmpeg build for your platform: \`ffmpeg-linux-x86_64.tar.gz\`, \`ffmpeg-linux-arm64.tar.gz\`, \`ffmpeg-macos-arm64.tar.gz\`, \`ffmpeg-macos-x86_64.tar.gz\`, or \`ffmpeg-windows-x86_64.tar.gz\`.
 3. Start \`vtremoted\` on the Mac:
 
 \`\`\`bash
@@ -111,7 +111,8 @@ tar -xzf ffmpeg-linux-x86_64.tar.gz -C ffmpeg-client
 
 - \`vtremoted-macos-arm64.tar.gz\`: macOS server binary for Apple Silicon Macs.
 - \`vtremoted-macos-x86_64.tar.gz\`: macOS server binary for Intel Macs.
-- \`ffmpeg-linux-x86_64.tar.gz\`: FFmpeg client build for Linux.
+- \`ffmpeg-linux-x86_64.tar.gz\`: FFmpeg client build for Linux x86_64.
+- \`ffmpeg-linux-arm64.tar.gz\`: FFmpeg client build for Linux arm64/aarch64 (Ubuntu 24.04).
 - \`ffmpeg-macos-arm64.tar.gz\`: FFmpeg client build for Apple Silicon Macs.
 - \`ffmpeg-macos-x86_64.tar.gz\`: FFmpeg client build for Intel Macs.
 - \`ffmpeg-windows-x86_64.tar.gz\`: FFmpeg client build for Windows.
@@ -122,7 +123,7 @@ tar -xzf ffmpeg-linux-x86_64.tar.gz -C ffmpeg-client
 ## Build and upgrade notes
 
 - v0.4.1-capable clients and servers negotiate the expanded media surface explicitly: hardware-frame ingest/output, HEVC \`bgra\`/\`ayuv\`/\`p210le\`, frame and packet side-data forwarding, and \`vtremote_transcode\` HDR signaling.
-- Linux FFmpeg artifacts are built for \`x86_64\`. If a source build fails in FFmpeg x86 assembly, first install current \`nasm\` and \`yasm\`; as a compatibility fallback, rebuild with \`make build-ffmpeg FFMPEG_DISABLE_X86ASM=1\`.
+- Linux FFmpeg artifacts are built for \`x86_64\` and \`arm64\` (aarch64). The arm64 build requires glibc 2.39 or newer and Ubuntu 24.04-compatible shared libraries, including libvmaf 3.0.0; it will not run on Debian 12 / Raspberry Pi OS Bookworm. See [arm64 runtime requirements](${getting_started_url}#linux-arm64-release-runtime). If a source build fails in FFmpeg x86 assembly, first install current \`nasm\` and \`yasm\`; as a compatibility fallback, rebuild with \`make build-ffmpeg FFMPEG_DISABLE_X86ASM=1\`.
 - To verify a macOS server upgrade, run \`vtremoted --version\`, \`pgrep -fl vtremoted\`, and \`lsof -nP -iTCP:5555 -sTCP:LISTEN\` on the Mac.
 - Release tarballs are smoke-tested after packaging to confirm the vtremote FFmpeg encoders, decoders, and \`vtremote_transcode\` bitstream filter are present.
 - The VA-API artifact is tested through stock FFmpeg and an unclaimed-server Plex Transcoder smoke; claimed Plex Pass servers can additionally run the PMS playback-policy test.
