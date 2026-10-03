@@ -14,7 +14,7 @@ Common issues and their solutions.
 **Checks**:
 1.  **Reachability**: Can you ping the Mac's IP from the client?
 2.  **Firewall**: Ensure the macOS firewall allows incoming TCP connections to `vtremoted` (port 5555).
-3.  **Port**: Verify `vtremoted` is running and listening on `0.0.0.0` (not just `localhost`).
+3.  **Port**: Verify `vtremoted` is listening on the intended private/VPN address. It defaults to loopback; use loopback when connecting through an SSH tunnel.
 
 ### Auth Failure
 **Symptom**: Server closes connection immediately with an error.
@@ -51,7 +51,7 @@ Common issues and their solutions.
    ```bash
    uname -m
    ```
-   Supported Linux release artifacts target `x86_64`, not 32-bit `i686`.
+   Linux FFmpeg artifacts target `x86_64` and `arm64`, not 32-bit `i686`. This assembler diagnostic concerns x86_64.
 2. Install current assemblers:
    ```bash
    nasm -v
@@ -182,10 +182,12 @@ export LIBVA_DRIVER_NAME=vtremote
 With no physical GPU, stock VA-API applications can use a `vgem` render node.
 The Plex packet-transcode image does not use libva and needs no render node.
 
+VGEM must be provided by the host kernel; some NAS kernels omit it. Confirm device permissions and choose the actual render node rather than assuming `renderD128` is VGEM. See [VA-API setup](vaapi-driver.html#choose-a-render-node).
+
 ### Plex transcode still uses substantial Linux CPU
 
 Confirm that the input is H.264 or HEVC and that Plex emitted the supported
-software-scale/format/hardware-upload graph. A successful remote handshake
+software-scale/format/hardware-upload graph or recognized SDR VA-API graph. A successful remote handshake
 appends `remote-decode-scale-encode` to `VTREMOTE_PLEX_AUDIT_FILE`. If the
 marker does not appear, the wrapper deliberately passed the command through
 unchanged.
@@ -193,9 +195,13 @@ This also happens when Plex's bundled `libavcodec` fingerprint or full
 `avcodec_version()` is not on the tested allowlist, when the command contains
 an encoder constraint that cannot be translated exactly, or when it contains
 multiple video inputs or outputs.
+Inspect the corresponding `.decision` audit file for native-path reasons. A fresh successful-handshake marker plus a decodable segment is stronger evidence than a hardware label in the Plex dashboard. See the [Plex validation guide](plex.html#verify-a-real-plex-playback-request).
 Tone mapping, deinterlace, subtitle burn-in, unsupported graphs, audio
 transcoding, and container I/O can still consume Linux CPU.
 
 ### Slow HEVC 10-bit Encoding
-**Context**: 10-bit HEVC is compute-intensive. Expect ~200 fps at 1080p and ~60 fps at 4K on Apple Silicon (loopback). Over a real network, throughput depends on bandwidth and latency.
-**Diagnosis**: If `max_inflight` stays low (e.g., < 5), the bottleneck is the Mac's hardware encoder, not the network.
+Compare your source, settings and network with the [historical benchmarks](benchmarks.html). Raw P010 transfers, compression, local filters, server thermals and encoder options can each limit throughput. Low in-flight counts alone do not identify the bottleneck: inspect network traffic, client/server CPU, frame/packet counts and encoder timing. Compare raw-frame encode with packet transcode when local filters are unnecessary.
+
+### Linux arm64 binary will not start
+
+The release needs Ubuntu 24.04-compatible libraries and glibc 2.39+. Debian 12 and Raspberry Pi OS Bookworm need a target-distribution source build. Use `ldd` to identify missing shared libraries and read the [arm64 runtime requirements](getting-started.html#linux-arm64-release-runtime).

@@ -49,6 +49,7 @@ sequenceDiagram
 
     Note over C,S: Teardown
     C->>S: FLUSH
+    S-->>C: Remaining PACKETs
     S-->>C: DONE
 ```
 
@@ -135,7 +136,7 @@ Raw frame planes.
 - `planes` (struct[]): Stride, height, byte length, data.
 - Optional side data: `side_data_count` followed by `(type, size, data)` records.
   Frame side-data `type` values match FFmpeg `AVFrameSideDataType` values.
-  The 0.4.1 allowlist forwards A53 captions, Stereo3D, display matrix, AFD,
+  The frame allowlist forwards A53 captions, Stereo3D, display matrix, AFD,
   mastering display metadata, content light level, ICC profile, S12M timecode,
   HDR10+, unregistered SEI, Dolby Vision RPU/metadata, HDR Vivid, and ambient
   viewing environment records. Unknown or intentionally unsupported frame side
@@ -168,6 +169,8 @@ packet.
 - **Authentication**: Simple token matching in `HELLO`.
 - **Timeouts**: The server defaults to a 10-second handshake timeout and a 60-second idle timeout. The OBS client bounds socket reads and writes to five seconds. Send `PING` every 5s if idle.
 - **Errors**: Connection closes immediately after sending `ERROR`.
+
+Clients must drain all delayed frames/packets after `FLUSH` until `DONE`. `DONE` is a completion signal; end-of-file, timeout or a fatal error is not a successful substitute. Message read/write deadlines cover the complete operation rather than resetting for each partial transfer. The transport is plain TCP; see [security](security.html).
 
 ### Error Codes
 

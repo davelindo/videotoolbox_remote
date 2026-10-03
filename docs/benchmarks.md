@@ -1,11 +1,23 @@
 ---
-title: Benchmarks
-description: "VideoToolbox Remote benchmark results for remote H.264/HEVC encoding, with hardware, network, and reproduction caveats."
+title: Quality & benchmarks
+description: "Measured VideoToolbox Remote throughput, VMAF and Linux CPU use for H.264/HEVC. Compare quality at matched bitrates and understand low-power transcoding limits."
 ---
 
-# Benchmarks
+# Quality & benchmarks
 
 These numbers are intended as a practical baseline for FFmpeg users evaluating whether a Mac hardware transcoding server is worth adding to a LAN workflow. Actual throughput depends on source content, bitrate, encoder options, client CPU, network, and whether the session sends raw frames or compressed packets.
+
+These are historical v0.7.0/v0.8.0 measurements, not a fresh benchmark of {{ site.current_release }}. They support the described paths and comparisons on the tested hardware; they are not a capacity guarantee for every Mac, source or Plex workload.
+
+## Power and quality
+
+Low-power, high-quality hardware transcoding is the project's main use case: keep a small Linux host doing storage and service work while a Mac's dedicated media hardware processes video. Apple's [M2 overview](https://www.apple.com/newsroom/2022/06/apple-unveils-m2-with-breakthrough-performance-and-capabilities/) describes its energy efficiency and hardware H.264/HEVC media engine. Actual power depends on the Mac, workload and the rest of the system.
+
+The published project results measure throughput, video quality and Linux resource use. **They do not measure watts or energy per transcode.** Lower client CPU time is useful evidence of offload, but does not measure the combined Mac, Linux host and network power. Compare wall energy for both hosts over a complete job, account for idle power, and report watt-hours per completed file or stream duration before claiming a specific saving.
+
+Quality also needs matching delivered bitrates, profiles, pixel formats and source/reference handling. In the v0.8.0 comparison below, remote and Intel output differed by about 0.50 VMAF point for HEVC Main 10 and 0.99 for H.264. The remote path was faster for HEVC and the Intel path faster for H.264. This is evidence for a high-quality hardware path on that source, not a universal encoder ranking. For visually demanding material, compare representative natural-video samples yourself.
+
+FFmpeg remote encoders expose `-power_efficient 1` where the target VideoToolbox runtime supports it. The daemon's default favors throughput (`MaximizePowerEfficiency=false`); hardware encoding efficiency and that optional setting are separate. Verify support, quality and throughput before choosing it for batch jobs.
 
 ## v0.7.0 Validated Baseline
 
@@ -63,7 +75,7 @@ All four representative outputs contained 1,800 packets and decoded without erro
 - **Network mode**: Remote encode sends raw frames and benefits from LZ4/Zstd wire compression. Remote transcode sends compressed packets and can use far less bandwidth.
 - **Codec and format**: HEVC Main10, HDR signaling, hardware-frame paths, and pixel format conversion can change throughput.
 - **Encoder options**: Bitrate, GOP, realtime mode, quality settings, and VideoToolbox capability negotiation all matter.
-- **Client work**: Input demux, filters, audio, subtitles, and muxing still happen on the FFmpeg client unless using packet-in/packet-out transcode mode.
+- **Client work**: Demux, audio, subtitles and muxing stay local in every mode. Remote encode also decodes/filters locally; packet transcode moves supported video decode/resize/encode to the Mac.
 
 ## Reproduce Locally
 
@@ -94,3 +106,5 @@ VTREMOTED=/bin/true tests/integration/bench_vtremote.sh
 Compare remote encode, remote transcode, and local software or GPU paths on the same source file. For weak clients, slower networks, or HEVC Main10 pipelines that do not need raw client-side frames, prefer `-vt_remote_transcode` because the client sends compressed packets to the Mac and receives compressed packets back. For maximum-throughput HEVC encoding on a low-latency 2.5 GbE LAN, start with `-vt_remote_inflight 32` and validate latency and throughput against the actual workload.
 
 For security and deployment recommendations, see [Security](security.html). For connection and throughput troubleshooting, see [Troubleshooting](troubleshooting.html).
+
+For longer natural-video comparisons, concurrent sessions, latency percentiles, counts and independent decode checks, use [the sustained benchmark runner]({{ site.repository_url }}/blob/main/tests/integration/README.md). Keep its build identities and machine/network details with the results.
