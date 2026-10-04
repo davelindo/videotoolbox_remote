@@ -5,13 +5,15 @@ description: "Compare Intel VA-API, CPU fast/medium presets, local VideoToolbox 
 
 # Performance
 
-Compare complete video pipelines on the same inputs: Intel iGPU VA-API, CPU encoding with `fast` and `medium` presets, local VideoToolbox, and remote VideoToolbox. Local and remote VideoToolbox use the **same M2 Mac**. The remote client runs on the Intel Linux host.
+Compare complete video pipelines at matched output bitrate on moving video: Intel iGPU VA-API, CPU encoding with `fast` and `medium` presets, local VideoToolbox, and remote VideoToolbox. Local and remote VideoToolbox use the **same M2 Mac**. The remote client runs on the Intel Linux host.
 
 ## Current comparison
 
 {% assign performance = site.data.performance %}
 {% if performance %}
-Measured {{ performance.date }} with VideoToolbox Remote **{{ performance.release }}**. Each throughput value is the median of three measured runs after warm-up. Every output passed frame, packet, timestamp and independent software-decode checks.
+Measured {{ performance.date }} with VideoToolbox Remote **{{ performance.release }}**. Each throughput value is the median of three measured runs after warm-up. Every moving-video output met its common bitrate budget within **2%**. Every output passed frame, packet, timestamp and independent software-decode checks.
+
+[View the measured data (JSON)]({{ site.repository_url }}/blob/main/docs/_data/performance.json), including requested and delivered bitrate, throughput ranges and validation results for every case.
 
 | Host | Hardware and role |
 | --- | --- |
@@ -21,6 +23,10 @@ Measured {{ performance.date }} with VideoToolbox Remote **{{ performance.releas
 
 {% for fixture in performance.fixtures %}
 ### {{ fixture.label }}
+
+{% if fixture.id == "smptebars" %}
+**Control workload:** static bars verify a simple signal across the pipelines. Intel VA-API emits sparse output while other encoders add CBR padding. These outputs have different delivered bitrates; use them as a control, not to rank encoder quality or speed at matched bitrate.
+{% endif %}
 
 {% for output in performance.outputs %}
 **{{ output.label }}**
@@ -41,7 +47,9 @@ Measured {{ performance.date }} with VideoToolbox Remote **{{ performance.releas
 
 All three prepared inputs contain 1,800 frames, H.264 High 8-bit video, and BT.709 signaling. Preparation uses `libx264 -preset fast -crf 10`. Input files are copied to both hosts and their SHA-256 hashes must match before measurement. The quality reference is the software-decoded prepared input, rather than the original uncompressed movie or signal.
 
-Output is H.264 High or HEVC Main, 8-bit 4:2:0, at 720p or 1080p and 30 fps. The target budgets are 4/6 Mb/s for H.264 and 3/4 Mb/s for HEVC at 720p/1080p respectively. Each pipeline requests a 60-frame maximum keyframe interval, zero B-frames and constant-bitrate mode. **The tables report actual encoded-packet bitrate.** A shared target does not guarantee identical delivered bitrate, especially for simple test signals. Compare quality together with the reported bitrate.
+Output is H.264 High or HEVC Main, 8-bit 4:2:0, at 720p or 1080p and 30 fps. The common output budgets are 4/6 Mb/s for H.264 and 3/4 Mb/s for HEVC at 720p/1080p respectively. Each pipeline requests a 60-frame maximum keyframe interval, zero B-frames and constant-bitrate mode. **The tables report actual encoded-packet bitrate, including encoder padding.** Moving-video measurements must be within 2% of the common budget on every measured repeat. Static bars are shown separately as a control.
+
+Intel's requested rate is calibrated using full-clip encodes before timing; those encodes are excluded from the results. CPU presets and both VideoToolbox paths request the common budget directly. VideoToolbox uses CBR without a simultaneous hard one-second rate cap: that combination underfilled the tested outputs. The data file records both the requested rate and actual delivered rate.
 
 ## What the comparison measures
 

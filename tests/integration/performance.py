@@ -25,6 +25,8 @@ import zipfile
 
 BACKENDS = ("intel-vaapi", "cpu-fast", "cpu-medium", "videotoolbox", "videotoolbox-remote")
 FIXTURES = ("big-buck-bunny", "testsrc2", "smptebars")
+BITRATES = {("h264", 720): 4_000_000, ("hevc", 720): 3_000_000,
+            ("h264", 1080): 6_000_000, ("hevc", 1080): 4_000_000}
 BBB_URL = "https://download.blender.org/demo/movies/BBB/bbb_sunflower_1080p_30fps_normal.mp4.zip"
 LABELS = {"intel-vaapi": "Intel iGPU VA-API", "cpu-fast": "CPU fast", "cpu-medium": "CPU medium",
           "videotoolbox": "VideoToolbox local", "videotoolbox-remote": "VideoToolbox remote"}
@@ -50,19 +52,22 @@ def public_results(summary):
     actual = [(row["fixture"], row["codec"], row["size"], row["backend"]) for row in summary["rows"]]
     if len(actual) != len(expected) or set(actual) != expected or not all(row["all_correct"] for row in summary["rows"]):
         raise ValueError("public comparison is incomplete or contains duplicate or invalid rows")
+    if any(not row["all_within_2_percent_target"] for row in summary["rows"] if row["fixture"] != "smptebars"):
+        raise ValueError("moving-video comparisons must match delivered bitrate within 2%")
     if not re.fullmatch(r"v\d+\.\d+\.\d+", metadata["release"]):
         raise ValueError("invalid public release identifier")
     keys = ("fixture", "codec", "size", "backend", "median_fps", "min_fps", "max_fps", "fps_cv_percent",
-            "median_cpu_seconds", "median_peak_rss_bytes", "median_delivered_mbps", "target_mbps",
-            "all_correct", "all_within_10_percent_target", "vmaf", "ssim", "vmaf_frame_stride", "vmaf_sampled_frames")
-    rows = [{**{key: row[key] for key in keys}, "label": LABELS[row["backend"]]} for row in summary["rows"]]
-    numeric_keys = set(keys) - {"fixture", "codec", "size", "backend", "all_correct", "all_within_10_percent_target"}
+            "median_cpu_seconds", "median_peak_rss_bytes", "median_delivered_mbps", "target_mbps", "requested_mbps",
+            "all_correct", "all_within_2_percent_target", "vmaf", "ssim", "vmaf_frame_stride", "vmaf_sampled_frames")
+    rows = [{**{key: row[key] for key in keys}, "label": LABELS[row["backend"]],
+             "comparison": "control" if row["fixture"] == "smptebars" else "matched-bitrate"} for row in summary["rows"]]
+    numeric_keys = set(keys) - {"fixture", "codec", "size", "backend", "all_correct", "all_within_2_percent_target"}
     for row in rows:
         if any(isinstance(row[key], bool) or not isinstance(row[key], (int, float)) or not math.isfinite(row[key]) for key in numeric_keys):
             raise ValueError("public measurements must be finite numbers")
-        if type(row["all_correct"]) is not bool or type(row["all_within_10_percent_target"]) is not bool:
+        if type(row["all_correct"]) is not bool or type(row["all_within_2_percent_target"]) is not bool:
             raise ValueError("public validation fields must be boolean")
-    fixtures = [{"id": name, "label": {"big-buck-bunny": "Big Buck Bunny", "testsrc2": "Moving testsrc2 signal", "smptebars": "SMPTE color bars"}[name]}
+    fixtures = [{"id": name, "label": {"big-buck-bunny": "Big Buck Bunny", "testsrc2": "Moving testsrc2 signal", "smptebars": "Static SMPTE bars (control)"}[name]}
                 for name in FIXTURES]
     outputs = [{"label": f"{'H.264 High' if codec == 'h264' else 'HEVC Main'} · {size.split('x')[1]}p",
                 "codec": codec, "size": size} for codec, size in itertools.product(("h264", "hevc"), ("1280x720", "1920x1080"))]
@@ -180,8 +185,7 @@ def prepare(args):
 
 def encoder_command(args, source, output):
     width, height = map(int, args.size.split("x"))
-    bitrate = {("h264", 720): 4_000_000, ("hevc", 720): 3_000_000,
-               ("h264", 1080): 6_000_000, ("hevc", 1080): 4_000_000}[(args.codec, height)]
+    bitrate = getattr(args, "bitrate", None) or BITRATES[(args.codec, height)]
     ffmpeg = args.remote_ffmpeg if args.backend == "videotoolbox-remote" else args.ffmpeg
     command = [ffmpeg, "-hide_banner", "-nostdin", "-nostats", "-v", "info", "-xerror"]
     if args.backend == "intel-vaapi":
@@ -197,7 +201,7 @@ def encoder_command(args, source, output):
     if args.backend == "videotoolbox-remote":
         bsf = (f"vtremote_transcode=vt_remote_host={args.server}:vt_remote_port={args.port}"
                f":vt_remote_out_codec={args.codec}:vt_remote_out_width={width}:vt_remote_out_height={height}"
-               f":vt_remote_pix_fmt=1:vt_remote_bitrate={bitrate}:vt_remote_maxrate={bitrate}"
+               f":vt_remote_pix_fmt=1:vt_remote_bitrate={bitrate}:vt_remote_maxrate=0"
                f":vt_remote_gop=60:vt_remote_max_b_frames=0:vt_remote_constant_bit_rate=1"
                f":vt_remote_prio_speed=0:vt_remote_realtime=0:vt_remote_allow_sw=0"
                f":vt_remote_profile={100 if args.codec == 'h264' else 1}:vt_remote_inflight=32")
@@ -221,6 +225,9 @@ def encoder_command(args, source, output):
         command += ["-profile:v", profile, "-b:v", str(bitrate), "-maxrate", str(bitrate),
                     "-bufsize", str(bitrate * 2), "-g", "60", "-bf", "0",
                     "-color_range", "tv", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709"]
+        if args.backend == "videotoolbox":
+            # A hard one-second cap fights VideoToolbox CBR and underfills it.
+            command[command.index("-maxrate") + 1] = "0"
     return command + [str(output)], bitrate
 
 
@@ -251,7 +258,8 @@ def worker(args):
     require_private_directory(directory)
     directory.mkdir(parents=True, exist_ok=False)
     output = directory / "output.mkv"
-    command, bitrate = encoder_command(args, source, output)
+    command, requested_bitrate = encoder_command(args, source, output)
+    target_bitrate = BITRATES[(args.codec, int(args.size.split("x")[1]))]
     env = os.environ.copy()
     if args.backend == "intel-vaapi":
         env["LIBVA_DRIVER_NAME"] = "iHD"
@@ -278,8 +286,9 @@ def worker(args):
     delivered = sum(int(packet["size"]) for packet in packets) * 8 / (args.frames / 30)
     result = {"backend": args.backend, "codec": args.codec, "fixture": args.fixture, "size": args.size,
               "run_id": args.run_id, "host": platform.node(), "frames": frames, "correct": correct,
-              "target_bitrate": bitrate, "delivered_bitrate": delivered,
-              "within_10_percent_target": abs(delivered / bitrate - 1) <= 0.10,
+              "target_bitrate": target_bitrate, "requested_bitrate": requested_bitrate,
+              "delivered_bitrate": delivered,
+              "within_2_percent_target": abs(delivered / target_bitrate - 1) <= 0.02,
               "fps": frames / usage["elapsed_seconds"], "usage": usage,
               "output": identity(output), "source": identity(source), "command": command,
               "output_stream": {key: stream.get(key) for key in ("codec_name", "profile", "pix_fmt", "color_range", "color_space", "color_transfer", "color_primaries")}}
@@ -347,55 +356,64 @@ def suite(args):
         if fixture_hashes[0] != fixture_hashes[1]:
             raise RuntimeError("Intel and Mac fixtures differ; refusing the comparison")
         metadata = {"created_at": datetime.now(timezone.utc).isoformat(), "release": args.release, "server": ready,
-                    "hosts": host_info, "method": "Sequential full-video pipelines; 60-frame warm-up, three rotating measured repeats; VMAF every fifth frame and SSIM over all frames on the first measured repeat",
+                    "hosts": host_info, "method": "Sequential full-video pipelines; Intel rate calibration on complete moving clips; 60-frame warm-up, three rotating measured repeats; moving results must match actual rate within 2%; static bars are a control; VMAF every fifth frame and SSIM over all frames on the first measured repeat",
                     "frames": args.frames, "warmup_frames": args.warmup_frames, "repeats": args.repeats,
-                    "sizes": args.sizes, "fixtures": args.fixtures, "codecs": args.codecs,
+                    "sizes": args.sizes, "fixtures": args.fixtures, "codecs": args.codecs, "backends": args.backends,
                     "power_scope": "Intel package RAPL includes other host work; no wall power or Mac power measurement"}
         (args.output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
         runs = []
         cases = list(itertools.product(args.fixtures, args.codecs, args.sizes))
         for case_index, (fixture, codec, size) in enumerate(cases):
+            requested_rates = {backend: BITRATES[(codec, int(size.split("x")[1]))] for backend in args.backends}
+
+            def run_job(backend, run_id, frames, with_quality=False):
+                host = args.mac_host if backend == "videotoolbox" else args.linux_host
+                py = python_mac if host == args.mac_host else "python3"
+                command = [py, *common, "worker", "--backend", backend, "--codec", codec, "--fixture", fixture,
+                           "--size", size, "--frames", str(frames), "--run-id", run_id,
+                           "--bitrate", str(requested_rates[backend]),
+                           "--ffmpeg", "/opt/homebrew/bin/ffmpeg" if host == args.mac_host else native_linux, "--remote-ffmpeg", binary,
+                           "--ffprobe", str(args.workdir / "bin/ffprobe") if host == args.linux_host else "/opt/homebrew/bin/ffprobe",
+                           "--quality-ffmpeg", "/opt/homebrew/bin/ffmpeg" if host == args.mac_host else binary]
+                if with_quality:
+                    command += ["--quality"]
+                with (args.output / f"{run_id}.ssh.log").open("w") as log:
+                    return json.loads(capture(remote_command(host, command), stderr=log))
+
+            # Calibrate delivered rate on the complete clip before timing.
+            # Static bars are a control: sparse encoders may not fill a budget.
+            if fixture != "smptebars" and "intel-vaapi" in args.backends:
+                backend = "intel-vaapi"
+                for attempt in range(4):
+                    run_id = f"{args.output.name}-{fixture}-{codec}-{size}-{backend}-cal{attempt}"
+                    print(f"PERFORMANCE calibration={case_index + 1}/{len(cases)} attempt={attempt + 1} {backend} {fixture} {codec} {size}", flush=True)
+                    result = run_job(backend, run_id, args.frames)
+                    with (args.output / "calibration.jsonl").open("a") as stream:
+                        stream.write(json.dumps(result) + "\n")
+                    ratio = result["delivered_bitrate"] / result["target_bitrate"]
+                    if abs(ratio - 1) <= 0.02:
+                        break
+                    requested_rates[backend] = round(requested_rates[backend] / ratio)
+                else:
+                    raise RuntimeError(f"could not match delivered bitrate for {fixture} {codec} {size}")
             for repeat in range(args.repeats + 1):
-                order = list(BACKENDS)
+                order = list(args.backends)
                 offset = (case_index + max(repeat - 1, 0)) % len(order)
                 order = order[offset:] + order[:offset]
                 for backend in order:
                     run_id = f"{args.output.name}-{fixture}-{codec}-{size}-{backend}-r{repeat}"
-                    host = args.mac_host if backend == "videotoolbox" else args.linux_host
-                    py = python_mac if host == args.mac_host else "python3"
-                    command = [py, *common, "worker", "--backend", backend, "--codec", codec, "--fixture", fixture,
-                               "--size", size, "--frames", str(args.warmup_frames if repeat == 0 else args.frames), "--run-id", run_id,
-                               "--ffmpeg", "/opt/homebrew/bin/ffmpeg" if host == args.mac_host else native_linux, "--remote-ffmpeg", binary,
-                               "--ffprobe", str(args.workdir / "bin/ffprobe") if host == args.linux_host else "/opt/homebrew/bin/ffprobe",
-                               "--quality-ffmpeg", "/opt/homebrew/bin/ffmpeg" if host == args.mac_host else binary]
-                    if repeat == 1:
-                        command += ["--quality"]
                     print(f"PERFORMANCE case={case_index + 1}/{len(cases)} repeat={repeat}/{args.repeats} {backend} {fixture} {codec} {size}", flush=True)
-                    with (args.output / f"{run_id}.ssh.log").open("w") as log:
-                        result = json.loads(capture(remote_command(host, command), stderr=log))
+                    result = run_job(backend, run_id, args.warmup_frames if repeat == 0 else args.frames, repeat == 1)
+                    if repeat and fixture != "smptebars" and not result["within_2_percent_target"]:
+                        raise RuntimeError(f"delivered bitrate outside 2% comparison tolerance: {run_id}")
                     result["repeat"] = repeat
                     with (args.output / "runs.jsonl").open("a") as stream:
                         stream.write(json.dumps(result) + "\n")
                     if repeat:
                         runs.append(result)
-        rows = []
-        for fixture, codec, size, backend in itertools.product(args.fixtures, args.codecs, args.sizes, BACKENDS):
-            group = [run for run in runs if (run["fixture"], run["codec"], run["size"], run["backend"]) == (fixture, codec, size, backend)]
-            rates = [run["fps"] for run in group]
-            measured_quality = next(run["quality"] for run in group if "quality" in run)
-            rows.append({"fixture": fixture, "codec": codec, "size": size, "backend": backend,
-                         "median_fps": statistics.median(rates), "min_fps": min(rates), "max_fps": max(rates),
-                         "fps_cv_percent": statistics.stdev(rates) / statistics.mean(rates) * 100 if len(rates) > 1 else 0,
-                         "median_cpu_seconds": statistics.median(run["usage"]["cpu_seconds"] for run in group),
-                         "median_peak_rss_bytes": statistics.median(run["usage"]["peak_rss_bytes"] for run in group),
-                         "median_delivered_mbps": statistics.median(run["delivered_bitrate"] for run in group) / 1_000_000,
-                         "target_mbps": group[0]["target_bitrate"] / 1_000_000,
-                         "all_correct": all(run["correct"] for run in group),
-                         "all_within_10_percent_target": all(run["within_10_percent_target"] for run in group),
-                         **{key: measured_quality[key] for key in ("vmaf", "ssim", "vmaf_frame_stride", "vmaf_sampled_frames")}})
-        summary = {"metadata": metadata, "rows": rows, "all_correct": all(row["all_correct"] for row in rows)}
+        summary = summarize(metadata, runs)
         (args.output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-        print(f"PERFORMANCE complete rows={len(rows)} all_correct={summary['all_correct']} output={args.output}", flush=True)
+        print(f"PERFORMANCE complete rows={len(summary['rows'])} all_correct={summary['all_correct']} output={args.output}", flush=True)
     finally:
         if server.poll() is None:
             server.stdin.write("stop\n")
@@ -405,6 +423,31 @@ def suite(args):
         server_output, _ = server.communicate(timeout=30)
         (args.output / "server-final.json").write_text(server_output)
         server_log.close()
+
+
+def summarize(metadata, runs):
+    """Aggregate validated measured runs, including preserved completed cases."""
+    rows = []
+    for fixture, codec, size, backend in itertools.product(metadata["fixtures"], metadata["codecs"], metadata["sizes"], metadata["backends"]):
+        group = [run for run in runs if (run["fixture"], run["codec"], run["size"], run["backend"]) == (fixture, codec, size, backend)]
+        if len(group) != metadata["repeats"] or {run["repeat"] for run in group} != set(range(1, metadata["repeats"] + 1)):
+            raise ValueError("each case needs exactly the configured measured repeats")
+        if any(run["frames"] != metadata["frames"] or not run["correct"] for run in group):
+            raise ValueError("measured runs failed media validation")
+        rates = [run["fps"] for run in group]
+        measured_quality = next(run["quality"] for run in group if "quality" in run)
+        rows.append({"fixture": fixture, "codec": codec, "size": size, "backend": backend,
+                     "median_fps": statistics.median(rates), "min_fps": min(rates), "max_fps": max(rates),
+                     "fps_cv_percent": statistics.stdev(rates) / statistics.mean(rates) * 100 if len(rates) > 1 else 0,
+                     "median_cpu_seconds": statistics.median(run["usage"]["cpu_seconds"] for run in group),
+                     "median_peak_rss_bytes": statistics.median(run["usage"]["peak_rss_bytes"] for run in group),
+                     "median_delivered_mbps": statistics.median(run["delivered_bitrate"] for run in group) / 1_000_000,
+                     "target_mbps": group[0]["target_bitrate"] / 1_000_000,
+                     "requested_mbps": group[0]["requested_bitrate"] / 1_000_000,
+                     "all_correct": all(run["correct"] for run in group),
+                     "all_within_2_percent_target": all(run["within_2_percent_target"] for run in group),
+                     **{key: measured_quality[key] for key in ("vmaf", "ssim", "vmaf_frame_stride", "vmaf_sampled_frames")}})
+    return {"metadata": metadata, "rows": rows, "all_correct": all(row["all_correct"] for row in rows)}
 
 
 def inventory(args):
@@ -444,6 +487,7 @@ def main():
             job.add_argument("--size", choices=("1280x720", "1920x1080"), required=True)
             job.add_argument("--frames", type=int, required=True)
             job.add_argument("--run-id", required=True)
+            job.add_argument("--bitrate", type=int)
             job.add_argument("--quality", action="store_true")
     server = commands.add_parser("serve")
     server.add_argument("--daemon", required=True)
@@ -458,6 +502,7 @@ def main():
     run.add_argument("--fixtures", nargs="+", choices=FIXTURES, default=list(FIXTURES))
     run.add_argument("--codecs", nargs="+", choices=("h264", "hevc"), default=["h264", "hevc"])
     run.add_argument("--sizes", nargs="+", choices=("1280x720", "1920x1080"), default=["1280x720", "1920x1080"])
+    run.add_argument("--backends", nargs="+", choices=BACKENDS, default=list(BACKENDS))
     public = commands.add_parser("public-results")
     public.add_argument("--input", type=Path, required=True)
     args = parser.parse_args()

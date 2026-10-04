@@ -69,6 +69,7 @@ make -j$(nproc)
 - Current comparisons use Big Buck Bunny and FFmpeg testsrc2/SMPTE color-bar inputs, with identical fixture hashes on both hosts.
 - Pipelines are Intel iGPU VA-API, CPU fast/medium presets, local VideoToolbox and remote VideoToolbox.
 - Local and remote VideoToolbox use the same M2 Mac; the remote client runs on the Intel Linux host.
+- Moving-video comparisons require delivered bitrate within 2% of the common budget on every measured repeat. Intel requested bitrate is calibrated before timing; VideoToolbox CBR uses no simultaneous hard rate cap. Static bars are a separate control.
 - The Performance page reports throughput, actual output bitrate, VMAF, SSIM and client CPU time with hardware, build and method details.
 - Packet transcoding avoids raw-frame network transport when local video filters are unnecessary. Raw-frame encoding has different bandwidth costs.
 - Intel RAPL package energy is not whole-system power. Whole-system watt savings have not been measured.
