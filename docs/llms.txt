@@ -69,8 +69,8 @@ make -j$(nproc)
 - Current comparisons use Big Buck Bunny and FFmpeg testsrc2/SMPTE color-bar inputs, with identical fixture hashes on both hosts.
 - Pipelines are Intel iGPU VA-API, CPU fast/medium presets, local VideoToolbox and remote VideoToolbox.
 - Local and remote VideoToolbox use the same M2 Mac; the remote client runs on the Intel Linux host.
-- Moving-video comparisons require delivered bitrate within 2% of the common budget on every measured repeat. Intel requested bitrate is calibrated before timing; VideoToolbox CBR uses no simultaneous hard rate cap. Static bars are a separate control.
-- The Performance page reports throughput, actual output bitrate, VMAF, SSIM and client CPU time with hardware, build and method details.
+- All five performance backends use average/VBR, zero frame reordering and a 60-frame maximum GOP. Intel HEVC uses driver-required past-reference GPB B-slices despite `-bf 0`; actual picture types and reordering are reported. The same byte-only calibration matches non-filler bitrate within 2% of the common budget on every measured moving-video repeat. Static bars are a separate control.
+- The Performance page reports throughput, total/non-filler/filler bitrate, VMAF, SSIM and client CPU time with hardware, build and method details. Every backend's quality is scored over all 1,800 frames with one common Linux FFmpeg binary.
 - Packet transcoding avoids raw-frame network transport when local video filters are unnecessary. Raw-frame encoding has different bandwidth costs.
 - Intel RAPL package energy is not whole-system power. Whole-system watt savings have not been measured.
 

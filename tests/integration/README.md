@@ -118,9 +118,11 @@ python3 tests/integration/performance.py \
   --release v0.9.14 --output /tmp/vtremote-performance/current
 ```
 
-Start with a narrow preflight by adding `--fixtures big-buck-bunny --codecs h264 --sizes 1280x720 --backends intel-vaapi videotoolbox videotoolbox-remote --repeats 1` and choosing a separate, new output directory. Keep the full 1,800-frame clip so rate control can settle. Preflight results cannot be published. The complete default run measures 60 cases: three inputs, two codecs, two output sizes and five pipelines. Each case gets a warm-up and three measured repeats; order rotates and jobs run sequentially. VMAF samples every fifth frame and SSIM covers all frames on the first measured repeat. Validation checks frame/packet counts, profile, pixel format, dimensions, monotonic DTS and independent software decoding.
+Start with a narrow preflight by adding `--fixtures big-buck-bunny --codecs hevc --sizes 1920x1080 --repeats 1` and choosing a separate, new output directory. Keep all five backends and the full 1,800-frame clip so rate control can settle. Preflight results cannot be published. The complete default run measures 60 cases: three inputs, two codecs, two output sizes and five pipelines. Each case gets a warm-up and three measured repeats; order rotates and jobs run sequentially. VMAF and SSIM cover all 1,800 frames on the first measured repeat, with the same Linux quality binary and reference for every backend. Native Mac outputs reach that scorer through `scp -3` via the coordinator, with SHA-256 verification. Validation checks frame/packet counts, profile, pixel format, dimensions, monotonic DTS and independent software decoding.
 
-Before timing each moving-video case, the suite calibrates Intel's requested bitrate with complete-clip encodes to bring delivered bitrate within 2% of the common budget. Every measured moving-video output must remain within 2%; otherwise the run stops. CPU presets and VideoToolbox request the common budget directly. VideoToolbox CBR uses no simultaneous hard rate cap, which underfilled the tested outputs. Static bars remain a separate control because sparse Intel output and padded CBR output do not use the same delivered bitrate. Calibration captures are saved privately in `calibration.jsonl`, and the public data records requested and delivered rates.
+All five backends use average/VBR rate control, `-bf 0` (or its remote equivalent), zero frame reordering and a 60-frame maximum GOP. The tested Intel HEVC driver requires past-reference GPB B-slices as P-picture replacements; these appear as B pictures without future references or reordering. Actual picture counts, GOP and decoder reordering are recorded; every output must have equal PTS/DTS and zero decoder reorder frames. Before timing each moving-video case, every backend follows the same automatic full-clip bitrate calibration, with up to four attempts. It measures encoded packet bytes excluding codec filler and adjusts the requested rate by the measured ratio, without calculating or inspecting quality scores. Every measured moving-video output must remain within 2% of the common non-filler budget; otherwise the run stops. Static bars remain a separate control because simple content may produce sparse output below the budget. Calibration captures are saved privately in `calibration.jsonl`, and the public data records requested, total, non-filler and filler rates.
+
+Filler is real encoded data that adds no picture detail. The runner measures it without re-encoding: `h264_metadata=delete_filler=1` removes H.264 filler NAL units and filler SEI; `filter_units=remove_types=38` removes HEVC filler NAL units. Non-filler bitrate retains stream headers and metadata. All rates exclude container overhead.
 
 Raw `metadata.json`, `runs.jsonl`, `summary.json`, worker captures and logs contain private infrastructure details. Keep them outside Git. The runner refuses capture directories inside a Git checkout. For publication, this command prints only allowed measurements, generic labels, tool versions and SHA-256 hashes:
 
@@ -130,7 +132,7 @@ python3 tests/integration/performance.py \
   --input /tmp/vtremote-performance/current/summary.json
 ```
 
-Review that output before updating `docs/_data/performance.json`. The exporter rejects incomplete, failed or short comparisons and excludes inventory, commands, paths and addresses. The page reports delivered bitrate alongside quality and throughput; client CPU time excludes the remote daemon. Intel RAPL captures are private diagnostics, not whole-system power measurements.
+Review that output before updating `docs/_data/performance.json`. The exporter rejects incomplete, failed, short or sparsely scored comparisons and excludes inventory, commands, paths and addresses. The page reports total, non-filler and filler bitrate alongside quality and throughput; client CPU time excludes the remote daemon. Intel RAPL captures are private diagnostics, not whole-system power measurements.
 
 ## Integration script options
 
@@ -142,7 +144,7 @@ Async decode defaults:
 
 Bench defaults:
 - `VTREMOTE_BENCH_BITRATE=10M`
-- `VTREMOTE_BENCH_CBR=1` (adds `-maxrate`/`-bufsize` for apples-to-apples)
+- `VTREMOTE_BENCH_CBR=1` (adds `-maxrate`/`-bufsize`; this alone does not guarantee equal non-filler bitrate)
 - `VTREMOTE_BENCH_TRANSCODE=1` (enable transcode section)
 - `VTREMOTE_BENCH_ONLY_TRANSCODE=1` (skip encode/decode benches)
 - `VTREMOTE_BENCH_TRANSCODE_OUT_CODEC=hevc`

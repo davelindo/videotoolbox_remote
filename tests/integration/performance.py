@@ -52,20 +52,24 @@ def public_results(summary):
     actual = [(row["fixture"], row["codec"], row["size"], row["backend"]) for row in summary["rows"]]
     if len(actual) != len(expected) or set(actual) != expected or not all(row["all_correct"] for row in summary["rows"]):
         raise ValueError("public comparison is incomplete or contains duplicate or invalid rows")
-    if any(not row["all_within_2_percent_target"] for row in summary["rows"] if row["fixture"] != "smptebars"):
-        raise ValueError("moving-video comparisons must match delivered bitrate within 2%")
+    if any(not row["all_non_filler_within_2_percent_target"] for row in summary["rows"] if row["fixture"] != "smptebars"):
+        raise ValueError("moving-video comparisons must match encoded bitrate excluding filler within 2%")
+    if any(row["vmaf_frame_stride"] != 1 or row["vmaf_sampled_frames"] != metadata["frames"] for row in summary["rows"]):
+        raise ValueError("public quality measurements must score every frame")
     if not re.fullmatch(r"v\d+\.\d+\.\d+", metadata["release"]):
         raise ValueError("invalid public release identifier")
     keys = ("fixture", "codec", "size", "backend", "median_fps", "min_fps", "max_fps", "fps_cv_percent",
-            "median_cpu_seconds", "median_peak_rss_bytes", "median_delivered_mbps", "target_mbps", "requested_mbps",
-            "all_correct", "all_within_2_percent_target", "vmaf", "ssim", "vmaf_frame_stride", "vmaf_sampled_frames")
+            "median_cpu_seconds", "median_peak_rss_bytes", "median_delivered_mbps", "median_non_filler_mbps",
+            "median_filler_mbps", "target_mbps", "requested_mbps", "all_correct",
+            "all_non_filler_within_2_percent_target", "max_b_picture_frames", "max_decoder_reorder_frames",
+            "max_gop_frames", "vmaf", "ssim", "vmaf_frame_stride", "vmaf_sampled_frames")
     rows = [{**{key: row[key] for key in keys}, "label": LABELS[row["backend"]],
-             "comparison": "control" if row["fixture"] == "smptebars" else "matched-bitrate"} for row in summary["rows"]]
-    numeric_keys = set(keys) - {"fixture", "codec", "size", "backend", "all_correct", "all_within_2_percent_target"}
+             "comparison": "control" if row["fixture"] == "smptebars" else "matched-non-filler-bitrate"} for row in summary["rows"]]
+    numeric_keys = set(keys) - {"fixture", "codec", "size", "backend", "all_correct", "all_non_filler_within_2_percent_target"}
     for row in rows:
         if any(isinstance(row[key], bool) or not isinstance(row[key], (int, float)) or not math.isfinite(row[key]) for key in numeric_keys):
             raise ValueError("public measurements must be finite numbers")
-        if type(row["all_correct"]) is not bool or type(row["all_within_2_percent_target"]) is not bool:
+        if type(row["all_correct"]) is not bool or type(row["all_non_filler_within_2_percent_target"]) is not bool:
             raise ValueError("public validation fields must be boolean")
     fixtures = [{"id": name, "label": {"big-buck-bunny": "Big Buck Bunny", "testsrc2": "Moving testsrc2 signal", "smptebars": "Static SMPTE bars (control)"}[name]}
                 for name in FIXTURES]
@@ -88,9 +92,16 @@ def public_results(summary):
             record = {"version": match[1], "sha256": info["sha256"]}
             if record not in builds:
                 builds.append(record)
+    scorer = next(build for build in builds if build["sha256"] == metadata["quality_scorer"]["sha256"])
     return {"date": datetime.fromisoformat(metadata["created_at"]).date().isoformat() + " UTC",
             "release": metadata["release"], "fixtures": fixtures, "outputs": outputs,
-            "source_hashes": source_hashes, "builds": builds, "rows": rows}
+            "source_hashes": source_hashes, "builds": builds, "quality_scorer": scorer,
+            "frames": metadata["frames"], "repeats": metadata["repeats"],
+            "warmup_frames": metadata["warmup_frames"], "vmaf_model": "vmaf_v0.6.1",
+            "rate_control": "average/VBR, -bf 0 and zero frame reordering, 60-frame maximum GOP",
+            "intel_hevc_picture_types": "Driver-required GPB B-slices use past references; no future references or frame reordering",
+            "matched_rate_scope": "encoded video packet bytes excluding codec filler",
+            "rows": rows}
 
 
 def identity(path):
@@ -104,10 +115,12 @@ def capture(command, **kwargs):
     return subprocess.check_output(command, text=True, **kwargs).strip()
 
 
-def probe(ffprobe, path, count=False):
+def probe(ffprobe, path, count=False, pictures=False):
     command = [ffprobe, "-v", "error", "-select_streams", "v:0"]
     if count:
         command += ["-count_frames", "-count_packets"]
+    if pictures:
+        command += ["-show_frames", "-show_entries", "frame=key_frame,pict_type:stream:format"]
     command += ["-show_streams", "-show_format", "-of", "json", str(path)]
     return json.loads(capture(command))
 
@@ -202,32 +215,28 @@ def encoder_command(args, source, output):
         bsf = (f"vtremote_transcode=vt_remote_host={args.server}:vt_remote_port={args.port}"
                f":vt_remote_out_codec={args.codec}:vt_remote_out_width={width}:vt_remote_out_height={height}"
                f":vt_remote_pix_fmt=1:vt_remote_bitrate={bitrate}:vt_remote_maxrate=0"
-               f":vt_remote_gop=60:vt_remote_max_b_frames=0:vt_remote_constant_bit_rate=1"
+               f":vt_remote_gop=60:vt_remote_max_b_frames=0:vt_remote_constant_bit_rate=0"
                f":vt_remote_prio_speed=0:vt_remote_realtime=0:vt_remote_allow_sw=0"
                f":vt_remote_profile={100 if args.codec == 'h264' else 1}:vt_remote_inflight=32")
         command += ["-c:v", "copy", "-bsf:v", bsf]
     else:
         if args.backend == "intel-vaapi":
             command += ["-vf", f"scale_vaapi=w={width}:h={height}:format=nv12",
-                        "-c:v", f"{args.codec}_vaapi", "-rc_mode", "CBR"]
+                        "-c:v", f"{args.codec}_vaapi", "-rc_mode", "VBR"]
         elif args.backend == "videotoolbox":
             command += ["-vf", f"scale_vt=w={width}:h={height}", "-c:v", f"{args.codec}_videotoolbox",
-                        "-constant_bit_rate", "1", "-allow_sw", "0", "-realtime", "0", "-prio_speed", "0"]
+                        "-constant_bit_rate", "0", "-allow_sw", "0", "-realtime", "0", "-prio_speed", "0"]
         else:
             preset = args.backend.removeprefix("cpu-")
             command += ["-vf", f"scale={width}:{height}:flags=bicubic,format=yuv420p",
                         "-c:v", "libx264" if args.codec == "h264" else "libx265", "-preset", preset,
                         "-pix_fmt", "yuv420p"]
             if args.codec == "h264":
-                command += ["-x264-params", "nal-hrd=cbr:scenecut=0:keyint=60:min-keyint=60"]
+                command += ["-x264-params", "scenecut=0:keyint=60:min-keyint=60"]
             else:
-                command += ["-x265-params", "hrd=1:strict-cbr=1:scenecut=0:keyint=60:min-keyint=60"]
-        command += ["-profile:v", profile, "-b:v", str(bitrate), "-maxrate", str(bitrate),
-                    "-bufsize", str(bitrate * 2), "-g", "60", "-bf", "0",
+                command += ["-x265-params", "scenecut=0:keyint=60:min-keyint=60"]
+        command += ["-profile:v", profile, "-b:v", str(bitrate), "-g", "60", "-bf", "0",
                     "-color_range", "tv", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709"]
-        if args.backend == "videotoolbox":
-            # A hard one-second cap fights VideoToolbox CBR and underfills it.
-            command[command.index("-maxrate") + 1] = "0"
     return command + [str(output)], bitrate
 
 
@@ -235,9 +244,9 @@ def quality(args, source, output, directory):
     width, height = map(int, args.size.split("x"))
     vmaf_log = directory / "vmaf.json"
     graph = (f"[0:v]trim=end_frame={args.frames},scale={width}:{height}:flags=bicubic,format=yuv420p,"
-             "settb=AVTB,setpts=PTS-STARTPTS,split=2[rv][rs];"
-             "[1:v]format=yuv420p,settb=AVTB,setpts=PTS-STARTPTS,split=2[dv][ds];"
-             f"[dv][rv]libvmaf=n_threads=8:n_subsample=5:log_fmt=json:log_path={vmaf_log}[v];"
+             "settb=AVTB,setpts=N/(30*TB),split=2[rv][rs];"
+             "[1:v]format=yuv420p,settb=AVTB,setpts=N/(30*TB),split=2[dv][ds];"
+             f"[dv][rv]libvmaf=model=version=vmaf_v0.6.1:n_threads=8:n_subsample=1:log_fmt=json:log_path={vmaf_log}[v];"
              "[ds][rs]ssim[s]")
     command = [args.quality_ffmpeg, "-hide_banner", "-nostdin", "-nostats", "-v", "info", "-xerror",
                "-i", str(source), "-i", str(output), "-filter_complex", graph,
@@ -245,11 +254,39 @@ def quality(args, source, output, directory):
     measure(command, directory / "quality.log")
     metrics = json.loads(vmaf_log.read_text())
     ssim = re.search(r"SSIM .* All:([0-9.]+)", (directory / "quality.log").read_text())
-    if not ssim or len(metrics["frames"]) != (args.frames + 4) // 5:
+    if not ssim or len(metrics["frames"]) != args.frames:
         raise RuntimeError(f"quality metrics incomplete: {directory}")
     return {"vmaf": metrics["pooled_metrics"]["vmaf"]["mean"], "ssim": float(ssim[1]),
-            "vmaf_frame_stride": 5, "vmaf_sampled_frames": len(metrics["frames"]),
-            "model": "default libvmaf vmaf_v0.6.1", "command": command}
+            "vmaf_frame_stride": 1, "vmaf_sampled_frames": len(metrics["frames"]),
+            "model": "vmaf_v0.6.1", "command": command}
+
+
+def non_filler_rate(args, output, directory, original_packets):
+    """Measure encoded video after removing only codec filler units."""
+    stripped = directory / "without-filler.mkv"
+    bsf = "h264_metadata=delete_filler=1" if args.codec == "h264" else "filter_units=remove_types=38"
+    measure([args.quality_ffmpeg, "-hide_banner", "-nostdin", "-v", "error", "-xerror",
+             "-i", str(output), "-map", "0:v:0", "-c:v", "copy", "-bsf:v", bsf,
+             str(stripped)], directory / "remove-filler.log")
+    packets = json.loads(capture([args.ffprobe, "-v", "error", "-select_streams", "v:0", "-show_packets",
+                                 "-show_entries", "packet=size", "-of", "json", str(stripped)]))["packets"]
+    before = sum(int(packet["size"]) for packet in original_packets)
+    after = sum(int(packet["size"]) for packet in packets)
+    if len(packets) != len(original_packets) or after > before:
+        raise RuntimeError("filler removal changed packet counts or added encoded bytes")
+    return after * 8 / (args.frames / 30), (before - after) * 8 / (args.frames / 30)
+
+
+def quality_worker(args):
+    source = args.workdir / "fixtures" / f"{args.fixture}.mkv"
+    directory = args.workdir / "quality" / args.run_id
+    require_private_directory(directory)
+    directory.mkdir(parents=True, exist_ok=False)
+    if identity(args.input)["sha256"] != args.sha256:
+        raise RuntimeError("copied output identity differs from the measured output")
+    result = quality(args, source, args.input, directory)
+    (directory / "result.json").write_text(json.dumps(result, indent=2) + "\n")
+    print(json.dumps(result), flush=True)
 
 
 def worker(args):
@@ -268,27 +305,39 @@ def worker(args):
     after = rapl()
     if before and after:
         usage["intel_package_joules"] = ((after["energy_uj"] - before["energy_uj"]) % before["range_uj"]) / 1_000_000
-    info = probe(args.ffprobe, output, count=True)
+    info = probe(args.ffprobe, output, count=True, pictures=True)
     stream = info["streams"][0]
     packets = json.loads(capture([args.ffprobe, "-v", "error", "-select_streams", "v:0", "-show_packets",
-                                  "-show_entries", "packet=size,dts_time", "-of", "json", str(output)]))["packets"]
+                                  "-show_entries", "packet=size,pts_time,dts_time", "-of", "json", str(output)]))["packets"]
     timestamps = [float(packet["dts_time"]) for packet in packets]
     frames = int(stream["nb_read_frames"])
+    pictures = info["frames"]
+    keyframes = [index for index, frame in enumerate(pictures) if frame["key_frame"]]
+    b_pictures = sum(frame["pict_type"] == "B" for frame in pictures)
+    longest_gop = max(second - first for first, second in zip(keyframes, [*keyframes[1:], frames])) if keyframes else frames
+    intel_gpb = args.backend == "intel-vaapi" and args.codec == "hevc"
     width, height = map(int, args.size.split("x"))
     correct = (frames == args.frames and len(packets) == args.frames and stream["codec_name"] == args.codec
                and stream["width"] == width and stream["height"] == height
                and stream["profile"] == ("High" if args.codec == "h264" else "Main")
                and stream["pix_fmt"] == "yuv420p"
+               and len(pictures) == frames and bool(keyframes) and keyframes[0] == 0 and longest_gop <= 60
+               and stream["has_b_frames"] == 0 and (b_pictures == 0 or intel_gpb)
+               and all(packet["pts_time"] == packet["dts_time"] for packet in packets)
                and all(second > first for first, second in zip(timestamps, timestamps[1:])))
     if not correct:
         raise RuntimeError(f"media validation failed: {directory}")
     measure([args.quality_ffmpeg, "-v", "error", "-nostdin", "-xerror", "-i", str(output), "-map", "0:v:0", "-f", "null", "-"], directory / "decode.log")
     delivered = sum(int(packet["size"]) for packet in packets) * 8 / (args.frames / 30)
+    non_filler, filler = non_filler_rate(args, output, directory, packets)
     result = {"backend": args.backend, "codec": args.codec, "fixture": args.fixture, "size": args.size,
               "run_id": args.run_id, "host": platform.node(), "frames": frames, "correct": correct,
+              "b_picture_frames": b_pictures, "decoder_reorder_frames": stream["has_b_frames"],
+              "gop_frames": longest_gop,
               "target_bitrate": target_bitrate, "requested_bitrate": requested_bitrate,
               "delivered_bitrate": delivered,
-              "within_2_percent_target": abs(delivered / target_bitrate - 1) <= 0.02,
+              "non_filler_bitrate": non_filler, "filler_bitrate": filler,
+              "non_filler_within_2_percent_target": abs(non_filler / target_bitrate - 1) <= 0.02,
               "fps": frames / usage["elapsed_seconds"], "usage": usage,
               "output": identity(output), "source": identity(source), "command": command,
               "output_stream": {key: stream.get(key) for key in ("codec_name", "profile", "pix_fmt", "color_range", "color_space", "color_transfer", "color_primaries")}}
@@ -356,11 +405,13 @@ def suite(args):
         if fixture_hashes[0] != fixture_hashes[1]:
             raise RuntimeError("Intel and Mac fixtures differ; refusing the comparison")
         metadata = {"created_at": datetime.now(timezone.utc).isoformat(), "release": args.release, "server": ready,
-                    "hosts": host_info, "method": "Sequential full-video pipelines; Intel rate calibration on complete moving clips; 60-frame warm-up, three rotating measured repeats; moving results must match actual rate within 2%; static bars are a control; VMAF every fifth frame and SSIM over all frames on the first measured repeat",
+                    "hosts": host_info, "method": f"Sequential full-video pipelines; average/VBR on every backend; common -bf 0 and zero frame reordering, with driver-required past-reference GPB slices on Intel HEVC; 60-frame maximum GOP; identical byte-only full-clip calibration for every moving-video backend; non-filler encoded packet bitrate within 2%; {args.warmup_frames}-frame warm-up and {args.repeats} rotating measured repeats; static bars are a control; VMAF and SSIM over every frame on one common Linux scorer on the first measured repeat",
+                    "quality_scorer": host_info[args.linux_host]["quality_ffmpeg"],
                     "frames": args.frames, "warmup_frames": args.warmup_frames, "repeats": args.repeats,
                     "sizes": args.sizes, "fixtures": args.fixtures, "codecs": args.codecs, "backends": args.backends,
                     "power_scope": "Intel package RAPL includes other host work; no wall power or Mac power measurement"}
         (args.output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+        capture(remote_command(args.linux_host, ["mkdir", "-p", str(args.workdir / "quality")]))
         runs = []
         cases = list(itertools.product(args.fixtures, args.codecs, args.sizes))
         for case_index, (fixture, codec, size) in enumerate(cases):
@@ -375,27 +426,39 @@ def suite(args):
                            "--ffmpeg", "/opt/homebrew/bin/ffmpeg" if host == args.mac_host else native_linux, "--remote-ffmpeg", binary,
                            "--ffprobe", str(args.workdir / "bin/ffprobe") if host == args.linux_host else "/opt/homebrew/bin/ffprobe",
                            "--quality-ffmpeg", "/opt/homebrew/bin/ffmpeg" if host == args.mac_host else binary]
-                if with_quality:
+                if with_quality and host == args.linux_host:
                     command += ["--quality"]
                 with (args.output / f"{run_id}.ssh.log").open("w") as log:
-                    return json.loads(capture(remote_command(host, command), stderr=log))
+                    result = json.loads(capture(remote_command(host, command), stderr=log))
+                if with_quality and host == args.mac_host:
+                    copied = args.workdir / "quality" / f"{run_id}.mkv"
+                    subprocess.run(["scp", "-3", "-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+                                    f"{args.mac_host}:{result['output']['path']}",
+                                    f"{args.linux_host}:{copied}"], check=True)
+                    quality_command = ["python3", *common, "quality", "--input", str(copied),
+                                       "--sha256", result["output"]["sha256"], "--fixture", fixture,
+                                       "--size", size, "--frames", str(frames), "--run-id", run_id,
+                                       "--quality-ffmpeg", binary]
+                    with (args.output / f"{run_id}.quality.ssh.log").open("w") as log:
+                        result["quality"] = json.loads(capture(remote_command(args.linux_host, quality_command), stderr=log))
+                return result
 
-            # Calibrate delivered rate on the complete clip before timing.
+            # Calibrate non-filler rate on the complete clip before timing.
             # Static bars are a control: sparse encoders may not fill a budget.
-            if fixture != "smptebars" and "intel-vaapi" in args.backends:
-                backend = "intel-vaapi"
-                for attempt in range(4):
-                    run_id = f"{args.output.name}-{fixture}-{codec}-{size}-{backend}-cal{attempt}"
-                    print(f"PERFORMANCE calibration={case_index + 1}/{len(cases)} attempt={attempt + 1} {backend} {fixture} {codec} {size}", flush=True)
-                    result = run_job(backend, run_id, args.frames)
-                    with (args.output / "calibration.jsonl").open("a") as stream:
-                        stream.write(json.dumps(result) + "\n")
-                    ratio = result["delivered_bitrate"] / result["target_bitrate"]
-                    if abs(ratio - 1) <= 0.02:
-                        break
-                    requested_rates[backend] = round(requested_rates[backend] / ratio)
-                else:
-                    raise RuntimeError(f"could not match delivered bitrate for {fixture} {codec} {size}")
+            if fixture != "smptebars":
+                for backend in args.backends:
+                    for attempt in range(4):
+                        run_id = f"{args.output.name}-{fixture}-{codec}-{size}-{backend}-cal{attempt}"
+                        print(f"PERFORMANCE calibration={case_index + 1}/{len(cases)} attempt={attempt + 1} {backend} {fixture} {codec} {size}", flush=True)
+                        result = run_job(backend, run_id, args.frames)
+                        with (args.output / "calibration.jsonl").open("a") as stream:
+                            stream.write(json.dumps(result) + "\n")
+                        ratio = result["non_filler_bitrate"] / result["target_bitrate"]
+                        if abs(ratio - 1) <= 0.02:
+                            break
+                        requested_rates[backend] = round(requested_rates[backend] / ratio)
+                    else:
+                        raise RuntimeError(f"could not match non-filler bitrate for {fixture} {codec} {size} {backend}")
             for repeat in range(args.repeats + 1):
                 order = list(args.backends)
                 offset = (case_index + max(repeat - 1, 0)) % len(order)
@@ -404,8 +467,8 @@ def suite(args):
                     run_id = f"{args.output.name}-{fixture}-{codec}-{size}-{backend}-r{repeat}"
                     print(f"PERFORMANCE case={case_index + 1}/{len(cases)} repeat={repeat}/{args.repeats} {backend} {fixture} {codec} {size}", flush=True)
                     result = run_job(backend, run_id, args.warmup_frames if repeat == 0 else args.frames, repeat == 1)
-                    if repeat and fixture != "smptebars" and not result["within_2_percent_target"]:
-                        raise RuntimeError(f"delivered bitrate outside 2% comparison tolerance: {run_id}")
+                    if repeat and fixture != "smptebars" and not result["non_filler_within_2_percent_target"]:
+                        raise RuntimeError(f"non-filler bitrate outside 2% comparison tolerance: {run_id}")
                     result["repeat"] = repeat
                     with (args.output / "runs.jsonl").open("a") as stream:
                         stream.write(json.dumps(result) + "\n")
@@ -427,6 +490,11 @@ def suite(args):
 
 def summarize(metadata, runs):
     """Aggregate validated measured runs, including preserved completed cases."""
+    source_hashes = {fixture: {record["sha256"] for host in metadata["hosts"].values()
+                               for record in host["fixture_manifest"]["fixtures"] if record["name"] == fixture}
+                     for fixture in metadata["fixtures"]}
+    if any(len(hashes) != 1 for hashes in source_hashes.values()):
+        raise ValueError("fixture identities differ between the measured hosts")
     rows = []
     for fixture, codec, size, backend in itertools.product(metadata["fixtures"], metadata["codecs"], metadata["sizes"], metadata["backends"]):
         group = [run for run in runs if (run["fixture"], run["codec"], run["size"], run["backend"]) == (fixture, codec, size, backend)]
@@ -434,6 +502,8 @@ def summarize(metadata, runs):
             raise ValueError("each case needs exactly the configured measured repeats")
         if any(run["frames"] != metadata["frames"] or not run["correct"] for run in group):
             raise ValueError("measured runs failed media validation")
+        if any(run["source"]["sha256"] not in source_hashes[fixture] for run in group):
+            raise ValueError("a measured run used a different input from the recorded fixture")
         rates = [run["fps"] for run in group]
         measured_quality = next(run["quality"] for run in group if "quality" in run)
         rows.append({"fixture": fixture, "codec": codec, "size": size, "backend": backend,
@@ -442,10 +512,15 @@ def summarize(metadata, runs):
                      "median_cpu_seconds": statistics.median(run["usage"]["cpu_seconds"] for run in group),
                      "median_peak_rss_bytes": statistics.median(run["usage"]["peak_rss_bytes"] for run in group),
                      "median_delivered_mbps": statistics.median(run["delivered_bitrate"] for run in group) / 1_000_000,
+                     "median_non_filler_mbps": statistics.median(run["non_filler_bitrate"] for run in group) / 1_000_000,
+                     "median_filler_mbps": statistics.median(run["filler_bitrate"] for run in group) / 1_000_000,
                      "target_mbps": group[0]["target_bitrate"] / 1_000_000,
                      "requested_mbps": group[0]["requested_bitrate"] / 1_000_000,
                      "all_correct": all(run["correct"] for run in group),
-                     "all_within_2_percent_target": all(run["within_2_percent_target"] for run in group),
+                     "all_non_filler_within_2_percent_target": all(run["non_filler_within_2_percent_target"] for run in group),
+                     "max_b_picture_frames": max(run["b_picture_frames"] for run in group),
+                     "max_decoder_reorder_frames": max(run["decoder_reorder_frames"] for run in group),
+                     "max_gop_frames": max(run["gop_frames"] for run in group),
                      **{key: measured_quality[key] for key in ("vmaf", "ssim", "vmaf_frame_stride", "vmaf_sampled_frames")}})
     return {"metadata": metadata, "rows": rows, "all_correct": all(row["all_correct"] for row in rows)}
 
@@ -460,6 +535,10 @@ def inventory(args):
     for label, path in (("native_ffmpeg", args.ffmpeg), ("remote_ffmpeg", args.remote_ffmpeg), ("quality_ffmpeg", args.quality_ffmpeg), ("ffprobe", args.ffprobe)):
         information[label] = {**identity(path), "version": capture([path, "-version"])}
     information["fixture_manifest"] = json.loads((args.workdir / "fixtures/manifest.json").read_text())
+    for fixture in information["fixture_manifest"]["fixtures"]:
+        actual = identity(args.workdir / "fixtures" / f"{fixture['name']}.mkv")
+        if actual["sha256"] != fixture["sha256"]:
+            raise ValueError("prepared input no longer matches its recorded SHA-256")
     print(json.dumps(information), flush=True)
 
 
@@ -491,6 +570,14 @@ def main():
             job.add_argument("--quality", action="store_true")
     server = commands.add_parser("serve")
     server.add_argument("--daemon", required=True)
+    quality_parser = commands.add_parser("quality")
+    quality_parser.add_argument("--input", type=Path, required=True)
+    quality_parser.add_argument("--sha256", required=True)
+    quality_parser.add_argument("--fixture", choices=FIXTURES, required=True)
+    quality_parser.add_argument("--size", choices=("1280x720", "1920x1080"), required=True)
+    quality_parser.add_argument("--frames", type=int, required=True)
+    quality_parser.add_argument("--run-id", required=True)
+    quality_parser.add_argument("--quality-ffmpeg", required=True)
     run = commands.add_parser("suite")
     run.add_argument("--linux-host", required=True)
     run.add_argument("--mac-host", required=True)
@@ -514,7 +601,8 @@ def main():
     if args.command == "public-results":
         print(json.dumps(public_results(json.loads(args.input.read_text())), indent=2))
         return
-    {"prepare": prepare, "worker": worker, "serve": serve, "suite": suite, "inventory": inventory}[args.command](args)
+    {"prepare": prepare, "worker": worker, "quality": quality_worker,
+     "serve": serve, "suite": suite, "inventory": inventory}[args.command](args)
 
 
 if __name__ == "__main__":
