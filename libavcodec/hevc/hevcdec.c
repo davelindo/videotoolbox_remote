@@ -793,8 +793,8 @@ static int hls_slice_header(SliceHeader *sh, const HEVCContext *s, GetBitContext
     const HEVCPPS *pps;
     const HEVCSPS *sps;
     const HEVCVPS *vps;
-    unsigned pps_id, layer_idx;
-    int i, ret;
+    unsigned pps_id;
+    int i, ret, layer_idx;
 
     // Coded parameters
     sh->first_slice_in_pic_flag = get_bits1(gb);
@@ -818,6 +818,10 @@ static int hls_slice_header(SliceHeader *sh, const HEVCContext *s, GetBitContext
     sps = pps->sps;
     vps = sps->vps;
     layer_idx = vps->layer_idx[s->nuh_layer_id];
+    if (layer_idx < 0) {
+        av_log(s->avctx, AV_LOG_ERROR, "Layer %d is not in the VPS\n", s->nuh_layer_id);
+        return AVERROR_INVALIDDATA;
+    }
 
     if (s->nal_unit_type == HEVC_NAL_CRA_NUT && s->last_eos == 1)
         sh->no_output_of_prior_pics_flag = 1;
@@ -3259,6 +3263,11 @@ static int hevc_frame_start(HEVCContext *s, HEVCLayerContext *l,
     if (sps->vps != s->vps && l != &s->layers[0]) {
         av_log(s->avctx, AV_LOG_ERROR, "VPS changed in a non-base layer\n");
         set_sps(s, l, NULL);
+        return AVERROR_INVALIDDATA;
+    }
+
+    if (l != &s->layers[0] && ff_hevc_is_alpha_video(s) && !s->layers[0].cur_frame) {
+        av_log(s->avctx, AV_LOG_ERROR, "Alpha layer frame without a base layer frame\n");
         return AVERROR_INVALIDDATA;
     }
 
