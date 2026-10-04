@@ -1,0 +1,24 @@
+- title: Start here
+  pages:
+    - title: Getting started
+      url: /getting-started.html
+    - title: Plex on a GPU-less host
+      url: /plex.html
+    - title: Linux VA-API
+      url: /vaapi-driver.html
+    - title: Remote OBS encoding
+      url: /obs-plugin.html
+    - title: Quality & benchmarks
+      url: /benchmarks.html
+- title: Reference
+  pages:
+    - title: Architecture
+      url: /architecture.html
+    - title: Protocol v1
+      url: /protocol.html
+    - title: Security
+      url: /security.html
+    - title: Troubleshooting
+      url: /troubleshooting.html
+    - title: Development
+      url: /development.html

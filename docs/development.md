@@ -39,7 +39,7 @@ The `vtremoted` binary must not hard-link Homebrew `liblz4` or `libzstd`; those 
 Linux FFmpeg CI and release artifacts target `x86_64` and `arm64` (`aarch64`).
 The arm64 job runs natively on GitHub-hosted `ubuntu-24.04-arm`, with the same
 codec/filter, mock integration, and packaged-artifact smoke checks as x86_64.
-See [arm64 runtime requirements](getting-started.md#linux-arm64-release-runtime)
+See [arm64 runtime requirements](getting-started.html#linux-arm64-release-runtime)
 for the Ubuntu 24.04 shared-library baseline. The project does not publish or test 32-bit `i686` Linux builds.
 
 The VA-API driver job runs in Ubuntu 20.04 and builds the pinned libva 2.22 /
@@ -93,7 +93,7 @@ export VTREMOTED="$PWD/vtremoted/.build/release/vtremoted"
 ### Key Scripts
 - **`run_all.sh`**: Standard integration suite.
 - **`bench_vtremote.sh`**: Perform encoding/transcoding benchmarks.
-- **`bench_sustained.py`**: Repeated natural-video and 1/2/4-session comparisons with identities, resource use, merged latency percentiles, counts and decode validation. See the [runner instructions](../tests/integration/README.md).
+- **`bench_sustained.py`**: Repeated natural-video and 1/2/4-session comparisons with identities, resource use, merged latency percentiles, counts and decode validation. See the [runner instructions]({{ site.repository_url }}/blob/main/tests/integration/README.md).
 - **`run_transport_regressions.py`**, **`run_decode_duplex.py`**, **`run_session_reset.sh`**: Deadline, completion, simultaneous transport and codec context-reuse regressions.
 - **`run_vtremoted_roundtrip.sh`**: Verify H.264/HEVC roundtrip correctness.
 - **`run_mock_wire_compression.sh`**: Validate LZ4 and Zstd compressed frame payloads against the Python mock server.
@@ -142,9 +142,9 @@ Key commands:
 
 ```bash
 make sync-github-metadata
-make release-notes TAG=v0.3.1
+make release-notes TAG={{ site.current_release }}
 make release-notes-all
-bash scripts/generate_release_notes.sh v0.3.1
+bash scripts/generate_release_notes.sh {{ site.current_release }}
 bash tests/test_llms_release_version.sh
 ```
 
@@ -179,3 +179,15 @@ bash scripts/smoke_release_artifact.sh vtremoted vtremoted-macos-arm64.tar.gz
 ```
 
 The FFmpeg smoke check unpacks the tarball and verifies the remote encoders, remote decoders, `vtremote_transcode`, and quality filters are present. The `vtremoted` smoke check verifies `--version` and `--help` without binding a socket.
+
+## Documentation site
+
+GitHub Pages builds `docs/` with Jekyll. The release number in `docs/_config.yml` supplies the landing page, navigation and structured data; keep it aligned with `docs/llms.txt`, the daemon and changelog. Navigation lives in `docs/_data/navigation.yml`.
+
+For a local preview with Jekyll and the configured plugins installed:
+
+```bash
+jekyll serve --source docs --host 127.0.0.1
+```
+
+Open `http://127.0.0.1:4000/videotoolbox_remote/`. Check desktop and mobile navigation, code copying, diagrams, local links and release metadata after theme/content edits. Historical benchmark tables retain their original release labels; do not relabel them as fresh measurements.

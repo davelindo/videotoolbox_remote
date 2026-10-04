@@ -5,22 +5,23 @@ permalink: /llms.txt
 # VideoToolbox Remote (`videotoolbox_remote`) Briefing
 
 **Version**: v0.9.14
-**License**: LGPL v2.1+
-**Goal**: Offload FFmpeg H.264/HEVC encoding/decoding to a remote macOS 13+ machine, including macOS 27, over LAN.
+**License**: LGPL v2.1+ by default; optional GPL components depend on FFmpeg configuration.
+**Goal**: High-quality, low-power remote hardware video processing: keep Plex and automation on Linux while a macOS 13+ Mac (including macOS 27) supplies VideoToolbox over LAN.
 
 ## What It Does
-VideoToolbox Remote turns an Apple Silicon or T2 Mac on a LAN into a hardware H.264/HEVC transcoding server. FFmpeg clients on Linux, Windows, or macOS connect over TCP using drop-in codec replacements (`h264_videotoolbox_remote`, `hevc_videotoolbox_remote`). No pipeline changes required; it appears as a standard `-c:v` option.
+VideoToolbox Remote turns an Apple Silicon or supported T2 Mac on a LAN into a hardware H.264/HEVC transcoding engine. FFmpeg clients on Linux, Windows, or macOS select remote codecs (`h264_videotoolbox_remote`, `hevc_videotoolbox_remote`). Supported Plex packet transcodes can run on GPU-less Linux hosts while the Mac performs video decode, optional resize and encode. Batch jobs, stock Linux VA-API encoding and experimental OBS live encoding use the same daemon. Published quality/CPU measurements exist; whole-system watts and energy savings are not yet measured.
 
 ## Core Architecture
-- **Server (`vtremoted`)**: Swift daemon on macOS wrapping the VideoToolbox API. Listens on TCP (default 5555).
+- **Server (`vtremoted`)**: Swift daemon wrapping VideoToolbox. Defaults to loopback TCP 5555; explicit private/VPN bind or a tunnel is needed for other hosts.
 - **Client (`ffmpeg`)**: Modified FFmpeg with custom remote codecs in `libavcodec/vtremote_*.c`.
-- **OBS Plugin**: Experimental OBS Studio encoder plugin using the same wire protocol.
-- **VA-API Driver**: Linux encode-only driver for stock VA-API applications and an experimental Plex playback-transcode path.
+- **OBS Plugin**: Experimental, with separate H.264/HEVC encoder entries. Raw-frame upload; composition and delivery stay in OBS. Mock/libobs coverage is not proof of every live output/shutdown path.
+- **VA-API Driver**: Linux x86_64 encode-only driver for stock applications. Local software decode/filter/upload; requires a render node (physical or VGEM where available). No decode, VPP, B-frames or external DMA-BUF.
+- **Plex Integration**: Separate Linux x86_64 container packet shim, not a VA-API driver path. No Linux render node. Bundled libavcodec fingerprint/version and command graphs are checked before offload; unknown builds/graphs remain native. Plex Pass and enabled hardware acceleration/encoding are required for normal claimed playback. PMS 1.43.3.10896 has unclaimed end-to-end coverage; recognized 1.43.4 SDR graphs do not imply all-path coverage.
 
 ## Three Operating Modes
 1. **Remote Encode**: Raw frames (NV12/P010) in, compressed packets (H.264/HEVC) out.
 2. **Remote Decode**: Compressed packets in, raw frames out.
-3. **Remote Transcode**: Compressed packets in, compressed packets out (full pipeline on server).
+3. **Remote Transcode**: Compressed packets in/out; supported video decode/resize/encode on Mac. Files, audio, subtitles and muxing remain local. Arbitrary video filters are not offloaded.
 
 ## Repository Structure
 - `/vtremoted`: SwiftPM project (Server). `Sources/VTRemotedCore/` contains core logic.
@@ -60,7 +61,7 @@ make -j$(nproc)
 - **Handshake**: `HELLO` (token, codec) -> `HELLO_ACK` (status, capabilities).
 - **Config**: `CONFIGURE` (resolution, fps, options) -> `CONFIGURE_ACK` (extradata/SPS/PPS).
 - **Streaming**: `FRAME` (pixel data) <-> `PACKET` (encoded bytes).
-- **Teardown**: `FLUSH` -> `DONE`.
+- **Completion**: `FLUSH` -> remaining frames/packets -> `DONE`; fatal errors and timeouts are not successful completion.
 - **Framing**: 12-byte header (magic `VTR1`, version, type, length).
 - **Wire compression**: LZ4, Zstd, or none. FFmpeg/OBS default to LZ4; the VA-API driver defaults to automatic selection. The macOS server loads LZ4/Zstd at runtime only when requested.
 
@@ -70,7 +71,7 @@ make -j$(nproc)
 - In a matched-bitrate 1080p HEVC Main10 to 720p comparison against Alder Lake-P Intel VA-API, remote HEVC Main10 output reached 313 fps versus Intel's 198 fps; H.264 output reached 259 fps remotely versus Intel's 598 fps.
 - Output-codec choice materially changes the hardware comparison. The matched HEVC outputs differed by 0.50 VMAF point and the matched H.264 outputs by 0.99 point on the tested deterministic source.
 - Raw HEVC Main10 4K decode is bandwidth/compression-bound on 2.5 GbE; packet transcode is preferred when the client does not require raw frames.
-- LZ4/Zstd wire compression reduces bandwidth 40-70%; a fixed in-flight depth of 32 performed best for high-throughput HEVC in the tested LAN setup.
+- LZ4/Zstd compression savings depend on content; a fixed in-flight depth of 32 performed best for high-throughput HEVC in the tested LAN setup.
 - In the v0.7 local-versus-remote VideoToolbox encode controls, VMAF/SSIM matched when encoder settings matched.
 
 ## Key Constraints
@@ -78,6 +79,8 @@ make -j$(nproc)
 - Network: wired LAN strongly recommended (1GbE minimum, 2.5GbE+ for 4K).
 - No encryption by default — use SSH tunnel or VPN for untrusted networks.
 - Token-based authentication is optional (for LAN environments).
+- Plex tone mapping, deinterlace, subtitle burn-in and unsupported constraints are not offloaded; native paths may consume Linux CPU. Direct Play needs no remote video transcode.
+- The Plex bootstrap image is digest-pinned but downloads the selected PMS runtime at startup; an unrecognized runtime upgrade can disable remote offload.
 
 ## Supported Codecs & Formats
 - **Encoding**: H.264 (Baseline/Main/High), HEVC (Main, Main10)
@@ -89,3 +92,6 @@ make -j$(nproc)
 - Latest release: https://github.com/davelindo/videotoolbox_remote/releases/latest
 - Documentation: https://davelindo.github.io/videotoolbox_remote/
 - Benchmarks: https://davelindo.github.io/videotoolbox_remote/benchmarks.html
+- Plex setup and verification: https://davelindo.github.io/videotoolbox_remote/plex.html
+- Stock VA-API setup: https://davelindo.github.io/videotoolbox_remote/vaapi-driver.html
+- OBS setup and validation scope: https://davelindo.github.io/videotoolbox_remote/obs-plugin.html

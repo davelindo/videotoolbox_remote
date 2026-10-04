@@ -14,8 +14,10 @@ description: "Secure deployment of VideoToolbox Remote: SSH tunnels, VPN setup, 
 
 The server supports a simple token-based authentication mechanism.
 
-- **Server**: Start with `--token-file <path>` (recommended) or `--token <secret>`
-- **Client**: Run with `-vt_remote_token <secret>`
+- **Server**: Start with `--token-file <path>` (recommended), `--token-env <variable>` or `--token <secret>`. Restrict the token file to the daemon user.
+- **FFmpeg**: Run with `-vt_remote_token <secret>`.
+- **VA-API / Plex**: Set `VTREMOTE_TOKEN` in the application/container environment.
+- **OBS**: Set the encoder's Authentication Token property.
 
 > [!WARNING]
 > This token prevents unauthorized access but does **not** protect against eavesdropping or man-in-the-middle attacks.
@@ -33,7 +35,7 @@ If you must run this over an untrusted network (e.g., across the internet), use 
 
 2.  **Create Tunnel**: From the client, create an encrypted tunnel.
     ```bash
-    ssh -L 5555:localhost:5555 user@mac-server
+    ssh -N -L 127.0.0.1:5555:127.0.0.1:5555 user@mac-server
     ```
 
 3.  **Connect**: Point FFmpeg to localhost.
@@ -44,3 +46,5 @@ If you must run this over an untrusted network (e.g., across the internet), use 
 ### Option 2: VPN / Tailscale
 
 Run both client and server on a private Tailscale network (or WireGuard/OpenVPN). Use the VPN IP addresses for connection. This provides encryption transparently.
+
+For Plex containers, the endpoint must be reachable from the container's network namespace. A loopback tunnel on the Docker host is reachable through loopback when using Linux host networking; a bridged container needs an explicitly reachable, restricted tunnel endpoint. Keep the token out of published logs and shared configuration.

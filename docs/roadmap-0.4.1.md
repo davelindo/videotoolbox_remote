@@ -1,9 +1,13 @@
 ---
 title: v0.4.1 Implementation Plan
 description: "Implementation plan for the v0.4.1 expanded pipeline parity release: hardware-frame ingest/output, broader HEVC pixel formats, side-data forwarding, protocol capability negotiation, and release hardening."
+noindex: true
+sitemap: false
 ---
 
 # v0.4.1 Implementation Plan
+
+> Historical implementation plan, retained for reference. For current behavior and setup, use [architecture](architecture.html) and [getting started](getting-started.html).
 
 ## Release Goal
 

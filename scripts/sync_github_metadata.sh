@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo="${1:-${REPO_SLUG:-davelindo/videotoolbox_remote}}"
-description="Remote VideoToolbox for FFmpeg: use a Mac or Apple Silicon system over LAN as an IP-based H.264/HEVC encode/decode/transcoding accelerator."
+description="High-quality, low-power H.264/HEVC transcoding over LAN. Keep Plex on Linux and use a Mac's VideoToolbox hardware for FFmpeg, VA-API and OBS encoding."
 homepage="${HOMEPAGE_URL:-https://davelindo.github.io/videotoolbox_remote/}"
 topics=(
   videotoolbox
@@ -22,6 +22,9 @@ topics=(
   h264
   h265
   lan
+  plex
+  vaapi
+  obs-studio
 )
 
 if ! command -v gh >/dev/null 2>&1; then

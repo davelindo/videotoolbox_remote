@@ -21,6 +21,9 @@ troubleshooting_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/troubl
 security_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/security.md"
 architecture_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/architecture.md"
 benchmarks_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/benchmarks.md"
+plex_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/plex.md"
+vaapi_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/vaapi-driver.md"
+obs_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/obs-plugin.md"
 changelog_url="https://github.com/${repo_slug}/blob/${doc_ref}/CHANGELOG.md"
 
 short_commit() {
@@ -82,7 +85,9 @@ EOF
 
 emit_body() {
   cat <<EOF
-Remote VideoToolbox for FFmpeg: use a Mac or Apple Silicon system over LAN as an IP-based H.264/HEVC encode/decode/transcoding accelerator.
+High-quality, low-power H.264/HEVC transcoding over LAN. Keep Plex on Linux and use a Mac's VideoToolbox hardware as an external video engine for supported Plex transcodes, FFmpeg batch jobs, stock Linux VA-API encoding and an experimental OBS encoder.
+
+See the [Plex guide](${plex_url}), [VA-API guide](${vaapi_url}), and [OBS guide](${obs_url}) for setup and compatibility limits. Published benchmarks measure quality, throughput and Linux resource use; whole-system watt savings are not yet measured.
 
 ## 1-minute quickstart
 
@@ -92,7 +97,9 @@ Remote VideoToolbox for FFmpeg: use a Mac or Apple Silicon system over LAN as an
 
 \`\`\`bash
 tar -xzf vtremoted-macos-arm64.tar.gz
-./vtremoted/vtremoted --listen 0.0.0.0:5555 --log-level 1
+brew install lz4 zstd
+# Replace the example with the Mac's private LAN address. See the security guide for tokens/tunnels.
+./vtremoted/vtremoted --listen 192.168.1.20:5555 --log-level 1
 \`\`\`
 
 4. Run a remote encode from the client:

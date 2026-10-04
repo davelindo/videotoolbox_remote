@@ -1,95 +1,112 @@
 ---
-title: Getting Started
-description: "Install the vtremoted macOS server and FFmpeg client binaries, then use remote VideoToolbox over LAN for H.264/HEVC encode, decode, or transcode jobs."
+title: Getting started
+description: "Install remote VideoToolbox binaries for macOS, Linux and Windows. Run your first low-power H.264/HEVC encode or packet transcode with FFmpeg."
 ---
 
-# Getting Started
+# Getting started
 
-VideoToolbox Remote turns a Mac into a networked FFmpeg accelerator. Use this guide if you want a Linux, Windows, or macOS FFmpeg client to use remote VideoToolbox over LAN for H.264/HEVC encode, decode, or full transcode jobs.
+Use a Mac's media hardware from your Linux, Windows or macOS FFmpeg client. For a Plex server, go directly to the [Plex guide](plex.html); stock libva applications use the [VA-API guide](vaapi-driver.html).
 
-> [!TIP]
-> Want the fastest first run? Download the prebuilt `vtremoted-*` and `ffmpeg-*` tarballs from the [latest release](https://github.com/davelindo/videotoolbox_remote/releases/latest), then use the same launch and FFmpeg commands shown below.
+## Requirements
 
-Follow these steps to set up the macOS server and a matching FFmpeg client.
+- A Mac with Apple Silicon or supported T2 hardware, running macOS 13 or newer, including macOS 27.
+- A Linux, Windows or macOS client with a matching release or source build.
+- A reachable private endpoint. Wired LAN is recommended; raw 4K/10-bit frames benefit from 2.5GbE or faster. Packet transcoding uses much less bandwidth.
 
-## Prerequisites
+## Install the release binaries
 
-- **Server**: A Mac with Apple Silicon or a T2 Security Chip running macOS 13 or newer, including macOS 27.
-- **Client**: Linux, Windows, or macOS. Prebuilt Linux FFmpeg artifacts target `x86_64` and `arm64` (`aarch64`); 32-bit `i686` builds are not part of the supported release matrix.
-- **Network**: Wired LAN is strongly recommended (1GbE minimum, 2.5GbE+ for 4K).
+Download the archives and checksum files from the [latest release]({{ site.latest_release_url }}). Verify the downloaded tarball against `SHA256SUMS.txt` with `shasum -a 256` on macOS or `sha256sum` on Linux.
 
-## Step 1: Prepare the Mac (Server)
+| Machine | Archive |
+| --- | --- |
+| Apple Silicon Mac server | `vtremoted-macos-arm64.tar.gz` |
+| Intel Mac server | `vtremoted-macos-x86_64.tar.gz` |
+| Linux x86_64 client | `ffmpeg-linux-x86_64.tar.gz` |
+| Linux arm64 client | `ffmpeg-linux-arm64.tar.gz` — read the [runtime requirements](#linux-arm64-release-runtime) |
+| macOS client | `ffmpeg-macos-arm64.tar.gz` or `ffmpeg-macos-x86_64.tar.gz` |
+| Windows x86_64 client | `ffmpeg-windows-x86_64.tar.gz` |
 
-For the fastest first run, download `vtremoted-macos-arm64.tar.gz` or `vtremoted-macos-x86_64.tar.gz` from the [latest release](https://github.com/davelindo/videotoolbox_remote/releases/latest), unpack it, and use the release-tarball command in step 4.
+On the Apple Silicon Mac:
 
-1.  **Clone the repository**:
-    ```bash
-    git clone https://github.com/davelindo/videotoolbox_remote.git
-    cd videotoolbox_remote
-    ```
+```bash
+tar -xzf vtremoted-macos-arm64.tar.gz
+brew install lz4 zstd
+./vtremoted/vtremoted --version
+./vtremoted/vtremoted --listen 192.168.1.20:5555 --log-level 1
+```
 
-2.  **Install dependencies**:
-    ```bash
-    brew install lz4 zstd pkg-config
-    ```
+Replace `192.168.1.20` with your Mac's private address. Intel users unpack the x86_64 archive. The daemon defaults to `127.0.0.1:5555`; other machines cannot connect until you choose a reachable listen address or use a tunnel.
 
-    `vtremoted` loads `lz4` and `zstd` at runtime instead of requiring them to start. Default FFmpeg/OBS clients request LZ4 wire compression, so keep `lz4` installed for normal sessions and `zstd` installed if clients use Zstd.
+LZ4/Zstd are optional runtime libraries for the daemon. FFmpeg and OBS request LZ4 by default; install LZ4 for that mode, and Zstd for clients using Zstd or automatic selection. You can explicitly choose `-vt_remote_wire_compression none` for an FFmpeg session without wire compression.
 
-3.  **Build the server**:
-    ```bash
-    make build-vtremoted
-    ```
+On a Linux x86_64 client:
 
-    The default macOS deployment target is `13.0`, even when building on macOS 27 or with a newer SDK. Override `MACOSX_DEPLOYMENT_TARGET` only when you intentionally want a newer minimum OS.
+```bash
+mkdir -p ffmpeg-client
+tar -xzf ffmpeg-linux-x86_64.tar.gz -C ffmpeg-client
+./ffmpeg-client/ffmpeg -hide_banner -encoders
+```
 
-4.  **Run the server**:
+Unpack the corresponding archive on other client platforms. Use its `ffmpeg` binary for the following examples (`ffmpeg.exe` on Windows).
 
-    From a release tarball:
-    ```bash
-    # Trusted private LAN only. Never expose this port directly to the internet.
-    ./vtremoted/vtremoted --listen <MAC_PRIVATE_IP>:5555 --log-level 1
-    ```
+## Your first remote encode
 
-    From a source build:
-    ```bash
-    # Trusted private LAN only. Never expose this port directly to the internet.
-    vtremoted/.build/release/vtremoted --listen <MAC_PRIVATE_IP>:5555 --log-level 1
-    ```
+```bash
+./ffmpeg-client/ffmpeg -i input.mkv \
+  -c:v h264_videotoolbox_remote \
+  -vt_remote_host 192.168.1.20:5555 \
+  -b:v 6M -g 240 -c:a copy -c:s copy \
+  output.mkv
+```
 
-    > [!TIP]
-    > To install as a background service, run:
-    > `make install-vtremoted-restart VTREMOTED_LISTEN=<MAC_PRIVATE_IP>:5555`
+FFmpeg decodes and filters locally, sends raw video frames to the Mac, then muxes the returned H.264 packets. Audio and subtitles are copied in this example. Select `hevc_videotoolbox_remote` for HEVC; use supported 10-bit formats and `-profile:v main10` for HEVC Main 10.
 
-5.  **Verify the server**:
-    ```bash
-    vtremoted/.build/release/vtremoted --version
-    pgrep -fl vtremoted
-    lsof -nP -iTCP:5555 -sTCP:LISTEN
-    ```
+## Packet transcoding for batch jobs
 
-## Step 2: Build FFmpeg (Client)
+For H.264/HEVC input, keep decoded frames on the Mac and send compressed packets in both directions:
 
-For the fastest first run, download the matching `ffmpeg-*` client tarball for your client OS from the [latest release](https://github.com/davelindo/videotoolbox_remote/releases/latest).
+```bash
+./ffmpeg-client/ffmpeg -i input.mkv -map 0 -c copy \
+  -vt_remote_transcode:v:0 \
+  -vt_remote_host 192.168.1.20 -vt_remote_port 5555 \
+  -vt_remote_out_codec:v:0 hevc -b:v:0 6M \
+  output.mkv
+```
 
-### Linux arm64 release runtime
+The first video stream is transcoded; other mapped streams are copied. The Mac performs video decode, optional configured resize/pixel-format conversion and encode. Client-side audio, subtitles, files and muxing stay local. Arbitrary video filters are not part of this server path; use the remote encoder after local filtering for those jobs.
 
-Choose `ffmpeg-linux-arm64.tar.gz` for a 64-bit arm64/aarch64 Linux client.
-CI builds this archive natively on `ubuntu-24.04-arm`. It contains `ffmpeg`,
-`ffprobe`, and `ffplay`, plus a separate `.sha256` checksum file.
+For a directory of MKV files, run jobs sequentially to begin:
 
-This is a dynamically linked build, not a standalone static binary. Use
-Ubuntu 24.04 or a compatible arm64 environment with glibc 2.39 or newer and
-matching codec, compression, font, and SDL2 shared libraries. These include
-x264, x265, libvpx, dav1d, libaom, Opus, Vorbis, MP3 LAME, LZ4, Zstd, libass,
-and libvmaf. CI builds libvmaf 3.0.0 from source and installs it under
-`/usr/local`; that shared library must also be installed on the client.
-SVT-AV1 4.0.1 is linked statically into this build.
+```bash
+mkdir -p converted
+for input in ./*.mkv; do
+  [ -f "$input" ] || continue
+  ./ffmpeg-client/ffmpeg -n -i "$input" -map 0 -c copy \
+    -vt_remote_transcode:v:0 \
+    -vt_remote_host 192.168.1.20 -vt_remote_port 5555 \
+    -vt_remote_out_codec:v:0 hevc -b:v:0 6M \
+    "converted/${input##*/}" || break
+done
+```
 
-Debian 12 and Raspberry Pi OS Bookworm use an older glibc and cannot run this
-Ubuntu 24.04 binary. A newer glibc alone does not guarantee matching shared
-library versions. Build FFmpeg from source on your target distribution, or
-use an Ubuntu 24.04 arm64 container with the required libraries. To inspect
-missing runtime dependencies after unpacking, run:
+Review bitrate, output format and visual quality on representative files before a whole-library conversion. A fast preset and higher concurrency can change throughput, quality and power; choose them from measurements on your own hardware.
+
+## Share the endpoint securely
+
+For token authentication, store a secret in a file readable only by the daemon user and start the server with:
+
+```bash
+./vtremoted/vtremoted --listen 192.168.1.20:5555 \
+  --token-file /path/to/vtremote-token --log-level 1
+```
+
+Add `-vt_remote_token YOUR_TOKEN` to FFmpeg commands, or `VTREMOTE_TOKEN` to the VA-API/Plex environment. Tokens do not encrypt media or credentials. Use an [SSH tunnel or VPN](security.html) on untrusted networks; keep port 5555 private.
+
+## Linux arm64 release runtime
+
+The arm64/aarch64 archive contains `ffmpeg`, `ffprobe` and `ffplay`. It is dynamically linked, built on Ubuntu 24.04, and needs glibc 2.39+ with matching codec, compression, font and SDL2 libraries. These include x264, x265, libvpx, dav1d, libaom, Opus, Vorbis, LAME, LZ4, Zstd, libass and libvmaf. CI installs libvmaf 3.0.0 under `/usr/local`; that shared library must be available on the client. SVT-AV1 4.0.1 is linked statically.
+
+Debian 12 and Raspberry Pi OS Bookworm have an older glibc. Build on your target distribution or use a compatible Ubuntu 24.04 arm64 environment with the required libraries. A newer glibc alone does not supply every dependency. Inspect missing libraries with:
 
 ```bash
 ldd ffmpeg-client/ffmpeg
@@ -97,80 +114,43 @@ ldd ffmpeg-client/ffprobe
 ldd ffmpeg-client/ffplay
 ```
 
-The arm64 asset provides the FFmpeg client only. VA-API driver release assets
-remain Linux x86_64 only.
+This asset is an FFmpeg client only. VA-API and Plex integrations remain Linux x86_64; no i686 release is published.
 
-### Build from source
+## Build from source
 
-On your Linux or Windows machine (or the same Mac if testing locally):
-
-1.  **Install build dependencies**:
-    - Ensure `liblz4`, `libzstd`, `libvmaf`, and `pkg-config` are installed. `liblz4` is needed for the default LZ4 wire-compression mode; `libzstd` is needed only when requesting Zstd wire compression.
-    - For AV1 and common codecs, install `libaom`, `libdav1d`, `libsvtav1`, `x264`, `x265`, `libvpx`, `opus`, `vorbis`, and `lame` development packages as well.
-
-2.  **Clone and build**:
-    ```bash
-    git clone https://github.com/davelindo/videotoolbox_remote.git
-    cd videotoolbox_remote
-    make build-ffmpeg
-    ```
-
-    If a Linux `x86_64` source build fails inside FFmpeg x86 assembly, first install current `nasm` and `yasm`. To confirm the failure is assembler-specific, rebuild with:
-    ```bash
-    make clean-ffmpeg
-    make build-ffmpeg FFMPEG_DISABLE_X86ASM=1
-    ```
-
-## Step 3: Usage Examples
-
-### Remote Encode
-Send raw frames to the Mac for encoding.
+Clone the repository on each machine that needs a build:
 
 ```bash
-ffmpeg -i input.mkv \
-  -c:v h264_videotoolbox_remote \
-  -vt_remote_host <MAC_IP>:5555 \
-  -b:v 6000k -g 240 \
-  -c:a copy -c:s copy \
-  output.mkv
+git clone https://github.com/davelindo/videotoolbox_remote.git
+cd videotoolbox_remote
 ```
 
-### Remote Transcode
-Send compressed packets to the Mac. The Mac handles the video decode-to-encode path, while FFmpeg I/O, filters outside vtremote transcode options, audio, subtitles, and muxing stay on the client.
+On macOS, install Xcode command line tools and the runtime compression libraries, then build the daemon:
 
 ```bash
-ffmpeg -i input.mkv \
-  -map 0 \
-  -c copy \
-  -vt_remote_transcode:v:0 \
-  -vt_remote_host <MAC_IP> \
-  -vt_remote_port 5555 \
-  -vt_remote_out_codec:v:0 hevc \
-  -b:v:0 6000k \
-  output.mkv
+brew install lz4 zstd pkg-config
+make build-vtremoted
+vtremoted/.build/release/vtremoted --listen 192.168.1.20:5555 --log-level 1
 ```
 
-## Optional: OBS Plugin Smoke Test (Experimental)
-
-To validate the OBS plugin protocol client path:
+The default deployment target is macOS 13.0. To install as a background service from the checkout:
 
 ```bash
-make test-obs-plugin
+make install-vtremoted-restart VTREMOTED_LISTEN=192.168.1.20:5555
 ```
 
-This runs a mock-backed smoke test for connect/configure/frame/packet flow.
+For FFmpeg, install development packages for LZ4, Zstd, libvmaf and the codec libraries enabled by the build, plus `pkg-config` and a compiler. Both compression development libraries are required by the standard build. See [development](development.html) for configuration and platform notes, then run:
 
-## Optional: Linux VA-API and Plex
+```bash
+make build-ffmpeg
+```
 
-The Linux x86_64 release includes an encode-only VA-API driver for stock
-applications. It accepts software-uploaded NV12/P010 surfaces and supports
-H.264, HEVC Main, and HEVC Main 10. The supplied Plex image instead sends
-compressed video packets to the Mac for decode, scale, and encode, so it does
-not require a Linux render node. Read the [VA-API and Plex guide](vaapi-driver.md)
-before deployment.
+The built client is `ffmpeg/ffmpeg`. If a Linux x86 assembly build fails, install current `nasm` and `yasm`; the [assembler diagnostic](troubleshooting.html#linux-build-fails-in-ffmpeg-x86-assembly) can isolate toolchain errors.
 
-## Important Notes
+## Next steps
 
-- **Compression**: FFmpeg and OBS default to **LZ4**. Override FFmpeg with `-vt_remote_wire_compression lz4|zstd|none`, or use `auto` to choose based on resolution/FPS. The VA-API driver defaults to `auto`.
-- **Security**: Token auth is strongly recommended whenever binding beyond loopback. Tokens do not encrypt traffic, so use SSH tunnels or a VPN on untrusted networks. See [Security](security.md) for details.
-- **Optimization**: The server automatically optimizes VideoToolbox settings for batch encoding throughput.
+- [Plex](plex.html): keep Plex on Linux and use a Mac as the external video engine.
+- [VA-API](vaapi-driver.html): use stock Linux applications through the encode-only driver.
+- [OBS](obs-plugin.html): build the experimental remote live encoder.
+- [Quality & benchmarks](benchmarks.html): compare video quality, throughput and resource use.
+- [Troubleshooting](troubleshooting.html): connection, codec and performance checks.

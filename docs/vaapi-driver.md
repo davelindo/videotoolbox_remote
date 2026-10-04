@@ -1,96 +1,100 @@
 ---
-title: Linux VA-API Driver and Plex
-description: "Install the VTRemote H.264/HEVC VA-API encoder on Linux and validate Plex remote decode, scale, and encode."
+title: Linux VA-API driver
+description: "Use a Mac's VideoToolbox encoder from stock Linux FFmpeg through an encode-only H.264/HEVC VA-API driver. Installation, VGEM render nodes and Main 10 setup."
 ---
 
-# Linux VA-API Driver and Plex
+# Linux VA-API driver
 
-The `vtremote-vaapi-linux-x86_64.tar.gz` release asset lets a stock Linux
-VA-API application send H.264 or HEVC encoding to `vtremoted`. It supports
-H.264 Baseline/Main/High, HEVC Main, and HEVC Main 10 with NV12/P010 input.
+Use stock Linux FFmpeg's `h264_vaapi` and `hevc_vaapi` encoders while the actual encode runs on a Mac over LAN. The driver is Linux x86_64 and encode-only: decode, filters and raw-frame upload stay on the application host.
 
-The general-purpose VA-API driver is encode-only. Decode, scaling, deinterlace,
-subtitle burn-in, and tone mapping must happen before VA-API upload. B-frames
-and external DMA-BUF surfaces are not supported.
+For a GPU-less Plex host, use the separate [Plex packet integration](plex.html). It offloads decode, resize and encode without a Linux render node; it does not route video through this driver.
 
-## Install
+## Supported operations
 
-Install your distribution's liblz4 and libzstd runtime packages, unpack the
-release asset, and run:
+| Capability | Driver support |
+| --- | --- |
+| H.264 encode | Constrained Baseline, Main, High |
+| HEVC encode | Main and Main 10 |
+| Software-uploaded surfaces | NV12 and P010 |
+| Rate control | CBR, VBR, CQP |
+| Decode / VPP / scale / deinterlace / tone mapping | Local application responsibility |
+| B-frames / external DMA-BUF surfaces | Unsupported |
+
+The target Mac must support the requested codec and format. Driver profile support does not guarantee every Mac supports every mode.
+
+## Install the binary release
+
+Start the [Mac daemon](getting-started.html#install-the-release-binaries), then download `vtremote-vaapi-linux-x86_64.tar.gz` and its checksum from the [latest release]({{ site.latest_release_url }}).
+
+Install your distribution's LZ4 and Zstd runtime packages. The artifact has a GLIBC 2.17 baseline; stock FFmpeg also needs a compatible libva runtime. Unpack and install:
 
 ```bash
+tar -xzf vtremote-vaapi-linux-x86_64.tar.gz
 sudo ./vtremote-vaapi/install-binary.sh
-sudo modprobe vgem
 export LIBVA_DRIVERS_PATH=/opt/vtremote-vaapi/lib/dri
 export LIBVA_DRIVER_NAME=vtremote
-export VTREMOTE_HOST=<MAC_PRIVATE_IP>:5555
+export VTREMOTE_HOST=192.168.1.20:5555
 export VTREMOTE_WIRE_COMPRESSION=auto
+# If the Mac daemon requires a token:
+# export VTREMOTE_TOKEN=YOUR_TOKEN
 /opt/vtremote-vaapi/bin/vtremote-probe --host "$VTREMOTE_HOST" --codec h264
 ```
 
-`VTREMOTE_HOST` is required. Wire compression accepts `auto`, `none`, `lz4`,
-or `zstd`. Automatic mode chooses Zstandard for raw traffic below 200 Mbit/s
-and LZ4 for higher-throughput streams.
+The installer uses `/opt/vtremote-vaapi` and refuses to overwrite an existing installation. See the [binary installation instructions]({{ site.repository_url }}/blob/main/vaapi-driver/packaging/BINARY-INSTALL.md) for upgrades, dependencies and checksums.
 
-## Plex
+## Choose a render node
 
-The repository provides a Dockerfile pinned to an official amd64 `pms-docker`
-bootstrap image digest, plus a Compose merge example under
-`vaapi-driver/docker/`. Its narrow Plex Transcoder wrapper recognizes Plex's
-ordinary H.264/HEVC software-scale/format/hardware-upload graph and replaces
-that video chain with the `vtremote_transcode` packet filter. Compressed input
-packets go to the Mac; decoded or scaled frames never cross the network or
-consume Linux CPU.
-
-This Plex path does not use the VA-API driver and needs no render node. Linux
-continues to demux, process audio and subtitles, and mux the returned video.
-Unknown graphs pass through unchanged to Plex's native Transcoder.
-
-The preload module uses FFmpeg private internals and is therefore enabled only
-for an explicitly tested Plex `libavcodec` build. Container startup verifies
-the library fingerprint, and the wrapper checks the full runtime
-`avcodec_version()` before changing any arguments. A missing or unrecognized
-runtime keeps Plex on its native path.
-
-For recognized commands, the wrapper translates bitrate, maximum rate, VBV
-window, GOP/B-frame settings, profile, H.264 level, entropy mode, and
-CBR/VBR/CQP selection. Plex's periodic `force_key_frames` expression is
-converted to a keyframe interval and closed-GOP request using the requested
-output frame rate. VideoToolbox does not expose a fixed HEVC level, so a command
-requesting one remains on the native path. Other unsupported values, multiple
-video inputs or outputs, and indirect filter labels also pass through unchanged.
-
-Validate the bundled Plex Transcoder and VA-API stack without claiming the
-server or creating a library:
+Libva still needs a DRM render node to initialize, even though encoding happens on the remote Mac. Use an accessible physical render node or, where the kernel provides it, a VGEM node:
 
 ```bash
-PLEX_CONTAINER=plex \
-  vaapi-driver/scripts/plex-transcoder-remote-smoke.sh
+sudo modprobe vgem
+ls -l /dev/dri/renderD*
 ```
 
-This deterministic check covers H.264 encode, HEVC Main10 decode to H.264, and
-HEVC encode. It invokes Plex's bundled Transcoder with Plex-shaped VA-API
-commands and verifies several consecutive remotely decoded, scaled, and
-encoded segments for every case. Every segment must begin with a keyframe and
-decode independently. The check requires no Plex token, library, or Plex Pass.
+VGEM availability depends on the host kernel; some NAS kernels omit it. Choose the actual node and grant the application user appropriate render-group/device access. `renderD128` below is an example, not a guaranteed VGEM assignment. The repository's [render-node helper]({{ site.repository_url }}/blob/main/vaapi-driver/scripts/show-render-nodes.sh) lists available nodes.
 
-Separately, enable hardware acceleration and hardware encoding in a claimed
-Plex Pass server. Plex requests its normal hardware pipeline and the wrapper
-converts the supported graph to remote decode, scale, and encode.
-Validate it through a real playback request:
+## Encode with stock FFmpeg
+
+H.264 with local software decode and NV12 upload:
 
 ```bash
-PLEX_URL=http://127.0.0.1:32400 \
-PLEX_TOKEN=... \
-PLEX_RATING_KEY=12345 \
-PLEX_CONTAINER=plex \
-  vaapi-driver/scripts/plex-playback-smoke.sh
+ffmpeg -init_hw_device vaapi=remote:/dev/dri/renderD128 \
+  -filter_hw_device remote -i input.mkv \
+  -vf format=nv12,hwupload \
+  -c:v h264_vaapi -bf 0 -b:v 6M -c:a copy \
+  output.mkv
 ```
 
-The optional claimed-server check requests an HLS playback transcode from PMS,
-downloads and decodes a media segment, and requires a new wrapper audit entry.
-It proves PMS selected the remote packet filter and returned playable media;
-the unclaimed-server check proves the underlying Transcoder integration.
+HEVC Main 10 with P010 upload:
 
-For build, environment, SDK, and architecture details, see
-[`vaapi-driver/README.md`](../vaapi-driver/README.md).
+```bash
+ffmpeg -init_hw_device vaapi=remote:/dev/dri/renderD128 \
+  -filter_hw_device remote -i input.mkv \
+  -vf format=p010le,hwupload \
+  -c:v hevc_vaapi -profile:v main10 -bf 0 -b:v 6M -c:a copy \
+  output-main10.mkv
+```
+
+Keep scale, deinterlace or tone mapping before `hwupload`. The driver has no VPP pipeline and accepts software-uploaded surfaces rather than another GPU's DMA-BUF frames. Raw-frame transport can become the limiting factor at high resolutions; see [benchmarks](benchmarks.html).
+
+## Connection settings
+
+| Variable | Meaning / default |
+| --- | --- |
+| `VTREMOTE_HOST` | Required `host:port` endpoint |
+| `VTREMOTE_TOKEN` | Optional daemon authentication token |
+| `VTREMOTE_WIRE_COMPRESSION` | `auto` (default), `none`, `lz4`, `zstd` |
+| `VTREMOTE_TIMEOUT_MS` | Operation timeout, default `10000` |
+| `VTREMOTE_LOG` | Diagnostic logging, default `0` |
+
+Automatic compression chooses Zstd below 200 Mbit/s of estimated raw traffic and LZ4 above that threshold. Compression savings depend on content. The daemon must have the corresponding runtime library installed. Network traffic is plain TCP; see [security](security.html).
+
+`vgem_drv_video.so` provides a discovery alias. Use `LIBVA_DRIVER_NAME=vtremote` explicitly where possible. Keep any application-specific discovery aliases in an isolated driver directory; do not replace system iHD drivers.
+
+## Build, SDK and tests
+
+Run `make test-vaapi-driver` on Linux for driver checks with stock FFmpeg and the repository mock server. The [driver README]({{ site.repository_url }}/blob/main/vaapi-driver/README.md) contains source-build dependencies and Docker instructions.
+
+The package also includes an experimental static C SDK (`libvtremote_client.a`, headers and pkg-config metadata). It exposes connection, configure, frame/packet and flush operations with bounded in-flight work. Its ABI changed in v0.9.0; rebuild applications against the matching release. See the [SDK reference]({{ site.repository_url }}/blob/main/vaapi-driver/README.md#experimental-c-sdk).
+
+For Plex deployment and real playback verification, continue with the [Plex guide](plex.html).
