@@ -5,9 +5,9 @@
 [![Latest release](https://img.shields.io/github/v/release/davelindo/videotoolbox_remote?label=release)](https://github.com/davelindo/videotoolbox_remote/releases/latest)
 [![License](https://img.shields.io/badge/license-LGPLv2.1%2B%20%2F%20optional%20GPL-blue)](LICENSE.md)
 
-**Keep Plex on your Linux server. Use a Mac's efficient VideoToolbox media hardware as an external video transcoding engine.**
+**Let your Mac handle the transcodes. Keep Plex on your Linux server.**
 
-VideoToolbox Remote exposes H.264 (AVC), H.265 (HEVC) and HEVC Main 10 hardware encoding on an Apple Silicon or supported T2 Mac over your LAN. Low-powered, GPU-less Linux homelab servers and NAS devices can keep hosting Plex, storing media and scheduling jobs while a Mac mini or another Mac handles the supported video decode, resize and encode path.
+Turn a Mac mini or another supported Mac into an external video engine for your Linux homelab. VideoToolbox Remote sends video over your LAN to Apple's dedicated media hardware for high-quality H.264 (AVC), H.265 (HEVC) and HEVC Main 10 transcoding. Low-powered, GPU-less Linux servers and NAS devices keep hosting Plex and serving media while the Mac handles supported video decode, resize and encode.
 
 Use it for high-quality Plex transcodes, low-power batch video conversion with FFmpeg, stock Linux VA-API encoding, or an experimental remote OBS Studio encoder. FFmpeg clients run on Linux, Windows and macOS; the VideoToolbox daemon runs on macOS 13+.
 
@@ -15,10 +15,10 @@ Use it for high-quality Plex transcodes, low-power batch video conversion with F
 
 ## Why use a Mac as a remote encoder?
 
-- **Efficient media hardware:** offload video work from a small server's CPU to VideoToolbox. The intended benefit is low-power transcoding; published results do not yet include whole-system watt measurements.
-- **High-quality output:** H.264, HEVC and 10-bit HEVC with bitrate, profile and color controls. Controlled comparisons report VMAF at matched delivered bitrates; quality and speed depend on the codec, source and settings.
-- **Keep your Linux homelab:** Plex, storage, audio processing and media delivery stay on your existing host. The supported Plex path needs no Linux GPU or DRM render node.
-- **Efficient packet transport:** remote transcoding sends compressed video in both directions. Local filters and live sources can use raw-frame remote encoding instead.
+- Keep Plex, storage and media delivery on Linux. The supported Plex video path runs on the Mac and needs no Linux GPU or DRM render node.
+- Use dedicated VideoToolbox media hardware for low-power playback transcodes and batch queues. Published results measure quality and CPU offload; whole-system watt measurements are still needed.
+- Control output quality with H.264, HEVC and 10-bit HEVC, including bitrate, profile and color settings. A [published M2 test](docs/benchmarks.md#v080-packet-transcode-vs-intel-va-api) reached 313 fps and 92.705 VMAF at 3.002 Mb/s for remote HEVC Main 10. The 60-second synthetic source used 0.60 seconds of Linux process CPU time. This is a historical v0.8.0 result, not a capacity guarantee.
+- Keep LAN traffic low with packet transcoding, which sends compressed video in both directions. Choose raw-frame remote encoding when you need local filters or live sources.
 
 ## Choose your workflow
 
