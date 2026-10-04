@@ -32,22 +32,9 @@ home: true
   <h2 id="benefits-title">Keep Plex running on the server you have.</h2>
   <div class="benefits">
     <div><h3>Free your server's CPU for hosting.</h3><p>Your Linux host keeps Plex, storage and stream delivery. The Mac handles supported video decode, resizing and encoding, so a GPU-less server can host Plex transcodes.</p><a class="text-link" href="plex.html">See the Plex setup →</a></div>
-    <div><h3>Put efficient media hardware to work.</h3><p>A Mac mini can process playback transcodes and batch queues for your homelab. VideoToolbox uses dedicated media hardware designed for efficient video processing.</p><a class="text-link" href="benchmarks.html#power-and-quality">Understand power use →</a></div>
-    <div><h3>Control the quality of your output.</h3><p>Keep 10-bit HEVC output when your workflow needs it. Set bitrate, profile and color metadata, then compare quality using the published VMAF results.</p><a class="text-link" href="benchmarks.html">Compare measured quality →</a></div>
+    <div><h3>Put efficient media hardware to work.</h3><p>A Mac mini can process playback transcodes and batch queues for your homelab. VideoToolbox uses dedicated media hardware designed for efficient video processing.</p><a class="text-link" href="performance.html#power-and-quality">Understand power use →</a></div>
+    <div><h3>Control the quality of your output.</h3><p>Keep 10-bit HEVC output when your workflow needs it. Set bitrate, profile and color metadata, then compare throughput and video quality in the Performance guide.</p><a class="text-link" href="performance.html">Compare measured performance →</a></div>
   </div>
-</section>
-
-<section class="landing-section" aria-labelledby="proof-title">
-  <div class="section-label">Published results · Apple M2 · v0.8.0</div>
-  <h2 id="proof-title">High-quality HEVC, with the video work offloaded.</h2>
-  <p class="section-intro">In a measured LAN test, a Linux client sent a 60-second video to an M2 Mac for HEVC Main 10 transcoding.</p>
-  <div class="metrics">
-    <div><strong>313 <span>fps</span></strong><p>Video throughput</p></div>
-    <div><strong>92.705</strong><p>VMAF at 3.002 Mb/s output</p></div>
-    <div><strong>0.60 <span>s</span></strong><p>Linux process CPU time for the job</p></div>
-  </div>
-  <p class="measurement-note">Historical v0.8.0 result: synthetic 1080p30 input scaled to 720p over 2.5 GbE; median of three runs. Results vary by source and settings. These tests did not measure watts.</p>
-  <a class="text-link" href="benchmarks.html#v080-packet-transcode-vs-intel-va-api">Read the benchmark and method →</a>
 </section>
 
 <section class="landing-section" aria-labelledby="usecases-title">
@@ -80,7 +67,7 @@ home: true
     <a href="plex.html"><strong>Plex →</strong><span>Linux host, Mac engine and playback checks.</span></a>
     <a href="vaapi-driver.html"><strong>Linux VA-API →</strong><span>Driver installation, render nodes and scope.</span></a>
     <a href="obs-plugin.html"><strong>OBS Studio →</strong><span>Experimental remote encoder setup.</span></a>
-    <a href="benchmarks.html"><strong>Quality &amp; benchmarks →</strong><span>Measured results and their limits.</span></a>
+    <a href="performance.html"><strong>Performance →</strong><span>Current video workflows, quality and throughput.</span></a>
     <a href="architecture.html"><strong>Architecture →</strong><span>Components and video data flow.</span></a>
     <a href="security.html"><strong>Security →</strong><span>Tokens, SSH tunnels and network isolation.</span></a>
     <a href="troubleshooting.html"><strong>Troubleshooting →</strong><span>Connection, compatibility and performance.</span></a>
@@ -94,8 +81,8 @@ home: true
     <details><summary>Can I keep Plex on Linux without a GPU?</summary><p>Yes, for the supported Plex video path. The Mac handles video decode, resize and encode; Linux keeps Plex, audio processing and stream delivery. The Plex integration needs no Linux GPU or DRM render node. See the <a href="plex.html">Plex requirements</a> for supported builds and playback checks.</p></details>
     <details><summary>Which Mac and clients can I use?</summary><p>The server requires macOS 13+ on Apple Silicon or a supported Intel Mac with VideoToolbox hardware. FFmpeg clients run on Linux, Windows and macOS. Plex and the VA-API driver target Linux x86_64. Check the <a href="getting-started.html#requirements">platform requirements</a> before downloading.</p></details>
     <details><summary>Does this offload every Plex transcode?</summary><p>Offload covers recognized Plex builds and supported H.264/HEVC video paths. Tone mapping, deinterlacing and subtitle burn-in stay on the native path. Normal hardware-accelerated Plex playback requires Plex Pass. The <a href="plex.html">compatibility guide</a> explains the current scope.</p></details>
-    <details><summary>How much power will my setup use?</summary><p>VideoToolbox uses the Mac's dedicated media hardware, and low-power transcoding is a core goal. Published project benchmarks measure quality, throughput and Linux CPU time; whole-system watts have not been measured. <a href="benchmarks.html#power-and-quality">Measure both hosts over a complete job</a> to compare energy use on your setup.</p></details>
-    <details><summary>Do I need a fast network?</summary><p>A wired LAN is recommended. Plex and FFmpeg packet transcoding send compressed video in both directions. Remote encoding for OBS, VA-API or local FFmpeg filters sends raw frames and needs more bandwidth. See <a href="benchmarks.html#what-affects-results">network and performance guidance</a>.</p></details>
+    <details><summary>How much power will my setup use?</summary><p>VideoToolbox uses the Mac's dedicated media hardware, and low-power transcoding is a core goal. The Performance guide reports quality, throughput and host resource use. Whole-system watts have not been measured. <a href="performance.html#power-and-quality">Measure both hosts over a complete job</a> to compare energy use on your setup.</p></details>
+    <details><summary>Do I need a fast network?</summary><p>A wired LAN is recommended. Plex and FFmpeg packet transcoding send compressed video in both directions. Remote encoding for OBS, VA-API or local FFmpeg filters sends raw frames and needs more bandwidth. See <a href="performance.html#network-and-performance-guidance">network and performance guidance</a>.</p></details>
     <details><summary>Is the OBS plugin ready for my stream?</summary><p>The plugin is experimental. It provides remote H.264 and HEVC encoding, while scene composition, audio and stream output stay in OBS. Build it from source and test your full recording or streaming workflow. Start with the <a href="obs-plugin.html">OBS setup and validation guide</a>.</p></details>
   </div>
 </section>

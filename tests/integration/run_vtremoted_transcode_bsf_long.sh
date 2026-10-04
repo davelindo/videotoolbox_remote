@@ -26,7 +26,8 @@ set -euo pipefail
 #   VTREMOTE_KEEP_OUTPUT           keep tmp dir on success (default 0)
 #
 # Remote server selection:
-#   VTREMOTE_USE_EXISTING=1 VTREMOTE_HOST=192.168.5.55 VTREMOTE_PORT=5555
+#   VTREMOTE_USE_EXISTING=1 VTREMOTE_HOST=192.0.2.20 VTREMOTE_PORT=5555
+#   (replace this documentation address with your Mac's private address)
 #   (otherwise we start VTREMOTED locally on loopback)
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

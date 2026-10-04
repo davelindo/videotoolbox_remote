@@ -114,4 +114,4 @@ The default successful-handshake audit file is `/dev/shm/plex/vtremote-plex-wrap
 
 If the marker is absent, inspect startup logs for the library gate, the actual input codec, selected Plex filter graph and unsupported encoder constraints. If it is present but playback fails, keep both Plex Transcoder and `vtremoted` logs and verify returned segments with the smoke scripts. Linux CPU can still be used by audio, subtitles, I/O and native video paths.
 
-See [troubleshooting](troubleshooting.html#plex-transcode-still-uses-substantial-linux-cpu), the [integration reference]({{ site.repository_url }}/blob/main/vaapi-driver/docs/PLEX.md), and [quality & benchmarks](benchmarks.html). The published packet benchmarks cover controlled video jobs, not a guaranteed number of simultaneous Plex streams.
+See [troubleshooting](troubleshooting.html#plex-transcode-still-uses-substantial-linux-cpu), the [integration reference]({{ site.repository_url }}/blob/main/vaapi-driver/docs/PLEX.md), and [Performance](performance.html). Single-stream video measurements do not establish a guaranteed number of simultaneous Plex streams.

@@ -8,6 +8,7 @@ This tree holds VideoToolbox Remote integration tests and benchmarks.
 - `run_session_reset.sh`: hardware H.264/HEVC same-context decoder/BSF reuse, including reset with output pending and exact decoded plane checks.
 - `check_decode_parity.py`: compares raw decode SHA-256 frame hashes, timestamps and color metadata against a preserved daemon baseline, across none/LZ4/Zstd transport.
 - `bench_sustained.py`: reusable natural-video, sustained and concurrent comparisons; see the command and metric definitions below.
+- `performance.py`: current five-pipeline Intel/software/local-Mac/remote-Mac comparison; see [Performance comparison](#performance-comparison).
 - `bench_inflight.py`: fixed/automatic depth comparisons with controlled response delay and changing processing capacity. Its packets are protocol fixtures, not decodable media.
 - `run_obs_pipeline.py`: bounded worker API throughput/cancellation experiment, excluded from the plugin build pending a supported OBS drain API. Its explicit drain is not evidence of correct normal OBS recording shutdown.
 - `mock_vtremoted/`: portable Python mock server to exercise protocol framing and message flow. It responds to HELLO/CONFIGURE/FRAME/FLUSH, can return caller-supplied HEVC fixtures, and exits after FLUSH (see its README for usage).
@@ -73,6 +74,65 @@ The command owns fresh loopback daemons. It repeats compressed input packets int
 `metadata.json`, `runs.jsonl`, and `summary.json` capture source/binary/fixture identity, settings, fps, CPU time, peak RSS, wire bytes, exact counts and independent decode validation of encoded output. Summary distributions include variation. Latencies run from server input submission through completed output send; logarithmic histogram counts merge across sessions and repeats for p50/p95/p99 (up to 4.5% bucket quantization above the one-microsecond floor). Old baseline binaries without histograms retain their per-session percentiles but have no merged percentile estimate. Summed process RSS peaks are an upper bound, not a simultaneous measurement. Raw-fps Jain fairness is meaningful for equal workloads; mixed modes have different costs.
 
 Warm-up throughput estimates each session's frame count for the requested minimum duration. Check `all_sustained`; increase `--frames` if any run is shorter. Correctness failures stop the run independently of speed. Raw decode timing runs validate counts; use the API/plane tests and a separate pixel comparison when changing decode memory paths. No hardware regression threshold is chosen before measuring variance. This runner currently measures loopback; the existing `bench_vtremote.sh` supports an explicitly designated remote server, without the new aggregate resource capture.
+
+## Performance comparison
+
+The [Performance page](https://davelindo.github.io/videotoolbox_remote/performance.html) uses `performance.py`. It compares Intel iGPU VA-API, CPU `fast` and `medium` presets, native VideoToolbox and packet transcoding through remote VideoToolbox. Both VideoToolbox paths run on the same designated Mac; the remote client runs on the designated Linux host. The coordinator only dispatches SSH jobs and collects results.
+
+Prerequisites:
+
+- Linux: Python 3.11+, `/usr/bin/ffmpeg` with `libx264` for fixture preparation; Intel iHD driver and access to `/dev/dri/renderD128`. Native measurement uses a separate build with `libx264`, `libx265`, VA-API and `libvmaf`; older Ubuntu FFmpeg can exhaust its VA-API filter frame pool.
+- Mac: Python at `/opt/homebrew/bin/python3`, FFmpeg and ffprobe at `/opt/homebrew/bin/`, with VideoToolbox, `scale_vt` and `libvmaf` enabled.
+- Coordinator: Python 3.11+, SSH key access to both hosts and the repository checkout. Install the checksum-verified release Linux FFmpeg/ffprobe and Mac daemon on their respective hosts; the release client includes `libvmaf` for validation.
+- A direct private LAN route from the Linux host to the Mac, with an unused benchmark port (default 5569). Existing daemons are not reused or stopped.
+
+Keep a common working directory outside every Git checkout, for example `/tmp/vtremote-performance`, on all three machines. Install Linux release binaries in its `bin/` directory and the Mac release daemon at `vtremoted/vtremoted`. Copy `performance.py` to the working directory on both hosts. The suite deliberately requires those tool locations so the pipeline definitions stay consistent.
+
+On Linux, unpack the matching release's vendored `ffmpeg/` source under `native-src/`. With development libraries and NASM installed, build the shared Intel/CPU baseline there:
+
+```bash
+cd /tmp/vtremote-performance/native-src
+./configure --disable-autodetect --disable-doc --disable-debug --disable-ffplay \
+  --disable-bsf=vtremote_transcode \
+  --enable-gpl --enable-libx264 --enable-libx265 --enable-vaapi --enable-libvmaf
+make -j4 ffmpeg ffprobe
+mkdir ../native-bin
+cp ffmpeg ffprobe ../native-bin/
+```
+
+On Linux, download the [official Big Buck Bunny archive](https://download.blender.org/demo/movies/BBB/bbb_sunflower_1080p_30fps_normal.mp4.zip) into `downloads/bbb_sunflower_1080p_30fps_normal.mp4.zip` under the working directory. Prepare the three 60-second inputs there:
+
+```bash
+python3 /tmp/vtremote-performance/performance.py \
+  --workdir /tmp/vtremote-performance prepare
+```
+
+Copy the entire generated `fixtures/` directory to the same location on the Mac. The suite verifies identical input hashes before starting. It uses the movie's seconds 60–120, a moving `testsrc2` signal and static `smptebars`, prepared as 1080p30 H.264 High 8-bit video.
+
+Supply SSH destinations and the Mac's private LAN address locally; **never put real hostnames, usernames, addresses or private paths in tracked files or PR metadata**. Replace the placeholders in your private terminal session:
+
+```bash
+python3 tests/integration/performance.py \
+  --workdir /tmp/vtremote-performance --server <private-mac-address> \
+  suite --linux-host <linux-ssh-destination> --mac-host <mac-ssh-destination> \
+  --release v0.9.14 --output /tmp/vtremote-performance/current
+```
+
+Start with a short preflight by adding `--fixtures big-buck-bunny --sizes 1280x720 --frames 60 --warmup-frames 30 --repeats 1` and choosing a separate, new output directory. Preflight results cannot be published. The complete default run measures 60 cases: three inputs, two codecs, two output sizes and five pipelines. Each case gets a warm-up and three measured repeats; order rotates and jobs run sequentially. VMAF samples every fifth frame and SSIM covers all frames on the first measured repeat. Validation checks frame/packet counts, profile, pixel format, dimensions, monotonic DTS and independent software decoding.
+
+Raw `metadata.json`, `runs.jsonl`, `summary.json`, worker captures and logs contain private infrastructure details. Keep them outside Git. The runner refuses capture directories inside a Git checkout. For publication, this command prints only allowed measurements, generic labels, tool versions and SHA-256 hashes:
+
+```bash
+python3 tests/integration/performance.py \
+  --workdir /tmp/vtremote-performance public-results \
+  --input /tmp/vtremote-performance/current/summary.json
+```
+
+Review that output before updating `docs/_data/performance.json`. The exporter rejects incomplete, failed or short comparisons and excludes inventory, commands, paths and addresses. Run `python3 tests/test_performance.py` before committing. The page reports delivered bitrate alongside quality and throughput; client CPU time excludes the remote daemon. Intel RAPL captures are private diagnostics, not whole-system power measurements.
+
+## Integration script options
+
+These options apply to the integration and `bench_vtremote.sh` scripts above, rather than the five-pipeline performance runner.
 
 Async decode defaults:
 - `VTREMOTE_DECODE_ASYNC=1` (default on)

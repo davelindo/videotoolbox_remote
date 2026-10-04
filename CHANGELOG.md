@@ -8,6 +8,8 @@ The non-version `nightly` tag is intentionally excluded.
 ## [Unreleased]
 
 ### Changed
+- Replaced historical benchmark tables with one Performance page and a reproducible five-pipeline comparison using Big Buck Bunny and FFmpeg signals. Raw captures stay outside Git; publication excludes private infrastructure identifiers.
+- Removed an obsolete profiling capture, moved profiler outputs outside the checkout, and replaced private server references in documentation and test examples.
 - Redesigned GitHub Pages with a dark technical theme, clear remote-transcoding benefits, published benchmark evidence, setup steps and compatibility FAQs; added responsive documentation navigation and code-copy controls.
 - Refreshed the README and guides around efficient, high-quality remote encoding; added a dedicated GPU-less Linux Plex guide and expanded VA-API, batch and OBS setup.
 - Aligned public release metadata, corrected outdated OBS codec selection and media completion guidance, and kept benchmark/power claims tied to their measured scope.

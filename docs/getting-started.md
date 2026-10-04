@@ -152,5 +152,5 @@ The built client is `ffmpeg/ffmpeg`. If a Linux x86 assembly build fails, instal
 - [Plex](plex.html): keep Plex on Linux and use a Mac as the external video engine.
 - [VA-API](vaapi-driver.html): use stock Linux applications through the encode-only driver.
 - [OBS](obs-plugin.html): build the experimental remote live encoder.
-- [Quality & benchmarks](benchmarks.html): compare video quality, throughput and resource use.
+- [Performance](performance.html): compare video quality, throughput and resource use.
 - [Troubleshooting](troubleshooting.html): connection, codec and performance checks.

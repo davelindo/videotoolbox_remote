@@ -6,6 +6,11 @@ PRD.md
 test.mov
 .env
 
+# Private performance captures (public results must be anonymized)
+performance-runs/
+performance-private/
+tests/integration/vtremoted.sample.txt
+
 # SwiftPM / Xcode
 vtremoted/.build/
 vtremoted/.swiftpm/

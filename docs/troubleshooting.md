@@ -200,7 +200,7 @@ Tone mapping, deinterlace, subtitle burn-in, unsupported graphs, audio
 transcoding, and container I/O can still consume Linux CPU.
 
 ### Slow HEVC 10-bit Encoding
-Compare your source, settings and network with the [historical benchmarks](benchmarks.html). Raw P010 transfers, compression, local filters, server thermals and encoder options can each limit throughput. Low in-flight counts alone do not identify the bottleneck: inspect network traffic, client/server CPU, frame/packet counts and encoder timing. Compare raw-frame encode with packet transcode when local filters are unnecessary.
+Compare your source, settings and network with the [Performance guide](performance.html). Raw P010 transfers, compression, local filters, server thermals and encoder options can each limit throughput. Low in-flight counts alone do not identify the bottleneck: inspect network traffic, client/server CPU, frame/packet counts and encoder timing. Compare raw-frame encode with packet transcode when local filters are unnecessary.
 
 ### Linux arm64 binary will not start
 

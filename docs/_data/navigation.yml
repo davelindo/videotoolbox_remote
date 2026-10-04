@@ -8,8 +8,8 @@
       url: /vaapi-driver.html
     - title: Remote OBS encoding
       url: /obs-plugin.html
-    - title: Quality & benchmarks
-      url: /benchmarks.html
+    - title: Performance
+      url: /performance.html
 - title: Reference
   pages:
     - title: Architecture
