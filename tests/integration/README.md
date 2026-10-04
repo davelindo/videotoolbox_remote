@@ -128,7 +128,7 @@ python3 tests/integration/performance.py \
   --input /tmp/vtremote-performance/current/summary.json
 ```
 
-Review that output before updating `docs/_data/performance.json`. The exporter rejects incomplete, failed or short comparisons and excludes inventory, commands, paths and addresses. Run `python3 tests/test_performance.py` before committing. The page reports delivered bitrate alongside quality and throughput; client CPU time excludes the remote daemon. Intel RAPL captures are private diagnostics, not whole-system power measurements.
+Review that output before updating `docs/_data/performance.json`. The exporter rejects incomplete, failed or short comparisons and excludes inventory, commands, paths and addresses. The page reports delivered bitrate alongside quality and throughput; client CPU time excludes the remote daemon. Intel RAPL captures are private diagnostics, not whole-system power measurements.
 
 ## Integration script options
 

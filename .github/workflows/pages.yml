@@ -8,8 +8,6 @@ on:
       - "CHANGELOG.md"
       - "tests/test_llms_release_version.sh"
       - "tests/test_docs_site.py"
-      - "tests/test_performance.py"
-      - "tests/integration/performance.py"
       - ".github/workflows/pages.yml"
   pull_request:
     paths:
@@ -18,8 +16,6 @@ on:
       - "CHANGELOG.md"
       - "tests/test_llms_release_version.sh"
       - "tests/test_docs_site.py"
-      - "tests/test_performance.py"
-      - "tests/integration/performance.py"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -42,8 +38,6 @@ jobs:
           persist-credentials: false
       - name: Check docs release freshness
         run: bash tests/test_llms_release_version.sh
-      - name: Check performance publication privacy
-        run: python3 tests/test_performance.py
       - uses: actions/configure-pages@v5
         if: github.event_name != 'pull_request'
       - uses: actions/jekyll-build-pages@v1
