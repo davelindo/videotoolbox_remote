@@ -90,6 +90,7 @@ typedef struct CurlLoop {
     pthread_t       thread;
     CURLM          *multi;
     CURLSH         *share;   /* shared cookies/HSTS */
+    int             has_cookies; /* libcurl was built with cookie support */
 
     pthread_mutex_t mutex;   /* guards the command queue, exit, share and cmd->done */
     pthread_cond_t  cond;    /* signaled when a sync command completes */
@@ -961,6 +962,7 @@ static void share_unlock_callback(CURL *handle, curl_lock_data data,
 static CurlLoop *curl_loop_create(AVFormatContext *avfc)
 {
     CurlLoop *loop = av_mallocz(sizeof(*loop));
+    CURLSHcode res;
     if (!loop)
         return NULL;
     loop->avfc = avfc;
@@ -978,16 +980,23 @@ static CurlLoop *curl_loop_create(AVFormatContext *avfc)
     loop->multi = curl_multi_init();
     if (!loop->multi)
         goto fail3;
-    curl_multi_setopt(loop->multi, CURLMOPT_PIPELINING, CURLPIPE_MULTIPLEX);
+    if (curl_multi_setopt(loop->multi, CURLMOPT_PIPELINING, CURLPIPE_MULTIPLEX) != CURLM_OK)
+        goto fail3;
 
     loop->share = curl_share_init();
     if (!loop->share)
         goto fail3;
-    curl_share_setopt(loop->share, CURLSHOPT_USERDATA,   loop);
-    curl_share_setopt(loop->share, CURLSHOPT_LOCKFUNC,   share_lock_callback);
-    curl_share_setopt(loop->share, CURLSHOPT_UNLOCKFUNC, share_unlock_callback);
-    curl_share_setopt(loop->share, CURLSHOPT_SHARE, CURL_LOCK_DATA_COOKIE);
-    curl_share_setopt(loop->share, CURLSHOPT_SHARE, CURL_LOCK_DATA_HSTS);
+    if (curl_share_setopt(loop->share, CURLSHOPT_USERDATA,   loop)                  != CURLSHE_OK ||
+        curl_share_setopt(loop->share, CURLSHOPT_LOCKFUNC,   share_lock_callback)   != CURLSHE_OK ||
+        curl_share_setopt(loop->share, CURLSHOPT_UNLOCKFUNC, share_unlock_callback) != CURLSHE_OK)
+        goto fail3;
+    res = curl_share_setopt(loop->share, CURLSHOPT_SHARE, CURL_LOCK_DATA_COOKIE);
+    if (res != CURLSHE_OK && res != CURLSHE_NOT_BUILT_IN)
+        goto fail3;
+    loop->has_cookies = res == CURLSHE_OK;
+    res = curl_share_setopt(loop->share, CURLSHOPT_SHARE, CURL_LOCK_DATA_HSTS);
+    if (res != CURLSHE_OK && res != CURLSHE_NOT_BUILT_IN)
+        goto fail3;
 
     if (pthread_create(&loop->thread, NULL, curl_worker, loop))
         goto fail3;
@@ -1200,9 +1209,6 @@ static int setup_protocols(CurlContext *c)
     return ret;
 }
 
-/* A failed setopt used to be ignored, so an unsupported option such as
- * -http_version 3 on a libcurl built without HTTP/3 was silently dropped and
- * the request went out with curl's default version. */
 #define CURL_SETOPT(opt, val)                                               \
     do {                                                                    \
         int ret_ = curl_setopt_checked(c, #opt,                            \
@@ -1271,13 +1277,11 @@ static int setup_curl(CurlContext *c)
     if (c->key_file)
         CURL_SETOPT(CURLOPT_SSLKEY, c->key_file);
 
-    /* The cookie engine is optional unless the user supplied cookies. */
-    cc = curl_easy_setopt(e, CURLOPT_COOKIEFILE, "");
-    if ((cc != CURLE_UNKNOWN_OPTION && cc != CURLE_NOT_BUILT_IN) ||
-        (c->cookies && c->cookies[0])) {
-        ret = curl_setopt_checked(c, "CURLOPT_COOKIEFILE", cc);
-        if (ret < 0)
-            return ret;
+    if (c->loop->has_cookies) {
+        CURL_SETOPT(CURLOPT_COOKIEFILE, "");
+    } else if (c->cookies && c->cookies[0]) {
+        av_log(c->h, AV_LOG_ERROR, "libcurl was built without cookie support\n");
+        return AVERROR(ENOSYS);
     }
     if (c->cookies && c->cookies[0]) {
         char *copy = av_strdup(c->cookies);
