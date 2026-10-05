@@ -6,9 +6,8 @@ home: true
 
 <section class="hero" aria-labelledby="hero-title">
   <div>
-    <div class="eyebrow">Low-power video for your homelab</div>
     <h1 id="hero-title">Let your Mac<br>handle the<br><span>transcodes.</span></h1>
-    <p class="lead">High-quality video. Dedicated media hardware. Put your Mac to work over LAN, while Plex, your files and your workflows stay where they are.</p>
+    <p class="lead">High-quality, low-power transcoding over LAN. Keep Plex, your files and your workflows where they are.</p>
     <div class="actions">
       <a class="button primary" href="getting-started.html">Get started</a>
       <a class="button" href="{{ site.latest_release_url }}">Download {{ site.current_release }} ↗</a>
@@ -17,12 +16,10 @@ home: true
   </div>
   <figure class="mac-visual">
     <div class="mac-product"><img src="assets/mac-mini.png" width="1240" height="1240" fetchpriority="high" alt="A silver Mac mini with the Apple logo, the hardware that runs the remote VideoToolbox server."></div>
-    <figcaption>Mac media hardware. Available over LAN.</figcaption>
   </figure>
 </section>
 
 <section class="landing-section" aria-labelledby="workflows-title">
-  <div class="section-label">Integrations</div>
   <h2 id="workflows-title">An encoder for the tools you already use.</h2>
   <div class="workflow-grid">
     <div class="workflow-card">
@@ -58,7 +55,6 @@ home: true
 
 <section class="landing-section performance-preview" aria-labelledby="performance-title">
   <div>
-    <div class="section-label">Measured performance</div>
     <h2 id="performance-title">See the speed.<br>Check the quality.</h2>
     <p>Compare Intel iGPU VA-API, CPU fast and medium presets, and local and remote VideoToolbox. Explore throughput, VMAF and physical file size at the same bitrate budget.</p>
     <a class="text-link" href="performance.html">Explore the interactive benchmarks →</a>
@@ -72,7 +68,6 @@ home: true
 
 <section class="landing-section quickstart" aria-labelledby="setup-title">
   <div>
-    <div class="section-label">Get started</div>
     <h2 id="setup-title">Connect once.<br>Start encoding.</h2>
     <p>Install the server on your Mac and the matching client on the machine running your jobs. Set the Mac endpoint, then try a short transcode.</p>
     <div class="actions"><a class="button primary" href="getting-started.html">Installation guide →</a><a class="text-link" href="security.html">Secure your connection →</a></div>

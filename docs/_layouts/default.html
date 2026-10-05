@@ -75,7 +75,6 @@
     </aside>
     {% endunless %}
     <article class="{% if page.home %}landing{% else %}prose{% endif %}">
-      {% unless page.home %}<div class="docs-eyebrow">Documentation <span>{{ site.current_release }}</span></div>{% endunless %}
       {{ content }}
       {% unless page.home %}
       <div class="docs-end">
