@@ -17,7 +17,7 @@ Use it for high-quality Plex transcodes, low-power batch video conversion with F
 
 - Keep Plex, storage and media delivery on Linux. The supported Plex video path runs on the Mac and needs no Linux GPU or DRM render node.
 - Use dedicated VideoToolbox media hardware for low-power playback transcodes and batch queues. Published results measure quality and CPU offload; whole-system watt measurements are still needed.
-- Control output quality with H.264, HEVC and 10-bit HEVC, including bitrate, profile and color settings. The [Performance guide](https://davelindo.github.io/videotoolbox_remote/performance.html) publishes the five-pipeline Big Buck Bunny/FFmpeg signal comparison and paired validation of the resize fix released in v0.9.16, with full file sizes, reported bitrate, VMAF, SSIM, throughput and CPU use.
+- Control output quality with H.264, HEVC and 10-bit HEVC, including bitrate, profile and color settings. [Performance benchmarks](https://davelindo.github.io/videotoolbox_remote/performance.html) compare Intel VA-API, CPU fast/medium, local VideoToolbox and remote VideoToolbox using Big Buck Bunny and FFmpeg signals, with graphs of throughput, video quality and CPU time alongside actual file sizes and bitrates.
 - Keep LAN traffic low with packet transcoding, which sends compressed video in both directions. Choose raw-frame remote encoding when you need local filters or live sources.
 
 ## Choose your workflow

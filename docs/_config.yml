@@ -11,6 +11,8 @@ baseurl: "/videotoolbox_remote"
 url: "https://davelindo.github.io"
 plugins:
   - jekyll-sitemap
+exclude:
+  - assets/vendor/README.md
 defaults:
   - scope:
       path: ""

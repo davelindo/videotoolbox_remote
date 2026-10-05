@@ -1,6 +1,6 @@
 ---
 title: Performance
-description: "Measured Intel VA-API, CPU fast/medium, local VideoToolbox and remote VideoToolbox performance, plus v0.9.16 resize-fix validation with full file sizes and VMAF."
+description: "Compare Intel VA-API, CPU fast/medium, local VideoToolbox and remote VideoToolbox with graphs of transcode speed, video quality and CPU time at matched file budgets."
 ---
 
 {% include performance.md %}
