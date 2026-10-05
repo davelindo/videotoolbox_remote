@@ -86,6 +86,8 @@ Prerequisites:
 - Coordinator: Python 3.11+, SSH key access to both hosts and the repository checkout. Install the checksum-verified release Linux FFmpeg/ffprobe and Mac daemon on their respective hosts; the release client includes `libvmaf` for validation.
 - A direct private LAN route from the Linux host to the Mac, with an unused benchmark port (default 5569). Existing daemons are not reused or stopped.
 
+Close screen-sharing, screen-recording and video-call sessions on the designated Mac during measurement. They can compete for the same VideoToolbox media engine and distort throughput, even when the benchmark's FFmpeg process uses little CPU. Keep the benchmark hosts free of other transcodes and retain all measured repeats rather than selecting the fastest run.
+
 Keep a common working directory outside every Git checkout, for example `/tmp/vtremote-performance`, on all three machines. Install Linux release binaries in its `bin/` directory and the Mac release daemon at `vtremoted/vtremoted`. Copy `performance.py` to the working directory on both hosts. The suite deliberately requires those tool locations so the pipeline definitions stay consistent.
 
 On Linux, unpack the matching release's vendored `ffmpeg/` source under `native-src/`. With development libraries and NASM installed, build the shared Intel/CPU baseline there:
@@ -124,7 +126,7 @@ All five backends use average/VBR rate control, `-bf 0` (or its remote equivalen
 
 Filler counts as actual storage and bandwidth. A diagnostic operates on a separate copy: `h264_metadata=delete_filler=1` removes H.264 filler units and `filter_units=remove_types=38` removes HEVC filler NAL units. Measured file size and container bitrate include every original byte, including overhead and filler. Quality scoring uses the original output. The diagnostic does not reduce the comparison's output cost.
 
-The published v0.9.14 five-pipeline study used the earlier packet-byte calibration. All measured outputs contained zero detected filler, so calibrated rates equaled full video packet rates. Its physical files and reported container rates were rechecked: three of 120 moving outputs exceeded the whole-file 2% target, with maximum deviation 2.066%. The page and JSON retain that discrepancy. The separate paired resize-fix study retains its actual earlier validation-build identities; it is not relabeled as a rerun of the later release archives.
+The published comparison retains valid original v0.9.14 measurements and refreshes the completed Big Buck Bunny H.264 VideoToolbox rows with v0.9.16. Its graphs and exact values come from the same measured dataset, with dates, releases and scorer identities per row. Fix-specific validation stays outside the performance page; do not relabel earlier builds as measurements of a new release.
 
 Raw `metadata.json`, `runs.jsonl`, `summary.json`, worker captures and logs contain private infrastructure details. Keep them outside Git. For publication, this command prints measured data, generic labels, tool versions and SHA-256 hashes:
 
