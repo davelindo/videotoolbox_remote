@@ -92,6 +92,7 @@ export VTREMOTED="$PWD/vtremoted/.build/release/vtremoted"
 
 ### Key Scripts
 - **`run_all.sh`**: Standard integration suite.
+- **`performance.py`**: Current Intel VA-API, CPU fast/medium, local VideoToolbox and remote VideoToolbox comparison using Big Buck Bunny and FFmpeg signals.
 - **`bench_vtremote.sh`**: Perform encoding/transcoding benchmarks.
 - **`bench_sustained.py`**: Repeated natural-video and 1/2/4-session comparisons with identities, resource use, merged latency percentiles, counts and decode validation. See the [runner instructions]({{ site.repository_url }}/blob/main/tests/integration/README.md).
 - **`run_transport_regressions.py`**, **`run_decode_duplex.py`**, **`run_session_reset.sh`**: Deadline, completion, simultaneous transport and codec context-reuse regressions.
@@ -107,12 +108,11 @@ export VTREMOTED="$PWD/vtremoted/.build/release/vtremoted"
 - **`run_vtremoted_hdr_side_data.sh`**: Verify real `vtremoted` preserves HEVC HDR color signaling.
 - **`run_obs_plugin_client_mock.sh`**: OBS plugin protocol smoke test against the Python mock server.
 
-### Running a Benchmark
-To reproduce the performance numbers:
-```bash
-VTREMOTE_HOST=<mac-host> VTREMOTE_PORT=5555 VTREMOTE_USE_EXISTING=1 \
-VTREMOTED=/bin/true tests/integration/bench_vtremote.sh
-```
+### Measuring performance
+
+Follow the [performance comparison setup]({{ site.repository_url }}/blob/main/tests/integration/README.md#performance-comparison) to reproduce the [current results](performance.html). `performance.py` dispatches workers to designated Linux and Mac hosts. Native and remote VideoToolbox use the same Mac; the coordinating computer does not encode video.
+
+Keep raw captures outside Git. Publish only the runner's allowlisted measurements, versions and hashes; never commit real server names, usernames, addresses or private paths.
 
 ### Adaptive options
 
@@ -190,4 +190,4 @@ For a local preview with Jekyll and the configured plugins installed:
 jekyll serve --source docs --host 127.0.0.1
 ```
 
-Open `http://127.0.0.1:4000/videotoolbox_remote/`. Check desktop and mobile navigation, code copying, diagrams, local links and release metadata after theme/content edits. Historical benchmark tables retain their original release labels; do not relabel them as fresh measurements.
+Open `http://127.0.0.1:4000/videotoolbox_remote/`. Check desktop and mobile navigation, code copying, diagrams, local links and release metadata after theme/content edits. The Performance page contains the current measured comparison; remove obsolete result tables rather than relabeling them as fresh measurements.

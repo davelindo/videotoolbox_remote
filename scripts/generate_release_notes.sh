@@ -20,7 +20,7 @@ getting_started_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/gettin
 troubleshooting_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/troubleshooting.md"
 security_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/security.md"
 architecture_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/architecture.md"
-benchmarks_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/benchmarks.md"
+performance_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/performance.md"
 plex_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/plex.md"
 vaapi_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/vaapi-driver.md"
 obs_url="https://github.com/${repo_slug}/blob/${doc_ref}/docs/obs-plugin.md"
@@ -87,7 +87,7 @@ emit_body() {
   cat <<EOF
 High-quality, low-power H.264/HEVC transcoding over LAN. Keep Plex on Linux and use a Mac's VideoToolbox hardware as an external video engine for supported Plex transcodes, FFmpeg batch jobs, stock Linux VA-API encoding and an experimental OBS encoder.
 
-See the [Plex guide](${plex_url}), [VA-API guide](${vaapi_url}), and [OBS guide](${obs_url}) for setup and compatibility limits. Published benchmarks measure quality, throughput and Linux resource use; whole-system watt savings are not yet measured.
+See the [Plex guide](${plex_url}), [VA-API guide](${vaapi_url}), and [OBS guide](${obs_url}) for setup and compatibility limits. The Performance page compares quality, throughput and client CPU use; whole-system watt savings are not yet measured.
 
 ## 1-minute quickstart
 
@@ -164,7 +164,7 @@ EOF
 
 - [README](${readme_url})
 - [Getting started](${getting_started_url})
-- [Benchmarks](${benchmarks_url})
+- [Performance](${performance_url})
 - [Troubleshooting](${troubleshooting_url})
 - [Security](${security_url})
 - [Architecture](${architecture_url})

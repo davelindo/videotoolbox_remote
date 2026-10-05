@@ -75,7 +75,7 @@ ffmpeg -init_hw_device vaapi=remote:/dev/dri/renderD128 \
   output-main10.mkv
 ```
 
-Keep scale, deinterlace or tone mapping before `hwupload`. The driver has no VPP pipeline and accepts software-uploaded surfaces rather than another GPU's DMA-BUF frames. Raw-frame transport can become the limiting factor at high resolutions; see [benchmarks](benchmarks.html).
+Keep scale, deinterlace or tone mapping before `hwupload`. The driver has no VPP pipeline and accepts software-uploaded surfaces rather than another GPU's DMA-BUF frames. Raw-frame transport can become the limiting factor at high resolutions; see [Performance](performance.html).
 
 ## Connection settings
 

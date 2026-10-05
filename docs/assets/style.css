@@ -61,12 +61,6 @@ a, button, summary { -webkit-tap-highlight-color: transparent; }
 .landing h3 { font-size: 21px; font-weight: 550; letter-spacing: -.6px; color: var(--text); margin: 0 0 12px; }
 .benefits, .modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 40px; }
 .benefits p, .modes p { font-size: 15px; margin: 0 0 14px; }
-.section-intro { max-width: 700px; margin: -12px 0 28px; }
-.metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 40px; padding: 28px 0; border-block: 1px solid var(--line); }
-.metrics strong { color: var(--accent); font-size: clamp(36px, 4vw, 52px); font-weight: 550; letter-spacing: -2px; line-height: 1.2; }
-.metrics strong span { font-size: 22px; letter-spacing: -.5px; }
-.metrics p { margin: 8px 0 0; font-size: 14px; }
-.measurement-note { max-width: 760px; color: var(--muted); font-size: 12px; margin: 22px 0 12px; }
 .faq { max-width: 860px; }
 .faq details { border-top: 1px solid var(--line); padding: 20px 0; }
 .faq details:last-child { border-bottom: 1px solid var(--line); }
@@ -165,7 +159,7 @@ pre code { font-size: 12px; overflow-wrap: normal; white-space: pre; }
   .hero h1 { font-size: 68px; }
   .hero .lead { max-width: 650px; }
   .engine { max-width: 580px; }
-  .benefits, .modes, .metrics { gap: 24px; }
+  .benefits, .modes { gap: 24px; }
   .landing-section { padding: 52px 0; }
   .usecase { grid-template-columns: 28px 1fr; gap: 18px; }
   .usecase > div:last-child { grid-column: 2; }
@@ -185,8 +179,8 @@ pre code { font-size: 12px; overflow-wrap: normal; white-space: pre; }
   .hero .lead { font-size: 18px; }
   .eyebrow { font-size: 10px; letter-spacing: 1px; }
   .engine { padding: 20px; }
-  .benefits, .modes, .metrics, .guide-grid { grid-template-columns: 1fr; }
-  .benefits, .modes, .metrics { gap: 30px; }
+  .benefits, .modes, .guide-grid { grid-template-columns: 1fr; }
+  .benefits, .modes { gap: 30px; }
   .landing h2 { font-size: 32px; }
   .prose { font-size: 16px; }
   .prose h1 { font-size: 36px; letter-spacing: -1.4px; }

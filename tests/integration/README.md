@@ -8,6 +8,7 @@ This tree holds VideoToolbox Remote integration tests and benchmarks.
 - `run_session_reset.sh`: hardware H.264/HEVC same-context decoder/BSF reuse, including reset with output pending and exact decoded plane checks.
 - `check_decode_parity.py`: compares raw decode SHA-256 frame hashes, timestamps and color metadata against a preserved daemon baseline, across none/LZ4/Zstd transport.
 - `bench_sustained.py`: reusable natural-video, sustained and concurrent comparisons; see the command and metric definitions below.
+- `performance.py`: current five-pipeline Intel/software/local-Mac/remote-Mac comparison; see [Performance comparison](#performance-comparison).
 - `bench_inflight.py`: fixed/automatic depth comparisons with controlled response delay and changing processing capacity. Its packets are protocol fixtures, not decodable media.
 - `run_obs_pipeline.py`: bounded worker API throughput/cancellation experiment, excluded from the plugin build pending a supported OBS drain API. Its explicit drain is not evidence of correct normal OBS recording shutdown.
 - `mock_vtremoted/`: portable Python mock server to exercise protocol framing and message flow. It responds to HELLO/CONFIGURE/FRAME/FLUSH, can return caller-supplied HEVC fixtures, and exits after FLUSH (see its README for usage).
@@ -74,13 +75,78 @@ The command owns fresh loopback daemons. It repeats compressed input packets int
 
 Warm-up throughput estimates each session's frame count for the requested minimum duration. Check `all_sustained`; increase `--frames` if any run is shorter. Correctness failures stop the run independently of speed. Raw decode timing runs validate counts; use the API/plane tests and a separate pixel comparison when changing decode memory paths. No hardware regression threshold is chosen before measuring variance. This runner currently measures loopback; the existing `bench_vtremote.sh` supports an explicitly designated remote server, without the new aggregate resource capture.
 
+## Performance comparison
+
+The [Performance page](https://davelindo.github.io/videotoolbox_remote/performance.html) uses `performance.py`. It compares Intel iGPU VA-API, CPU `fast` and `medium` presets, native VideoToolbox and packet transcoding through remote VideoToolbox. Both VideoToolbox paths run on the same designated Mac; the remote client runs on the designated Linux host. The coordinator only dispatches SSH jobs and collects results.
+
+Prerequisites:
+
+- Linux: Python 3.11+, `/usr/bin/ffmpeg` with `libx264` for fixture preparation; Intel iHD driver and access to `/dev/dri/renderD128`. Native measurement uses a separate build with `libx264`, `libx265`, VA-API and `libvmaf`; older Ubuntu FFmpeg can exhaust its VA-API filter frame pool.
+- Mac: Python at `/opt/homebrew/bin/python3`, FFmpeg and ffprobe at `/opt/homebrew/bin/`, with VideoToolbox, `scale_vt` and `libvmaf` enabled.
+- Coordinator: Python 3.11+, SSH key access to both hosts and the repository checkout. Install the checksum-verified release Linux FFmpeg/ffprobe and Mac daemon on their respective hosts; the release client includes `libvmaf` for validation.
+- A direct private LAN route from the Linux host to the Mac, with an unused benchmark port (default 5569). Existing daemons are not reused or stopped.
+
+Keep a common working directory outside every Git checkout, for example `/tmp/vtremote-performance`, on all three machines. Install Linux release binaries in its `bin/` directory and the Mac release daemon at `vtremoted/vtremoted`. Copy `performance.py` to the working directory on both hosts. The suite deliberately requires those tool locations so the pipeline definitions stay consistent.
+
+On Linux, unpack the matching release's vendored `ffmpeg/` source under `native-src/`. With development libraries and NASM installed, build the shared Intel/CPU baseline there:
+
+```bash
+cd /tmp/vtremote-performance/native-src
+./configure --disable-autodetect --disable-doc --disable-debug --disable-ffplay \
+  --disable-bsf=vtremote_transcode \
+  --enable-gpl --enable-libx264 --enable-libx265 --enable-vaapi --enable-libvmaf
+make -j4 ffmpeg ffprobe
+mkdir ../native-bin
+cp ffmpeg ffprobe ../native-bin/
+```
+
+On Linux, download the [official Big Buck Bunny archive](https://download.blender.org/demo/movies/BBB/bbb_sunflower_1080p_30fps_normal.mp4.zip) into `downloads/bbb_sunflower_1080p_30fps_normal.mp4.zip` under the working directory. Prepare the three 60-second inputs there:
+
+```bash
+python3 /tmp/vtremote-performance/performance.py \
+  --workdir /tmp/vtremote-performance prepare
+```
+
+Copy the entire generated `fixtures/` directory to the same location on the Mac. The suite verifies identical input hashes before starting. It uses the movie's seconds 60–120, a moving `testsrc2` signal and static `smptebars`, prepared as 1080p30 H.264 High 8-bit video.
+
+Supply SSH destinations and the Mac's private LAN address locally; **never put real hostnames, usernames, addresses or private paths in tracked files or PR metadata**. Replace the placeholders in your private terminal session:
+
+```bash
+python3 tests/integration/performance.py \
+  --workdir /tmp/vtremote-performance --server <private-mac-address> \
+  suite --linux-host <linux-ssh-destination> --mac-host <mac-ssh-destination> \
+  --release v0.9.16 --output /tmp/vtremote-performance/current
+```
+
+Start with a narrow preflight by adding `--fixtures big-buck-bunny --codecs hevc --sizes 1920x1080 --repeats 1` and choosing a separate, new output directory. Keep all five backends and the full 1,800-frame clip so rate control can settle. Preflight results cannot be published. The complete default run measures 60 cases: three inputs, two codecs, two output sizes and five pipelines. Each case gets a warm-up and three measured repeats; order rotates and jobs run sequentially. VMAF and SSIM cover all 1,800 frames on the first measured repeat, with the same Linux quality binary and reference for every backend. Native Mac outputs reach that scorer through `scp -3` via the coordinator, with SHA-256 verification. Validation checks frame/packet counts, profile, pixel format, dimensions, monotonic DTS and independent software decoding.
+
+All five backends use average/VBR rate control, `-bf 0` (or its remote equivalent), zero frame reordering and a 60-frame maximum GOP. The tested Intel HEVC driver requires past-reference GPB B-slices as P-picture replacements; these appear as B pictures without future references or reordering. Actual picture counts, GOP and decoder reordering are recorded; every output must have equal PTS/DTS and zero decoder reorder frames. Before timing each moving-video case, every backend follows the same automatic full-clip calibration, with up to four attempts. It measures the full container bitrate reported by ffprobe and adjusts the requested rate by the measured ratio, without inspecting quality scores. Every measured moving-video output must remain within 2% of that whole-file budget; otherwise the run stops. Static bars are separate controls. Calibration captures are saved in `calibration.jsonl`; public data preserves physical output bytes, full reported container/video rates, requested rate and filler diagnostics.
+
+Filler counts as actual storage and bandwidth. A diagnostic operates on a separate copy: `h264_metadata=delete_filler=1` removes H.264 filler units and `filter_units=remove_types=38` removes HEVC filler NAL units. Measured file size and container bitrate include every original byte, including overhead and filler. Quality scoring uses the original output. The diagnostic does not reduce the comparison's output cost.
+
+The published v0.9.14 five-pipeline study used the earlier packet-byte calibration. All measured outputs contained zero detected filler, so calibrated rates equaled full video packet rates. Its physical files and reported container rates were rechecked: three of 120 moving outputs exceeded the whole-file 2% target, with maximum deviation 2.066%. The page and JSON retain that discrepancy. The separate paired resize-fix study retains its actual earlier validation-build identities; it is not relabeled as a rerun of the later release archives.
+
+Raw `metadata.json`, `runs.jsonl`, `summary.json`, worker captures and logs contain private infrastructure details. Keep them outside Git. For publication, this command prints measured data, generic labels, tool versions and SHA-256 hashes:
+
+```bash
+python3 tests/integration/performance.py \
+  --workdir /tmp/vtremote-performance public-results \
+  --input /tmp/vtremote-performance/current/summary.json
+```
+
+Review that output before updating `docs/_data/performance.json`. The exporter rejects incomplete, failed, short or sparsely scored comparisons. It preserves every measured repeat and binds each quality score to its own first-repeat file size and hash; infrastructure inventory and connection details stay in the raw records. The page shows full output cost, quality and throughput; client CPU time excludes the remote daemon. Intel RAPL captures are diagnostics, not whole-system power measurements. The performance suite runs manually and is not added to CI.
+
+## Integration script options
+
+These options apply to the integration and `bench_vtremote.sh` scripts above, rather than the five-pipeline performance runner.
+
 Async decode defaults:
 - `VTREMOTE_DECODE_ASYNC=1` (default on)
 - `VTREMOTE_DECODE_REORDER_DEPTH=2`
 
 Bench defaults:
 - `VTREMOTE_BENCH_BITRATE=10M`
-- `VTREMOTE_BENCH_CBR=1` (adds `-maxrate`/`-bufsize` for apples-to-apples)
+- `VTREMOTE_BENCH_CBR=1` (adds `-maxrate`/`-bufsize`; this alone does not guarantee equal actual file size or quality)
 - `VTREMOTE_BENCH_TRANSCODE=1` (enable transcode section)
 - `VTREMOTE_BENCH_ONLY_TRANSCODE=1` (skip encode/decode benches)
 - `VTREMOTE_BENCH_TRANSCODE_OUT_CODEC=hevc`

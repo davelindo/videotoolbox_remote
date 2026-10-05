@@ -11,13 +11,13 @@ Turn a Mac mini or another supported Mac into an external video engine for your 
 
 Use it for high-quality Plex transcodes, low-power batch video conversion with FFmpeg, stock Linux VA-API encoding, or an experimental remote OBS Studio encoder. FFmpeg clients run on Linux, Windows and macOS; the VideoToolbox daemon runs on macOS 13+.
 
-**[Documentation](https://davelindo.github.io/videotoolbox_remote/) · [Plex setup](docs/plex.md) · [Download binaries](https://github.com/davelindo/videotoolbox_remote/releases/latest) · [Quality & benchmarks](docs/benchmarks.md)**
+**[Documentation](https://davelindo.github.io/videotoolbox_remote/) · [Plex setup](docs/plex.md) · [Download binaries](https://github.com/davelindo/videotoolbox_remote/releases/latest) · [Performance](https://davelindo.github.io/videotoolbox_remote/performance.html)**
 
 ## Why use a Mac as a remote encoder?
 
 - Keep Plex, storage and media delivery on Linux. The supported Plex video path runs on the Mac and needs no Linux GPU or DRM render node.
 - Use dedicated VideoToolbox media hardware for low-power playback transcodes and batch queues. Published results measure quality and CPU offload; whole-system watt measurements are still needed.
-- Control output quality with H.264, HEVC and 10-bit HEVC, including bitrate, profile and color settings. A [published M2 test](docs/benchmarks.md#v080-packet-transcode-vs-intel-va-api) reached 313 fps and 92.705 VMAF at 3.002 Mb/s for remote HEVC Main 10. The 60-second synthetic source used 0.60 seconds of Linux process CPU time. This is a historical v0.8.0 result, not a capacity guarantee.
+- Control output quality with H.264, HEVC and 10-bit HEVC, including bitrate, profile and color settings. The [Performance guide](https://davelindo.github.io/videotoolbox_remote/performance.html) publishes the five-pipeline Big Buck Bunny/FFmpeg signal comparison and paired validation of the resize fix released in v0.9.16, with full file sizes, reported bitrate, VMAF, SSIM, throughput and CPU use.
 - Keep LAN traffic low with packet transcoding, which sends compressed video in both directions. Choose raw-frame remote encoding when you need local filters or live sources.
 
 ## Choose your workflow

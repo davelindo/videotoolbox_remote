@@ -120,7 +120,7 @@ Acceptance criteria:
 - Software-frame encode/transcode behavior and outputs remain unchanged.
 - Hardware-frame inputs either use the negotiated hardware-frame path or fail before processing frames with a clear unsupported-feature error.
 - Fallback copies, if implemented, are explicit in logs and tests.
-- Real-server tests on `srv4` cover at least one hardware-frame ingest path.
+- Real-server tests on a designated Mac cover at least one hardware-frame ingest path.
 
 Validation:
 
@@ -195,7 +195,7 @@ Acceptance criteria:
 - `hevc_videotoolbox_remote` accepts `bgra`, `ayuv`, and `p210` only when negotiated support exists.
 - Unsupported runtime/format combinations fail clearly.
 - At least one real-server encode/transcode test exists for each newly advertised format, or the format remains disabled behind capability detection until testable.
-- Pixel-format negotiation is covered by mock tests and real `srv4` tests.
+- Pixel-format negotiation is covered by mock tests and real Mac tests.
 
 Validation:
 
@@ -306,7 +306,7 @@ make build-ffmpeg FFMPEG_DISABLE_X86ASM=1
 ## 7. macOS Server Install and Upgrade Hygiene
 
 Problem:
-Updating `vtremoted` on a live Mac can involve multiple launchd jobs and multiple binary paths. On `srv4`, user LaunchAgents and a root LaunchDaemon can point at different binaries.
+Updating `vtremoted` on a live Mac can involve multiple launchd jobs and multiple binary paths. User LaunchAgents and a root LaunchDaemon can point at different binaries.
 
 Implementation:
 - Add a documented "upgrade an existing server" flow.
@@ -496,7 +496,7 @@ Acceptance criteria:
 10. Improve install/restart docs and helper target.
 11. Add mock compression test and Bash 3.2 cleanup.
 12. Update release notes/changelog.
-13. Run local and `srv4` validation.
+13. Run local and designated-Mac validation.
 14. Open PR, wait for full CI, squash merge, tag `v0.4.1`.
 
 ## Validation Checklist
@@ -524,7 +524,7 @@ bash tests/integration/run_mock_side_data_roundtrip.sh
 bash tests/integration/run_mock_hevc_pixfmt_negotiation.sh
 ```
 
-macOS server on `srv4`:
+Designated macOS server:
 
 ```bash
 make build-ffmpeg
@@ -582,7 +582,7 @@ gh run view <run-id> --json jobs,conclusion,status
 - Decoder hardware-frame output is implemented for supported callers or fails clearly during configure.
 - HEVC `bgra`, `ayuv`, and `p210` support is implemented behind real server capability checks.
 - Supported side-data classes are forwarded with tests; unsupported classes have documented behavior.
-- Real `srv4` tests cover the new hardware-frame, HEVC pixel-format, and side-data paths.
+- Real Mac tests cover the new hardware-frame, HEVC pixel-format, and side-data paths.
 - Linux build fallback is documented and implemented.
 - Artifact smoke checks are active in CI.
 - Server upgrade docs are tested on a real macOS host.

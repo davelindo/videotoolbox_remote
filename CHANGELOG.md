@@ -7,6 +7,10 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
+### Changed
+- Published the five-pipeline performance comparison and paired validation of the resize fix, with physical file sizes, full container bitrate, quality, throughput and resource use. Removed obsolete benchmark tables.
+- Removed an obsolete profiling capture, moved profiler outputs outside the checkout, and replaced private server references in documentation and test examples.
+
 ## [v0.9.16] - 2026-10-05
 
 ### Fixed
