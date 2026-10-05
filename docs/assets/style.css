@@ -45,15 +45,10 @@ a, button, summary { -webkit-tap-highlight-color: transparent; }
 .button.primary:hover { background: #c5f5d8; }
 .hero-note { color: var(--muted); font: 11px/1.8 var(--mono); margin-top: 23px; }
 .product-icon { display: block; flex-shrink: 0; object-fit: contain; filter: invert(1); }
-.media-preview { min-width: 0; margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 20px; overflow: hidden; box-shadow: 0 25px 70px rgb(0 0 0 / 22%); }
-.media-preview-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 22px; }
-.media-preview-title > span:first-child { display: flex; align-items: center; gap: 10px; color: var(--text); font-size: 14px; font-weight: 500; }
-.media-preview-tag { color: var(--muted); font: 10px/1.6 var(--mono); }
-.transcode-frame { display: block; width: 100%; height: auto; }
-.media-preview figcaption { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 22px; }
-.media-preview figcaption strong { display: block; color: var(--text); font-size: 14px; font-weight: 500; }
-.media-preview figcaption span { display: block; color: var(--muted); font: 10px/1.8 var(--mono); margin-top: 4px; }
-.media-preview figcaption a { flex-shrink: 0; font-size: 11px; }
+.mac-visual { min-width: 0; margin: 0; text-align: center; }
+.mac-product { width: 100%; aspect-ratio: 1.15; overflow: hidden; }
+.mac-product img { display: block; width: 100%; height: 100%; object-fit: contain; transform: scale(1.75); }
+.mac-visual figcaption { margin-top: 14px; color: var(--muted); font: 11px/1.8 var(--mono); }
 .landing-section { padding: 76px 0; border-bottom: 1px solid var(--line); }
 .hero + .landing-section { border-top: 1px solid var(--line); }
 .landing h2 { font-size: clamp(30px, 3.5vw, 44px); font-weight: 600; letter-spacing: -1.5px; line-height: 1.15; color: var(--text); margin: 16px 0 32px; }
@@ -182,7 +177,7 @@ pre code { font-size: 12px; overflow-wrap: normal; white-space: pre; }
   .hero { grid-template-columns: 1fr; gap: 40px; padding-bottom: 46px; }
   .hero h1 { font-size: 68px; }
   .hero .lead { max-width: 650px; }
-  .media-preview { max-width: 650px; }
+  .mac-visual { width: 100%; max-width: 500px; justify-self: center; }
   .landing-section { padding: 52px 0; }
   .quickstart, .performance-preview { grid-template-columns: 1fr; gap: 32px; }
   .quickstart > div > p { max-width: none; }
@@ -198,8 +193,6 @@ pre code { font-size: 12px; overflow-wrap: normal; white-space: pre; }
   .hero h1 { font-size: 48px; letter-spacing: -2.4px; }
   .hero .lead { font-size: 18px; }
   .eyebrow { font-size: 10px; letter-spacing: 1px; }
-  .media-preview-title { padding: 15px 16px; }
-  .media-preview figcaption { padding: 16px; flex-wrap: wrap; gap: 10px; }
   .workflow-brand { gap: 10px; }
   .workflow-tag { width: 100%; margin-left: 0; }
   .workflow-card { padding: 24px; }

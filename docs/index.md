@@ -15,10 +15,9 @@ home: true
     </div>
     <p class="hero-note">Open source · H.264 &amp; HEVC · 10-bit HEVC support</p>
   </div>
-  <figure class="media-preview">
-    <div class="media-preview-title"><span><img class="product-icon" src="assets/brands/apple.svg" width="20" height="20" alt="">VideoToolbox</span><span class="media-preview-tag">Encoded on a Mac</span></div>
-    <img class="transcode-frame" src="assets/remote-transcode.jpg" width="1200" height="675" fetchpriority="high" alt="Big Buck Bunny in a meadow, a frame from the measured remote H.264 transcode.">
-    <figcaption><div><strong>Big Buck Bunny</strong><span>Remote transcode · H.264 · 1080p</span></div><a href="performance.html">See the benchmarks ↗</a></figcaption>
+  <figure class="mac-visual">
+    <div class="mac-product"><img src="assets/mac-mini.png" width="1240" height="1240" fetchpriority="high" alt="A silver Mac mini with the Apple logo, the hardware that runs the remote VideoToolbox server."></div>
+    <figcaption>Mac media hardware. Available over LAN.</figcaption>
   </figure>
 </section>
 
@@ -89,4 +88,4 @@ home: true
     <p class="terminal-note">Set <code>MAC_HOST</code> to your Mac's LAN address. This encode keeps decoding on the client.</p>
   </div>
 </section>
-<p class="image-credit">Film frame: <a href="https://peach.blender.org/">Big Buck Bunny</a> © 2008 Blender Foundation · <a href="https://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a> · resized from benchmark output.</p>
+<p class="image-credit">Mac mini image © Apple · <a href="https://www.apple.com/mac-mini/">Image source</a></p>
