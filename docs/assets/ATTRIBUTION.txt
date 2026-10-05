@@ -1,0 +1,23 @@
+Homepage imagery and product icons
+
+Big Buck Bunny film frame
+Copyright 2008 Blender Foundation / www.bigbuckbunny.org
+Source and licensing: https://peach.blender.org/about/
+License: Creative Commons Attribution 3.0
+https://creativecommons.org/licenses/by/3.0/
+remote-transcode.jpg is a resized JPEG frame at 30 seconds from the published
+Big Buck Bunny / H.264 / 1080p remote VideoToolbox benchmark, measured on
+2026-10-05 with v0.9.16. Source output SHA-256:
+98256884ffbb7b053c185831be1255b91c2b950a3464280daa7b5abd9dfe8e03
+
+performance-preview.png is a screenshot of the project's Performance page:
+Big Buck Bunny / HEVC / 1080p throughput, using published 2026-10-04 v0.9.14
+measurements. No benchmark values were changed for the screenshot.
+
+Product icons
+Unmodified icons from Simple Icons 16.34.0:
+https://github.com/simple-icons/simple-icons/tree/16.34.0/icons
+apple.svg, macos.svg, plex.svg, ffmpeg.svg, obsstudio.svg, linux.svg
+The project's CC0 license is retained at brands/LICENSE.txt.
+Brand names and logos belong to their respective owners. Icons identify
+supported products and integrations; they do not imply endorsement.
