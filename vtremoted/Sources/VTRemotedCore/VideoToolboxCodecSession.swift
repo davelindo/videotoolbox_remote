@@ -70,6 +70,7 @@
         private var pendingDecodeSideDataOrder: [Int64] = []
         private var transcodeOutputPool: CVPixelBufferPool?
         private var transcodeTransferSession: VTPixelTransferSession?
+        private let transcodePixelTransfer = TranscodePixelTransfer()
         private var transcodeOutputWidth: Int = 0
         private var transcodeOutputHeight: Int = 0
         private var transcodeNeedsTransfer = false
@@ -384,6 +385,7 @@
             clearPendingDecodeSideData()
             transcodeOutputPool = nil
             transcodeTransferSession = nil
+            transcodePixelTransfer.reset()
             transcodeOutputWidth = 0
             transcodeOutputHeight = 0
             transcodeNeedsTransfer = false
@@ -1059,6 +1061,7 @@
                 logger.info("DECODE_BUFFERS allocations=\(buffers.allocations) retained_bytes=\(buffers.retainedBytes)")
             }
             transcodeTransferSession = nil
+            transcodePixelTransfer.reset()
             transcodeOutputPool = nil
             transcodeNeedsTransfer = false
             callbackLock.lock()
@@ -2288,11 +2291,10 @@
                                                                     height: config.outputHeight) else {
                 return nil
             }
-            let status = VTPixelTransferSessionTransferImage(transfer,
-                                                             from: pixelBuffer,
-                                                             to: outputBuffer)
-            guard status == noErr else {
-                logger.error("VTPixelTransferSessionTransferImage failed: \(status)")
+            do {
+                try transcodePixelTransfer.transfer(transfer, from: pixelBuffer, to: outputBuffer)
+            } catch {
+                logger.error("transcode pixel transfer failed: \(error)")
                 return nil
             }
             return outputBuffer
