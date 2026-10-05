@@ -170,7 +170,7 @@
             }
         }
 
-        func testIdentityAndChangingInputDimensions() throws {
+        func testUnresizedTransferAndChangingInputDimensions() throws {
             let transfer = TranscodePixelTransfer()
             let session = try session()
             defer { VTPixelTransferSessionInvalidate(session) }
@@ -179,12 +179,24 @@
                 fill(source)
                 tag(source)
                 let identical = try buffer(width, 146, nv12, surface: true)
+                let expectedIdentity = try buffer(width, 146, nv12, surface: true)
                 try transfer.transfer(session, from: source, to: identical)
-                XCTAssertEqual(pixels(source), pixels(identical))
+                // Some virtualized drivers round samples even for identity
+                // transfer. The unchanged path must preserve Apple's behavior.
+                XCTAssertEqual(VTPixelTransferSessionTransferImage(session, from: source,
+                                                                    to: expectedIdentity), noErr)
+                XCTAssertEqual(pixels(identical), pixels(expectedIdentity))
                 let small = try buffer(130, 74, nv12, surface: true)
+                let reference = try buffer(width, 146, nv12, surface: false)
+                fill(reference)
+                tag(reference)
+                let expectedSmall = try buffer(130, 74, nv12, surface: true)
                 try transfer.transfer(session, from: source, to: small)
-                transfer.reset()
+                XCTAssertEqual(VTPixelTransferSessionTransferImage(session, from: reference,
+                                                                    to: expectedSmall), noErr)
+                XCTAssertEqual(pixels(small), pixels(expectedSmall))
             }
+            transfer.reset()
         }
     }
 #endif
