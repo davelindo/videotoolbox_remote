@@ -7,18 +7,18 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
+## [v0.9.16] - 2026-10-05
+
 ### Fixed
 - Corrected sampling alignment when remote transcoding resizes hardware-decoded frames. The daemon stages resized IOSurface input in reusable ordinary memory before VideoToolbox transfer, preserves pixel planes and metadata, and keeps hardware encoder output buffers. Matching-size transcoding retains its direct path.
-
-### Changed
-- Redesigned GitHub Pages with a dark technical theme, clear remote-transcoding benefits, published benchmark evidence, setup steps and compatibility FAQs; added responsive documentation navigation and code-copy controls.
-- Refreshed the README and guides around efficient, high-quality remote encoding; added a dedicated GPU-less Linux Plex guide and expanded VA-API, batch and OBS setup.
-- Aligned public release metadata, corrected outdated OBS codec selection and media completion guidance, and kept benchmark/power claims tied to their measured scope.
 
 ## [v0.9.15] - 2026-10-04
 
 ### Changed
 - Rebased the vendored `ffmpeg/` subtree to upstream `master` snapshot `ef52e1cc3850` (from `da992563a837`).
+- Redesigned GitHub Pages with a dark technical theme, clear remote-transcoding benefits, published benchmark evidence, setup steps and compatibility FAQs; added responsive documentation navigation and code-copy controls.
+- Refreshed the README and guides around efficient, high-quality remote encoding; added a dedicated GPU-less Linux Plex guide and expanded VA-API, batch and OBS setup.
+- Aligned public release metadata, corrected outdated OBS codec selection and media completion guidance, and kept benchmark/power claims tied to their measured scope.
 
 ## [v0.9.14] - 2026-10-03
 

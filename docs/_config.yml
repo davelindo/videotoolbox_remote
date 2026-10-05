@@ -1,6 +1,6 @@
 title: VideoToolbox Remote
 description: "Keep Plex on Linux and offload high-quality H.264/HEVC transcodes to a Mac's efficient VideoToolbox hardware over LAN. FFmpeg, VA-API and experimental OBS."
-current_release: "v0.9.15"
+current_release: "v0.9.16"
 latest_release_url: "https://github.com/davelindo/videotoolbox_remote/releases/latest"
 repository_url: "https://github.com/davelindo/videotoolbox_remote"
 markdown: kramdown
