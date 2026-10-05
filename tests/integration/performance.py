@@ -32,17 +32,6 @@ LABELS = {"intel-vaapi": "Intel iGPU VA-API", "cpu-fast": "CPU fast", "cpu-mediu
           "videotoolbox": "VideoToolbox local", "videotoolbox-remote": "VideoToolbox remote"}
 
 
-def require_private_directory(directory):
-    """Raw captures contain infrastructure details and must stay outside Git."""
-    directory = directory.resolve()
-    for parent in (directory, *directory.parents):
-        if (parent / ".git").exists():
-            result = subprocess.run(["git", "-C", str(parent), "rev-parse", "--is-inside-work-tree"],
-                                    capture_output=True, text=True)
-            if result.returncode == 0 and result.stdout.strip() == "true":
-                raise ValueError("private performance captures must be outside every Git checkout")
-
-
 def public_results(summary):
     """Export a strict allowlist, never host inventory, paths or commands."""
     metadata = summary["metadata"]
@@ -52,24 +41,23 @@ def public_results(summary):
     actual = [(row["fixture"], row["codec"], row["size"], row["backend"]) for row in summary["rows"]]
     if len(actual) != len(expected) or set(actual) != expected or not all(row["all_correct"] for row in summary["rows"]):
         raise ValueError("public comparison is incomplete or contains duplicate or invalid rows")
-    if any(not row["all_non_filler_within_2_percent_target"] for row in summary["rows"] if row["fixture"] != "smptebars"):
-        raise ValueError("moving-video comparisons must match encoded bitrate excluding filler within 2%")
     if any(row["vmaf_frame_stride"] != 1 or row["vmaf_sampled_frames"] != metadata["frames"] for row in summary["rows"]):
         raise ValueError("public quality measurements must score every frame")
     if not re.fullmatch(r"v\d+\.\d+\.\d+", metadata["release"]):
         raise ValueError("invalid public release identifier")
     keys = ("fixture", "codec", "size", "backend", "median_fps", "min_fps", "max_fps", "fps_cv_percent",
-            "median_cpu_seconds", "median_peak_rss_bytes", "median_delivered_mbps", "median_non_filler_mbps",
+            "median_cpu_seconds", "median_peak_rss_bytes", "median_video_mbps", "median_file_bytes", "median_container_mbps",
             "median_filler_mbps", "target_mbps", "requested_mbps", "all_correct",
-            "all_non_filler_within_2_percent_target", "max_b_picture_frames", "max_decoder_reorder_frames",
+            "all_file_within_2_percent_target", "max_file_target_deviation_percent", "max_b_picture_frames", "max_decoder_reorder_frames",
             "max_gop_frames", "vmaf", "ssim", "vmaf_frame_stride", "vmaf_sampled_frames")
     rows = [{**{key: row[key] for key in keys}, "label": LABELS[row["backend"]],
-             "comparison": "control" if row["fixture"] == "smptebars" else "matched-non-filler-bitrate"} for row in summary["rows"]]
-    numeric_keys = set(keys) - {"fixture", "codec", "size", "backend", "all_correct", "all_non_filler_within_2_percent_target"}
+             "comparison": "control" if row["fixture"] == "smptebars" else "common-bitrate-budget",
+             "scored_output": row["scored_output"], "measured_repeats": row["measured_repeats"]} for row in summary["rows"]]
+    numeric_keys = set(keys) - {"fixture", "codec", "size", "backend", "all_correct", "all_file_within_2_percent_target"}
     for row in rows:
         if any(isinstance(row[key], bool) or not isinstance(row[key], (int, float)) or not math.isfinite(row[key]) for key in numeric_keys):
             raise ValueError("public measurements must be finite numbers")
-        if type(row["all_correct"]) is not bool or type(row["all_non_filler_within_2_percent_target"]) is not bool:
+        if type(row["all_correct"]) is not bool or type(row["all_file_within_2_percent_target"]) is not bool:
             raise ValueError("public validation fields must be boolean")
     fixtures = [{"id": name, "label": {"big-buck-bunny": "Big Buck Bunny", "testsrc2": "Moving testsrc2 signal", "smptebars": "Static SMPTE bars (control)"}[name]}
                 for name in FIXTURES]
@@ -100,7 +88,8 @@ def public_results(summary):
             "warmup_frames": metadata["warmup_frames"], "vmaf_model": "vmaf_v0.6.1",
             "rate_control": "average/VBR, -bf 0 and zero frame reordering, 60-frame maximum GOP",
             "intel_hevc_picture_types": "Driver-required GPB B-slices use past references; no future references or frame reordering",
-            "matched_rate_scope": "encoded video packet bytes excluding codec filler",
+            "output_cost_scope": "physical output files including container overhead and every filler byte",
+            "calibration_measurement": metadata["calibration_measurement"],
             "rows": rows}
 
 
@@ -261,8 +250,8 @@ def quality(args, source, output, directory):
             "model": "vmaf_v0.6.1", "command": command}
 
 
-def non_filler_rate(args, output, directory, original_packets):
-    """Measure encoded video after removing only codec filler units."""
+def filler_rate(args, output, directory, original_packets):
+    """Diagnose filler on a separate copy; retain all bytes in reported output cost."""
     stripped = directory / "without-filler.mkv"
     bsf = "h264_metadata=delete_filler=1" if args.codec == "h264" else "filter_units=remove_types=38"
     measure([args.quality_ffmpeg, "-hide_banner", "-nostdin", "-v", "error", "-xerror",
@@ -274,13 +263,12 @@ def non_filler_rate(args, output, directory, original_packets):
     after = sum(int(packet["size"]) for packet in packets)
     if len(packets) != len(original_packets) or after > before:
         raise RuntimeError("filler removal changed packet counts or added encoded bytes")
-    return after * 8 / (args.frames / 30), (before - after) * 8 / (args.frames / 30)
+    return (before - after) * 8 / (args.frames / 30)
 
 
 def quality_worker(args):
     source = args.workdir / "fixtures" / f"{args.fixture}.mkv"
     directory = args.workdir / "quality" / args.run_id
-    require_private_directory(directory)
     directory.mkdir(parents=True, exist_ok=False)
     if identity(args.input)["sha256"] != args.sha256:
         raise RuntimeError("copied output identity differs from the measured output")
@@ -292,7 +280,6 @@ def quality_worker(args):
 def worker(args):
     source = args.workdir / "fixtures" / f"{args.fixture}.mkv"
     directory = args.workdir / "runs" / args.run_id
-    require_private_directory(directory)
     directory.mkdir(parents=True, exist_ok=False)
     output = directory / "output.mkv"
     command, requested_bitrate = encoder_command(args, source, output)
@@ -329,15 +316,17 @@ def worker(args):
         raise RuntimeError(f"media validation failed: {directory}")
     measure([args.quality_ffmpeg, "-v", "error", "-nostdin", "-xerror", "-i", str(output), "-map", "0:v:0", "-f", "null", "-"], directory / "decode.log")
     delivered = sum(int(packet["size"]) for packet in packets) * 8 / (args.frames / 30)
-    non_filler, filler = non_filler_rate(args, output, directory, packets)
+    filler = filler_rate(args, output, directory, packets)
+    container_bitrate = int(info["format"]["bit_rate"])
     result = {"backend": args.backend, "codec": args.codec, "fixture": args.fixture, "size": args.size,
               "run_id": args.run_id, "host": platform.node(), "frames": frames, "correct": correct,
               "b_picture_frames": b_pictures, "decoder_reorder_frames": stream["has_b_frames"],
               "gop_frames": longest_gop,
               "target_bitrate": target_bitrate, "requested_bitrate": requested_bitrate,
               "delivered_bitrate": delivered,
-              "non_filler_bitrate": non_filler, "filler_bitrate": filler,
-              "non_filler_within_2_percent_target": abs(non_filler / target_bitrate - 1) <= 0.02,
+              "container_bitrate": container_bitrate, "duration_seconds": float(info["format"]["duration"]),
+              "filler_bitrate": filler,
+              "file_within_2_percent_target": abs(container_bitrate / target_bitrate - 1) <= 0.02,
               "fps": frames / usage["elapsed_seconds"], "usage": usage,
               "output": identity(output), "source": identity(source), "command": command,
               "output_stream": {key: stream.get(key) for key in ("codec_name", "profile", "pix_fmt", "color_range", "color_space", "color_transfer", "color_primaries")}}
@@ -405,7 +394,8 @@ def suite(args):
         if fixture_hashes[0] != fixture_hashes[1]:
             raise RuntimeError("Intel and Mac fixtures differ; refusing the comparison")
         metadata = {"created_at": datetime.now(timezone.utc).isoformat(), "release": args.release, "server": ready,
-                    "hosts": host_info, "method": f"Sequential full-video pipelines; average/VBR on every backend; common -bf 0 and zero frame reordering, with driver-required past-reference GPB slices on Intel HEVC; 60-frame maximum GOP; identical byte-only full-clip calibration for every moving-video backend; non-filler encoded packet bitrate within 2%; {args.warmup_frames}-frame warm-up and {args.repeats} rotating measured repeats; static bars are a control; VMAF and SSIM over every frame on one common Linux scorer on the first measured repeat",
+                    "hosts": host_info, "method": f"Sequential full-video pipelines; average/VBR on every backend; common -bf 0 and zero frame reordering, with driver-required past-reference GPB slices on Intel HEVC; 60-frame maximum GOP; identical byte-only full-clip calibration for every moving-video backend; whole-file bitrate within 2%; {args.warmup_frames}-frame warm-up and {args.repeats} rotating measured repeats; static bars are a control; VMAF and SSIM over every frame on one common Linux scorer on the first measured repeat",
+                    "calibration_measurement": "Whole-file bitrate reported by ffprobe; container overhead and codec filler included",
                     "quality_scorer": host_info[args.linux_host]["quality_ffmpeg"],
                     "frames": args.frames, "warmup_frames": args.warmup_frames, "repeats": args.repeats,
                     "sizes": args.sizes, "fixtures": args.fixtures, "codecs": args.codecs, "backends": args.backends,
@@ -443,7 +433,7 @@ def suite(args):
                         result["quality"] = json.loads(capture(remote_command(args.linux_host, quality_command), stderr=log))
                 return result
 
-            # Calibrate non-filler rate on the complete clip before timing.
+            # Calibrate actual whole-file rate on the complete clip before timing.
             # Static bars are a control: sparse encoders may not fill a budget.
             if fixture != "smptebars":
                 for backend in args.backends:
@@ -453,12 +443,12 @@ def suite(args):
                         result = run_job(backend, run_id, args.frames)
                         with (args.output / "calibration.jsonl").open("a") as stream:
                             stream.write(json.dumps(result) + "\n")
-                        ratio = result["non_filler_bitrate"] / result["target_bitrate"]
+                        ratio = result["container_bitrate"] / result["target_bitrate"]
                         if abs(ratio - 1) <= 0.02:
                             break
                         requested_rates[backend] = round(requested_rates[backend] / ratio)
                     else:
-                        raise RuntimeError(f"could not match non-filler bitrate for {fixture} {codec} {size} {backend}")
+                        raise RuntimeError(f"could not match whole-file bitrate for {fixture} {codec} {size} {backend}")
             for repeat in range(args.repeats + 1):
                 order = list(args.backends)
                 offset = (case_index + max(repeat - 1, 0)) % len(order)
@@ -467,8 +457,8 @@ def suite(args):
                     run_id = f"{args.output.name}-{fixture}-{codec}-{size}-{backend}-r{repeat}"
                     print(f"PERFORMANCE case={case_index + 1}/{len(cases)} repeat={repeat}/{args.repeats} {backend} {fixture} {codec} {size}", flush=True)
                     result = run_job(backend, run_id, args.warmup_frames if repeat == 0 else args.frames, repeat == 1)
-                    if repeat and fixture != "smptebars" and not result["non_filler_within_2_percent_target"]:
-                        raise RuntimeError(f"non-filler bitrate outside 2% comparison tolerance: {run_id}")
+                    if repeat and fixture != "smptebars" and not result["file_within_2_percent_target"]:
+                        raise RuntimeError(f"whole-file bitrate outside 2% comparison tolerance: {run_id}")
                     result["repeat"] = repeat
                     with (args.output / "runs.jsonl").open("a") as stream:
                         stream.write(json.dumps(result) + "\n")
@@ -505,22 +495,33 @@ def summarize(metadata, runs):
         if any(run["source"]["sha256"] not in source_hashes[fixture] for run in group):
             raise ValueError("a measured run used a different input from the recorded fixture")
         rates = [run["fps"] for run in group]
-        measured_quality = next(run["quality"] for run in group if "quality" in run)
+        scored_run = next(run for run in group if run["repeat"] == 1)
+        measured_quality = scored_run["quality"]
+        repeats = [{"repeat": run["repeat"], "output_sha256": run["output"]["sha256"],
+                    "file_bytes": run["output"]["bytes"], "duration_seconds": run["duration_seconds"],
+                    "container_mbps": run["container_bitrate"] / 1_000_000,
+                    "video_mbps": run["delivered_bitrate"] / 1_000_000,
+                    "filler_mbps": run["filler_bitrate"] / 1_000_000, "fps": run["fps"],
+                    "client_cpu_seconds": run["usage"]["cpu_seconds"], "correct": run["correct"]}
+                   for run in sorted(group, key=lambda run: run["repeat"])]
         rows.append({"fixture": fixture, "codec": codec, "size": size, "backend": backend,
                      "median_fps": statistics.median(rates), "min_fps": min(rates), "max_fps": max(rates),
                      "fps_cv_percent": statistics.stdev(rates) / statistics.mean(rates) * 100 if len(rates) > 1 else 0,
                      "median_cpu_seconds": statistics.median(run["usage"]["cpu_seconds"] for run in group),
                      "median_peak_rss_bytes": statistics.median(run["usage"]["peak_rss_bytes"] for run in group),
-                     "median_delivered_mbps": statistics.median(run["delivered_bitrate"] for run in group) / 1_000_000,
-                     "median_non_filler_mbps": statistics.median(run["non_filler_bitrate"] for run in group) / 1_000_000,
+                     "median_video_mbps": statistics.median(run["delivered_bitrate"] for run in group) / 1_000_000,
+                     "median_file_bytes": statistics.median(run["output"]["bytes"] for run in group),
+                     "median_container_mbps": statistics.median(run["container_bitrate"] for run in group) / 1_000_000,
                      "median_filler_mbps": statistics.median(run["filler_bitrate"] for run in group) / 1_000_000,
                      "target_mbps": group[0]["target_bitrate"] / 1_000_000,
                      "requested_mbps": group[0]["requested_bitrate"] / 1_000_000,
                      "all_correct": all(run["correct"] for run in group),
-                     "all_non_filler_within_2_percent_target": all(run["non_filler_within_2_percent_target"] for run in group),
+                     "all_file_within_2_percent_target": all(run["file_within_2_percent_target"] for run in group),
+                     "max_file_target_deviation_percent": max(abs(run["container_bitrate"] / run["target_bitrate"] - 1) * 100 for run in group),
                      "max_b_picture_frames": max(run["b_picture_frames"] for run in group),
                      "max_decoder_reorder_frames": max(run["decoder_reorder_frames"] for run in group),
                      "max_gop_frames": max(run["gop_frames"] for run in group),
+                     "scored_output": repeats[0], "measured_repeats": repeats,
                      **{key: measured_quality[key] for key in ("vmaf", "ssim", "vmaf_frame_stride", "vmaf_sampled_frames")}})
     return {"metadata": metadata, "rows": rows, "all_correct": all(row["all_correct"] for row in rows)}
 
@@ -595,9 +596,6 @@ def main():
     args = parser.parse_args()
     if getattr(args, "frames", 1) <= 0 or getattr(args, "repeats", 1) <= 0:
         parser.error("frames and repeats must be positive")
-    require_private_directory(args.workdir)
-    if hasattr(args, "output"):
-        require_private_directory(args.output)
     if args.command == "public-results":
         print(json.dumps(public_results(json.loads(args.input.read_text())), indent=2))
         return

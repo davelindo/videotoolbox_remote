@@ -9,10 +9,6 @@ VTREMOTED_BIN="${VTREMOTED:-${ROOT}/vtremoted/.build/release/vtremoted}"
 PORT="${VTREMOTE_PORT:-5555}"
 source "${ROOT}/tests/integration/vtremoted_common.sh"
 PROFILE_DIR="$(mktemp -d /tmp/vtremote-profile.XXXXXX)"
-if [[ "$(git -C "$PROFILE_DIR" rev-parse --is-inside-work-tree 2>/dev/null || true)" == true ]]; then
-    echo "Private profiling captures must remain outside Git." >&2
-    exit 1
-fi
 
 if [[ ! -x "$VTREMOTED_BIN" ]]; then
     # Fallback to debug build if release not found

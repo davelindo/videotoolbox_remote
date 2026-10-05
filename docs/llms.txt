@@ -4,7 +4,7 @@ permalink: /llms.txt
 ---
 # VideoToolbox Remote (`videotoolbox_remote`) Briefing
 
-**Version**: v0.9.14
+**Version**: v0.9.16
 **License**: LGPL v2.1+ by default; optional GPL components depend on FFmpeg configuration.
 **Goal**: High-quality, low-power remote hardware video processing: keep Plex and automation on Linux while a macOS 13+ Mac (including macOS 27) supplies VideoToolbox over LAN.
 
@@ -66,11 +66,12 @@ make -j$(nproc)
 - **Wire compression**: LZ4, Zstd, or none. FFmpeg/OBS default to LZ4; the VA-API driver defaults to automatic selection. The macOS server loads LZ4/Zstd at runtime only when requested.
 
 ## Performance
-- Current comparisons use Big Buck Bunny and FFmpeg testsrc2/SMPTE color-bar inputs, with identical fixture hashes on both hosts.
+- Published comparisons use Big Buck Bunny and FFmpeg testsrc2/SMPTE color-bar inputs, with identical fixture hashes on both hosts.
 - Pipelines are Intel iGPU VA-API, CPU fast/medium presets, local VideoToolbox and remote VideoToolbox.
 - Local and remote VideoToolbox use the same M2 Mac; the remote client runs on the Intel Linux host.
-- All five performance backends use average/VBR, zero frame reordering and a 60-frame maximum GOP. Intel HEVC uses driver-required past-reference GPB B-slices despite `-bf 0`; actual picture types and reordering are reported. The same byte-only calibration matches non-filler bitrate within 2% of the common budget on every measured moving-video repeat. Static bars are a separate control.
-- The Performance page reports throughput, total/non-filler/filler bitrate, VMAF, SSIM and client CPU time with hardware, build and method details. Every backend's quality is scored over all 1,800 frames with one common Linux FFmpeg binary.
+- The complete five-pipeline comparison was measured with v0.9.14, before the resize fix; both VideoToolbox downscales used the affected transfer path. Average/VBR, zero frame reordering and a 60-frame maximum GOP were shared. Intel HEVC uses past-reference GPB B-slices despite `-bf 0`; actual picture types and reordering are recorded. All 180 measured outputs had zero detected filler. Actual whole-file rates are shown: 117 of 120 moving outputs were within 2% of the target; three exceeded it, with maximum deviation 2.066%. Static bars are controls.
+- Paired validation of the fix released in v0.9.16 contains 48 complete measured outputs across eight cases and unchanged/fixed builds. Moving before/after file sizes changed by at most 0.125%; Big Buck Bunny 720p H.264/HEVC VMAF rose from 91.08/91.40 to 96.16/96.63. Static controls have materially different sizes. These were earlier release-mode validation builds, not measurements of the later published archives.
+- Performance tables show physical file size, full reported container bitrate, VMAF, SSIM, throughput ranges and CPU time. All first-repeat quality measurements score all 1,800 frames with one common Linux scorer/reference. JSON binds scores to their own file sizes/hashes and preserves every measured repeat. The current manual runner calibrates whole-file bitrate including container overhead and filler.
 - Packet transcoding avoids raw-frame network transport when local video filters are unnecessary. Raw-frame encoding has different bandwidth costs.
 - Intel RAPL package energy is not whole-system power. Whole-system watt savings have not been measured.
 
