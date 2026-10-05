@@ -11,7 +11,7 @@ Measured **{{ performance.date }}**; Big Buck Bunny H.264 VideoToolbox results r
 <div class="benchmark" id="benchmark">
   <div class="benchmark-controls" aria-label="Benchmark selection">
     <label>Input<select id="benchmark-input"><option value="big-buck-bunny">Big Buck Bunny</option><option value="testsrc2">Moving test signal</option><option value="smptebars">Static color bars</option></select></label>
-    <label>Codec<select id="benchmark-codec"><option value="h264">H.264</option><option value="hevc">HEVC</option></select></label>
+    <label>Codec<select id="benchmark-codec"><option value="h264">H.264</option><option value="hevc" selected>HEVC</option></select></label>
     <label>Output<select id="benchmark-size"><option value="1920x1080">1080p</option><option value="1280x720">720p</option></select></label>
   </div>
   <p class="benchmark-selection" id="benchmark-selection" aria-live="polite"></p>
