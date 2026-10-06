@@ -4,7 +4,7 @@ permalink: /llms.txt
 ---
 # VideoToolbox Remote (`videotoolbox_remote`) Briefing
 
-**Version**: v0.9.17
+**Version**: v0.9.18
 **License**: LGPL v2.1+ by default; optional GPL components depend on FFmpeg configuration.
 **Goal**: High-quality, low-power remote hardware video processing: keep Plex and automation on Linux while a macOS 13+ Mac (including macOS 27) supplies VideoToolbox over LAN.
 
