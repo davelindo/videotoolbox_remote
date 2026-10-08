@@ -25,7 +25,7 @@ public struct Arguments: Equatable, Sendable {
 
     /// Single source of truth for the packaged version, mirrored from the
     /// repository release tag (see CHANGELOG.md and docs/llms.txt).
-    public static let version = "0.9.19"
+    public static let version = "0.9.20"
 
     public static let usage = """
     Usage: vtremoted [options]
