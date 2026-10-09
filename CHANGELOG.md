@@ -11,6 +11,11 @@ The non-version `nightly` tag is intentionally excluded.
 - Corrected Big Buck Bunny H.264 VideoToolbox benchmarks after identifying screen-sharing contention, using completed v0.9.16 measurements. Retained valid existing results with their original dates and build identities. Added interactive throughput, VMAF and CPU-time graphs with exact values; removed fix-specific before/after tables.
 - Removed an obsolete profiling capture, moved profiler outputs outside the checkout, and replaced private server references in documentation and test examples.
 
+## [v0.9.21] - 2026-10-09
+
+### Changed
+- Rebased the vendored `ffmpeg/` subtree to upstream `master` snapshot `7bc357691081` (from `e0e6ca1e29ef`).
+
 ## [v0.9.20] - 2026-10-08
 
 ### Changed
