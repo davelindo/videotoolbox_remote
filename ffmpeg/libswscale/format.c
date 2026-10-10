@@ -1522,10 +1522,11 @@ int ff_sws_decode_colors(SwsContext *ctx, SwsPixelType type,
         .lin  = fmt_decode_range(fmt, incomplete),
     }));
 
-    /* Final step, decode colorspace. XYZ formats carry no colorspace
-     * matrix; their transfer/primaries are handled by the color mapping
-     * layer, so treat them like RGB here. */
-    switch (fmt->desc->flags & AV_PIX_FMT_FLAG_XYZ ? AVCOL_SPC_RGB : fmt->csp) {
+    if (fmt->desc->flags & AV_PIX_FMT_FLAG_XYZ)
+        return 0; /* XYZ formats are treated as colorspaceless */
+
+    /* Final step, decode colorspace */
+    switch (fmt->csp) {
     case AVCOL_SPC_RGB:
         return 0;
     case AVCOL_SPC_UNSPECIFIED:
@@ -1835,6 +1836,11 @@ int ff_sws_op_list_generate(SwsContext *ctx, const SwsFormat *src,
     /* The new code does not yet support alpha blending */
     if (src->desc->flags & AV_PIX_FMT_FLAG_ALPHA &&
         ctx->alpha_blend != SWS_ALPHA_BLEND_NONE)
+        return AVERROR(ENOTSUP);
+
+    /* XYZ<->RGB conversion requires application of a gamma function which
+     * are not currently implemented */
+    if ((src->desc->flags ^ dst->desc->flags) & AV_PIX_FMT_FLAG_XYZ)
         return AVERROR(ENOTSUP);
 
     SwsOpList *ops = ff_sws_op_list_alloc();
