@@ -314,7 +314,7 @@ int ff_rtmp_packet_write(URLContext *h, RTMPPacket *pkt,
                          int chunk_size, RTMPPacket **prev_pkt_ptr,
                          int *nb_prev_pkt)
 {
-    uint8_t pkt_hdr[16], *p = pkt_hdr;
+    uint8_t pkt_hdr[18], *p = pkt_hdr;
     int mode = RTMP_PS_TWELVEBYTES;
     int off = 0;
     int written = 0;
@@ -551,7 +551,7 @@ static int amf_get_field_value2(GetByteContext *gb,
                     return -1;
                 if (dst_size < len + 1)
                     len = dst_size - 1;
-                bytestream2_get_buffer(gb, dst, len);
+                len = bytestream2_get_buffer(gb, dst, len);
                 dst[len] = 0;
                 break;
             default:

@@ -780,11 +780,13 @@ static int init_model_ov(OVModel *ov_model, const char *input_name, const char *
                                             &ov_model->output_ports[i]);
         if (status != OK) {
             av_log(ctx, AV_LOG_ERROR, "Failed to get output port %s.\n", output_names[i]);
+            ret = ov2_map_error(status, NULL);
             goto err;
         }
         status = ov_port_get_any_name(ov_model->output_ports[i], &port_name);
         if (status != OK) {
             av_log(ctx, AV_LOG_ERROR, "Failed to get output port name.\n");
+            ret = ov2_map_error(status, NULL);
             goto err;
         }
         av_log(ctx, AV_LOG_VERBOSE, "OpenVINO model outputs: %s\n", port_name);
@@ -1085,6 +1087,11 @@ static int get_input_ov(DNNModel *model, DNNData *input, const char *input_name)
     if (status != OK) {
         av_log(ctx, AV_LOG_ERROR, "Failed to get input port shape.\n");
         return ov2_map_error(status, NULL);
+    }
+    if (input_shape.rank != 4) {
+        av_log(ctx, AV_LOG_ERROR, "Input has %"PRId64" dimensions, only 4-dimensional inputs are supported.\n", input_shape.rank);
+        ov_shape_free(&input_shape);
+        return AVERROR(ENOSYS);
     }
     for (int i = 0; i < 4; i++)
         input->dims[i] = input_shape.dims[i];

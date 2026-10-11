@@ -114,12 +114,17 @@ FATE_ACODEC-$(call ENCDEC, ALAC, MOV, ARESAMPLE_FILTER) += fate-acodec-alac
 fate-acodec-alac: FMT = mov
 fate-acodec-alac: CODEC = alac -compression_level 1
 
-FATE_ACODEC-$(call ENCDEC, DCA, DTS, ARESAMPLE_FILTER) += fate-acodec-dca
+FATE_ACODEC-$(call ENCDEC, DCA, DTS, ARESAMPLE_FILTER) += fate-acodec-dca fate-acodec-dca-lfe
 fate-acodec-dca: tests/data/asynth-44100-2.wav
 fate-acodec-dca: SRC = tests/data/asynth-44100-2.wav
 fate-acodec-dca: CMD = md5 -i $(TARGET_PATH)/$(SRC) -c:a dca -strict -2 -f dts -flags +bitexact -af aresample
 fate-acodec-dca: CMP = oneline
 fate-acodec-dca: REF = 2aa580ac67820fce4f581b96ebb34acc
+fate-acodec-dca-lfe: tests/data/asynth-44100-6.wav
+fate-acodec-dca-lfe: SRC = tests/data/asynth-44100-6.wav
+fate-acodec-dca-lfe: CMD = md5 -i $(TARGET_PATH)/$(SRC) -c:a dca -strict -2 -f dts -flags +bitexact -af aresample
+fate-acodec-dca-lfe: CMP = oneline
+fate-acodec-dca-lfe: REF = f835cf293f5495c3107ac8a6a8adcab5
 
 FATE_ACODEC-$(call ENCDEC, DCA, WAV, ARESAMPLE_FILTER PIPE_PROTOCOL) += fate-acodec-dca2
 fate-acodec-dca2: CMD = enc_dec_pcm dts wav s16le $(SRC) -c:a dca -strict -2 -flags +bitexact -af aresample
