@@ -56,7 +56,7 @@ fate-ffprobe-stream-entries-tmcd: CMD = run ffprobe$(PROGSSUF)$(EXESUF) -v error
 fate-ffprobe-group-stream-entries-tmcd: CMD = run ffprobe$(PROGSSUF)$(EXESUF) -v error -select_streams v:0 \
     -show_entries stream_group_stream=index -of compact $(TARGET_SAMPLES)/mov/fcp_export8-236.mov
 fate-ffprobe-show-groups-tmcd: CMD = run ffprobe$(PROGSSUF)$(EXESUF) -v error -select_streams v:0 -show_stream_groups \
-    -show_entries stream_group=:stream_group_disposition=:stream_group_tags=:stream_group_components=:stream_group_stream_disposition=:stream_group_stream_tags=:stream=index \
+    -show_entries stream_group=:stream_group_disposition=:stream_group_tags=:stream_group_components=:stream_group_stream_disposition=:stream_group_stream_tags=:stream_group_stream_side_data=:stream=index \
     -of compact $(TARGET_SAMPLES)/mov/fcp_export8-236.mov
 
 FATE_MOV_FASTSTART = fate-mov-faststart-4gb-overflow \
@@ -282,6 +282,12 @@ FATE_MOV_FFMPEG_FFPROBE_SAMPLES-$(call FRAMECRC, MOV, HEVC, HEVC_PARSER) \
                            += fate-mov-heic-demux-still-image-iovl-2
 fate-mov-heic-demux-still-image-iovl-2: CMD = stream_demux mov $(TARGET_SAMPLES)/heif-conformance/C021.heic "" "-c:v copy -map 0:g:0" \
   "-show_entries stream_group=index,id,nb_streams,type:stream_group_components:stream_group_disposition:stream_group_tags:stream_group_stream=index,id:stream_group_stream_disposition"
+
+# heic demuxing - still image with a Gain Map stream group signaled with a tmap derived image
+FATE_MOV_FFMPEG_FFPROBE_SAMPLES-$(call FRAMECRC, MOV, HEVC, HEVC_PARSER) \
+                           += fate-mov-heic-demux-still-image-gainmap-tmap
+fate-mov-heic-demux-still-image-gainmap-tmap: CMD = stream_demux mov $(TARGET_SAMPLES)/heif/gain_map_tmap.heic "" "-c:v copy -map 0:g:0 -map 0:4" \
+  "-of compact -show_entries stream_group=index,id,nb_streams,type:stream_group_components:stream_group_disposition:stream_group_tags:stream_group_side_data:stream_group_stream=index,id:stream_group_stream_disposition:stream_group_stream_side_data_list"
 
 # Resulting remux should have:
 # 1. first audio stream with AV_DISPOSITION_HEARING_IMPAIRED
