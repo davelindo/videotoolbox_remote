@@ -4204,7 +4204,8 @@ static int get_edit_list_entry(MOVContext *mov,
     *edit_list_duration = av_rescale(*edit_list_duration, msc->time_scale,
                                      global_timescale);
 
-    if (*edit_list_duration + (uint64_t)*edit_list_media_time > INT64_MAX)
+    if (*edit_list_duration < 0 ||
+        *edit_list_media_time > INT64_MAX - *edit_list_duration)
         *edit_list_duration = 0;
 
     return 1;
@@ -4276,17 +4277,8 @@ static int find_prev_closest_index(AVStream *st,
         av_assert0(tts_index);
         av_assert0(tts_sample);
         // Find out the ctts_index for the found frame.
-        *tts_index = 0;
+        *tts_index = FFMIN(*index, tts_count);
         *tts_sample = 0;
-        for (int64_t index_tts_count = 0; index_tts_count < *index; index_tts_count++) {
-            if (*tts_index < tts_count) {
-                (*tts_sample)++;
-                if (tts_data[*tts_index].count == *tts_sample) {
-                    (*tts_index)++;
-                    *tts_sample = 0;
-                }
-            }
-        }
 
         while (*index >= 0 && (*tts_index) >= 0 && (*tts_index) < tts_count) {
             // Find a "key frame" with PTS <= timestamp_pts (So that we can decode B-frames correctly).
@@ -4554,6 +4546,8 @@ static void mov_fix_index(MOVContext *mov, AVStream *st)
         return;
     }
 
+    int64_t max_entries = nb_old * 16LL + (1 << 16);
+
     // allocate the index ranges array
     msc->index_ranges = av_malloc_array(msc->elst_count + 1,
                                         sizeof(msc->index_ranges[0]));
@@ -4600,8 +4594,9 @@ static void mov_fix_index(MOVContext *mov, AVStream *st)
             break;
         }
         num_discarded_begin = 0;
-        if (!found_non_empty_edit && edit_list_media_time == -1) {
-            empty_edits_sum_duration += edit_list_duration;
+        if (edit_list_media_time == -1) {
+            if (!found_non_empty_edit)
+                empty_edits_sum_duration += edit_list_duration;
             continue;
         }
         found_non_empty_edit = 1;
@@ -4628,7 +4623,7 @@ static void mov_fix_index(MOVContext *mov, AVStream *st)
             // Audio decoders like AAC need need a decoder delay samples previous to the current sample,
             // to correctly decode this frame. Hence for audio we seek to a frame 1 sec. before the
             // edit_list_media_time to cover the decoder delay.
-            search_timestamp = FFMAX(search_timestamp - msc->time_scale, e_old[0].timestamp);
+            search_timestamp = FFMAX(av_sat_sub64(search_timestamp, msc->time_scale), e_old[0].timestamp);
         }
 
         if (find_prev_closest_index(st, e_old, nb_old, tts_data_old, tts_count_old, search_timestamp, 0,
@@ -4653,6 +4648,11 @@ static void mov_fix_index(MOVContext *mov, AVStream *st)
         edit_list_start_encountered = 0;
         found_keyframe_after_edit = 0;
         for (; current < e_old_end; current++, index++) {
+            if (sti->nb_index_entries >= max_entries) {
+                av_log(mov->fc, AV_LOG_ERROR, "Edit list expands the sample index beyond %"PRId64" entries\n",
+                       max_entries);
+                goto truncated;
+            }
             // check  if frame outside edit list mark it for discard
             frame_duration = (current + 1 <  e_old_end) ?
                              ((current + 1)->timestamp - current->timestamp) : edit_list_duration;
@@ -4791,6 +4791,7 @@ static void mov_fix_index(MOVContext *mov, AVStream *st)
             }
         }
     }
+truncated:
     // If there are empty edits, then msc->min_corrected_pts might be positive
     // intentionally. So we subtract the sum duration of empty edits here.
     msc->min_corrected_pts -= empty_edits_sum_duration;
