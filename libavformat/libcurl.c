@@ -174,6 +174,7 @@ struct CurlContext {
 
     /* Probe result. Set by the loop thread, read by url_open() once probed. */
     int             probed;
+    int             probe_ok;    /* the first reply can be read */
     int             stream_ok;
     int             seekable;
     int64_t         content_size;
@@ -582,7 +583,7 @@ static size_t header_callback(char *ptr, size_t size, size_t nitems, void *userd
         }
 
         c->stream_ok = 1;
-        c->request_end = content_end;
+        c->request_end = c->hdr_compressed ? -1 : content_end;
         /* Capture the post-redirect URL, this is exposed as "location" AVOption
          * for compatibility with http.c. */
         if (!c->probed) {
@@ -621,12 +622,23 @@ static size_t header_callback(char *ptr, size_t size, size_t nitems, void *userd
             c->seekable     = 0;
             c->content_size = -1;
         }
+    } else if (status == 416 && c->probed && c->content_size < 0 &&
+               (c->hdr_content_total < 0 ||
+                c->hdr_content_total <= c->request_start)) {
+        /* A 416 on a follow-up request of a file of unknown size is EOF, unless
+         * it states a size past the requested offset. */
+        c->content_size = c->hdr_content_total;
+        c->stream_ok = 0;
+        update_status_locked(c, AVERROR_EOF, CURLE_OK);
     } else {
         c->loop->num_errors++;
         c->stream_ok = 0;
         update_status_locked(c, ff_http_averror(status, AVERROR(EIO)), CURLE_OK);
     }
-    c->probed = 1;
+    if (!c->probed) {
+        c->probe_ok = c->stream_ok;
+        c->probed = 1;
+    }
     pthread_cond_broadcast(&c->cond);
     pthread_mutex_unlock(&c->mutex);
 
@@ -652,6 +664,17 @@ static void start_request(CurlContext *c)
     const char *range_value = NULL;
     CURLcode cc;
     int ret;
+
+    /* At or past the end of the file, report EOF without a request. */
+    if (c->probed && c->seekable &&
+        ((c->content_size >= 0 && c->request_start >= c->content_size) ||
+         (c->end_off > 0 && c->request_start >= c->end_off))) {
+        pthread_mutex_lock(&c->mutex);
+        update_status_locked(c, AVERROR_EOF, CURLE_OK);
+        pthread_cond_broadcast(&c->cond);
+        pthread_mutex_unlock(&c->mutex);
+        return;
+    }
 
     if (!c->probed || c->seekable) {
         int64_t start = c->request_start;
@@ -765,10 +788,20 @@ static void on_done(CurlContext *c, CURLcode code)
     }
 
     if (code == CURLE_OK && c->stream_ok) {
-        int64_t file_end = c->content_size > 0 ? c->content_size - 1 : -1;
+        int64_t file_end = c->content_size >= 0 ? c->content_size - 1 : INT64_MAX;
         if (c->end_off > 0)
             file_end = FFMIN(file_end, c->end_off - 1);
         if (c->seekable && c->request_end >= 0 && c->request_end < file_end) {
+            if (!received) {
+                av_log(c->h, AV_LOG_ERROR, "Server sent back no data at offset "
+                       "%"PRId64"\n", c->request_start);
+                c->loop->num_errors++;
+                pthread_mutex_lock(&c->mutex);
+                update_status_locked(c, AVERROR(EIO), CURLE_OK);
+                pthread_cond_broadcast(&c->cond);
+                pthread_mutex_unlock(&c->mutex);
+                return;
+            }
             c->is_initial = 0;
             start_request(c);
             return;
@@ -1349,7 +1382,7 @@ static int wait_for_probe(CurlContext *c)
         curl_cond_wait(c);
     }
     if (!ret) {
-        if (!c->stream_ok)
+        if (!c->probe_ok)
             ret = c->status ? c->status : AVERROR(EIO);
     }
     pthread_mutex_unlock(&c->mutex);
