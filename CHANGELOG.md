@@ -19,6 +19,9 @@ The non-version `nightly` tag is intentionally excluded.
 ### Added
 - Hardware regression coverage for padded NV12, P010 and BGRA encoder input across uncompressed, LZ4 and Zstd transport, including decoded pixel/timestamp equality and truncated-plane rejection.
 
+### Fixed
+- Publish mock listener readiness files atomically so CLI integration tests cannot read incomplete endpoints during startup.
+
 ## [v0.9.24] - 2026-10-12
 
 ### Changed
