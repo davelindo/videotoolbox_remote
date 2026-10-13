@@ -162,7 +162,7 @@
             let durTicks: Int64
             let sideData: [WireSideData]
         }
-        private let inputBufferPool = BufferPool()
+        private let inputBuffers = RawBufferPool()
 
         init(sender: @escaping MessageSender) {
             send = sender
@@ -503,8 +503,11 @@
 
             let pBuffer = try makeCompressionPixelBuffer(session: session)
 
-            CVPixelBufferLockBaseAddress(pBuffer, [])
-            defer { CVPixelBufferUnlockBaseAddress(pBuffer, []) }
+            try checkStatus(CVPixelBufferLockBaseAddress(pBuffer, []), "lock encode input")
+            var inputLocked = true
+            defer {
+                if inputLocked { CVPixelBufferUnlockBaseAddress(pBuffer, []) }
+            }
 
             let rowBytesY = rowBytes.y
             let rowBytesUV = rowBytes.uv
@@ -550,39 +553,25 @@
 
                 // Compressed path: decompress to temp buffer first (System Memory) to avoid
                 // reading from WC memory during LZ4 back-references.
-                var temp = inputBufferPool.get(capacity: layout.decodedSize)
-                defer { inputBufferPool.return(temp) }
-                if temp.count != layout.decodedSize {
-                    temp.count = layout.decodedSize
-                }
-
-                // Zero-copy access to source data
-                let success: Bool = payload.withUnsafeBytes { payloadPtr in
-                    guard let baseAddr = payloadPtr.baseAddress else { return false }
-                    let rawPtr = UnsafeRawBufferPointer(
-                        start: baseAddr.advanced(by: rawRange.lowerBound),
-                        count: rawRange.count
-                    )
-                    return temp.withUnsafeMutableBytes { dstPtr in
-                        guard let dstBase = dstPtr.baseAddress else { return false }
+                try inputBuffers.withBuffer(capacity: layout.decodedSize) { temp in
+                    let success = payload.withUnsafeBytes { payloadPtr in
+                        let rawPtr = UnsafeRawBufferPointer(
+                            start: payloadPtr.baseAddress!.advanced(by: rawRange.lowerBound),
+                            count: rawRange.count
+                        )
                         return Self.decompressWirePayload(
                             mode: config.options.wireCompression,
                             source: rawPtr,
-                            destination: dstBase,
+                            destination: temp.baseAddress!,
                             expectedSize: layout.decodedSize
                         )
                     }
-                }
-                guard success else { throw VTRemotedError.protocolViolation("Decompress failed") }
+                    guard success else { throw VTRemotedError.protocolViolation("Decompress failed") }
 
-                // Copy from System Memory to Video Memory (WC)
-                temp.withUnsafeBytes { srcPtr in
-                    guard let srcBase = srcPtr.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
-                    let dstBase = destBase.assumingMemoryBound(to: UInt8.self)
-
+                    // Copy only after the decompressor has filled the entire validated plane.
                     Self.copyPlaneBytes(
-                        source: srcBase,
-                        destination: dstBase,
+                        source: temp.baseAddress!.assumingMemoryBound(to: UInt8.self),
+                        destination: destBase.assumingMemoryBound(to: UInt8.self),
                         expectedSize: layout.decodedSize,
                         stride: layout.stride,
                         destinationStride: destStride,
@@ -625,6 +614,9 @@
 
             let sideData = try Self.readWireSideData(&reader)
 
+            // Finish CPU access before handing the IOSurface to the encoder.
+            try checkStatus(CVPixelBufferUnlockBaseAddress(pBuffer, []), "unlock encode input")
+            inputLocked = false
             try encodePreparedFrame(
                 session: session,
                 pixelBuffer: pBuffer,
@@ -707,8 +699,11 @@
 
             let pBuffer = try makeCompressionPixelBuffer(session: session)
 
-            CVPixelBufferLockBaseAddress(pBuffer, [])
-            defer { CVPixelBufferUnlockBaseAddress(pBuffer, []) }
+            try checkStatus(CVPixelBufferLockBaseAddress(pBuffer, []), "lock encode input")
+            var inputLocked = true
+            defer {
+                if inputLocked { CVPixelBufferUnlockBaseAddress(pBuffer, []) }
+            }
 
             let rowBytesY = rowBytes.y
             let rowBytesUV = rowBytes.uv
@@ -752,7 +747,7 @@
                 }
 
                 if config.options.wireCompression == 0 {
-                    if layout.stride == destStride, layout.stride == rowBytes {
+                    if layout.stride == destStride {
                         // Read directly into the pixel buffer plane (avoids temp buffer + memcpy).
                         try streamIO.readExact(into: destBase, count: layout.decodedSize)
                         remaining -= layout.decodedSize
@@ -760,20 +755,20 @@
                         return
                     }
 
-                    // Strided read: consume full rows (incl. padding) and copy the useful bytes.
-                    var rowBuf = inputBufferPool.get(capacity: layout.stride)
-                    defer { inputBufferPool.return(rowBuf) }
-                    if rowBuf.count != layout.stride { rowBuf.count = layout.stride }
-
-                    let dstBase = destBase.assumingMemoryBound(to: UInt8.self)
-                    let copyBytes = min(rowBytes, min(layout.stride, destStride))
-                    for row in 0 ..< layout.height {
-                        try streamIO.readExact(into: &rowBuf, count: layout.stride)
-                        remaining -= layout.stride
-                        rowBuf.withUnsafeBytes { srcPtr in
-                            guard let srcBase = srcPtr.baseAddress else { return }
-                            memcpy(dstBase.advanced(by: row * destStride), srcBase, copyBytes)
-                        }
+                    // Receive the plane in bulk, then copy active rows into the
+                    // encoder's layout. A socket read per row serializes ingest.
+                    try inputBuffers.withBuffer(capacity: layout.decodedSize) { raw in
+                        try streamIO.readExact(into: raw.baseAddress!, count: raw.count)
+                        remaining -= layout.decodedSize
+                        Self.copyPlaneBytes(
+                            source: raw.baseAddress!.assumingMemoryBound(to: UInt8.self),
+                            destination: destBase.assumingMemoryBound(to: UInt8.self),
+                            expectedSize: layout.decodedSize,
+                            stride: layout.stride,
+                            destinationStride: destStride,
+                            rowBytes: rowBytes,
+                            heightHint: layout.height
+                        )
                     }
 
                     try skipBytes(wireLen - layout.decodedSize)
@@ -781,44 +776,29 @@
                 }
 
                 // Compressed path: read compressed bytes, decompress to system memory, then memcpy into WC memory.
-                var compressed = inputBufferPool.get(capacity: wireLen)
-                defer { inputBufferPool.return(compressed) }
-                if compressed.count != wireLen { compressed.count = wireLen }
-                try streamIO.readExact(into: &compressed, count: wireLen)
-                remaining -= wireLen
+                try inputBuffers.withBuffer(capacity: wireLen) { compressed in
+                    try streamIO.readExact(into: compressed.baseAddress!, count: compressed.count)
+                    remaining -= wireLen
 
-                var temp = inputBufferPool.get(capacity: layout.decodedSize)
-                defer { inputBufferPool.return(temp) }
-                if temp.count != layout.decodedSize { temp.count = layout.decodedSize }
-                let success: Bool = compressed.withUnsafeBytes { compressedPtr in
-                    let rawPtr = UnsafeRawBufferPointer(
-                        start: compressedPtr.baseAddress,
-                        count: compressed.count
-                    )
-                    return temp.withUnsafeMutableBytes { dstPtr in
-                        guard let dstBase = dstPtr.baseAddress else { return false }
-                        return Self.decompressWirePayload(
+                    try inputBuffers.withBuffer(capacity: layout.decodedSize) { temp in
+                        let success = Self.decompressWirePayload(
                             mode: config.options.wireCompression,
-                            source: rawPtr,
-                            destination: dstBase,
+                            source: UnsafeRawBufferPointer(compressed),
+                            destination: temp.baseAddress!,
                             expectedSize: layout.decodedSize
                         )
-                    }
-                }
-                guard success else { throw VTRemotedError.protocolViolation("Decompress failed") }
+                        guard success else { throw VTRemotedError.protocolViolation("Decompress failed") }
 
-                temp.withUnsafeBytes { srcPtr in
-                    guard let srcBase = srcPtr.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
-                    let dstBase = destBase.assumingMemoryBound(to: UInt8.self)
-                    Self.copyPlaneBytes(
-                        source: srcBase,
-                        destination: dstBase,
-                        expectedSize: layout.decodedSize,
-                        stride: layout.stride,
-                        destinationStride: destStride,
-                        rowBytes: rowBytes,
-                        heightHint: layout.height
-                    )
+                        Self.copyPlaneBytes(
+                            source: temp.baseAddress!.assumingMemoryBound(to: UInt8.self),
+                            destination: destBase.assumingMemoryBound(to: UInt8.self),
+                            expectedSize: layout.decodedSize,
+                            stride: layout.stride,
+                            destinationStride: destStride,
+                            rowBytes: rowBytes,
+                            heightHint: layout.height
+                        )
+                    }
                 }
             }
 
@@ -877,6 +857,8 @@
                 remaining = 0
             }
 
+            try checkStatus(CVPixelBufferUnlockBaseAddress(pBuffer, []), "unlock encode input")
+            inputLocked = false
             try encodePreparedFrame(
                 session: session,
                 pixelBuffer: pBuffer,

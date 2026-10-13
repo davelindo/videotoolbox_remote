@@ -7,9 +7,17 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
+## [v0.9.25] - 2026-10-13
+
 ### Changed
+- Reuse bounded raw buffers for encoder input decompression and receive padded raw planes in bulk. Finish pixel-buffer CPU access before submitting frames to VideoToolbox.
+- Transfer queued FFmpeg output packets directly to callers, avoiding redundant buffer references and side-data copies.
+- Corrected the documented VideoToolbox option defaults and benchmark guidance.
 - Corrected Big Buck Bunny H.264 VideoToolbox benchmarks after identifying screen-sharing contention, using completed v0.9.16 measurements. Retained valid existing results with their original dates and build identities. Added interactive throughput, VMAF and CPU-time graphs with exact values; removed fix-specific before/after tables.
 - Removed an obsolete profiling capture, moved profiler outputs outside the checkout, and replaced private server references in documentation and test examples.
+
+### Added
+- Hardware regression coverage for padded NV12, P010 and BGRA encoder input across uncompressed, LZ4 and Zstd transport, including decoded pixel/timestamp equality and truncated-plane rejection.
 
 ## [v0.9.24] - 2026-10-12
 

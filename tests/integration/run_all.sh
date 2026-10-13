@@ -61,6 +61,7 @@ if [[ "${VTREMOTE_RUN_OBS_PLUGIN:-0}" != "0" ]]; then
 fi
 run_step "complex_chain"       bash "${ROOT}/tests/integration/run_complex_chain_test.sh"
 run_step "vtremoted_roundtrip" bash "${ROOT}/tests/integration/run_vtremoted_roundtrip.sh"
+run_step "vtremoted_padded_encode" python3 "${ROOT}/tests/integration/run_vtremoted_padded_encode.py"
 run_step "vtremoted_decode"    bash "${ROOT}/tests/integration/run_vtremoted_decode.sh"
 run_step "vtremoted_hardware_ingest" bash "${ROOT}/tests/integration/run_vtremoted_hardware_ingest.sh"
 run_step "vtremoted_decode_hardware_output" bash "${ROOT}/tests/integration/run_vtremoted_decode_hardware_output.sh"

@@ -2430,11 +2430,10 @@ int ff_vtremote_common_receive_packet(AVCodecContext *avctx, AVPacket *pkt) {
   /* if queued packets, pop */
   if (s->pkt_q_count > 0) {
     AVPacket *src = &s->pkt_queue[s->pkt_q_head];
-    int ret = av_packet_ref(pkt, src);
-    av_packet_unref(src);
+    av_packet_move_ref(pkt, src);
     s->pkt_q_head = (s->pkt_q_head + 1) % s->pkt_q_size;
     s->pkt_q_count--;
-    return ret;
+    return 0;
   }
 
   if (s->done)
@@ -2467,13 +2466,12 @@ int ff_vtremote_common_receive_packet(AVCodecContext *avctx, AVPacket *pkt) {
       /* pop immediately */
       if (s->pkt_q_count > 0) {
         AVPacket *src = &s->pkt_queue[s->pkt_q_head];
-        int rc = av_packet_ref(pkt, src);
-        av_packet_unref(src);
+        av_packet_move_ref(pkt, src);
         s->pkt_q_head = (s->pkt_q_head + 1) % s->pkt_q_size;
         s->pkt_q_count--;
         if (s->inflight_frames > 0)
           s->inflight_frames--;
-        return rc;
+        return 0;
       }
       return AVERROR_BUG;
     case VTREMOTE_MSG_DONE:
@@ -2539,8 +2537,7 @@ int ff_vtremote_encode(AVCodecContext *avctx, AVPacket *pkt,
         return ret;
     }
     AVPacket *src = &s->pkt_queue[s->pkt_q_head];
-    int rc = av_packet_ref(pkt, src);
-    av_packet_unref(src);
+    av_packet_move_ref(pkt, src);
     s->pkt_q_head = (s->pkt_q_head + 1) % s->pkt_q_size;
     s->pkt_q_count--;
     if (got_packet)
@@ -2551,7 +2548,7 @@ int ff_vtremote_encode(AVCodecContext *avctx, AVPacket *pkt,
       if (send_ret < 0)
         return send_ret;
     }
-    return rc;
+    return 0;
   }
 
   /* If we have a frame and haven't hit the inflight limit, send it */

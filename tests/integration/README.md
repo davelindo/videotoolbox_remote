@@ -28,6 +28,7 @@ This tree holds VideoToolbox Remote integration tests and benchmarks.
 - `check_bitrate.sh`: validates average bitrate within a tolerance window (guards against broken rate-control).
 - `bench_vtremote.sh`: local vs remote encode benchmark across multiple sizes + framerates (skips local codec if unavailable), plus an optional transcode section. Prefers `vtremoted/.build/release/vtremoted` when present.
 - `run_vtremoted_roundtrip.sh`: launches `vtremoted` on loopback, runs short H.264 + HEVC `*_videotoolbox_remote` encodes, validates PTS/DTS via `check_pts_dts.sh`, and decodes the result with `ffmpeg -xerror` to catch bad bytestream/packet formatting.
+- `run_vtremoted_padded_encode.py`: checks padded NV12/P010/BGRA encoder input at widths on both sides of a stride boundary. Requires identical decoded pixels and timestamps across none/LZ4/Zstd, all submitted frames with one input credit, and an explicit error for a truncated padded plane.
 - `run_vtremoted_hevc_pixfmt_parity.sh`: launches `vtremoted` on loopback and verifies remote HEVC accepts `bgra`, `ayuv`, and `p210le` inputs, then decodes each output with `ffmpeg -xerror`.
 - `run_vtremoted_hwframe_ingest.sh`: launches `vtremoted` on loopback and verifies H.264/HEVC remote encoders accept `AV_PIX_FMT_VIDEOTOOLBOX` frames from FFmpeg's VideoToolbox `hwupload` path.
 - `run_vtremoted_transcode_hardware_ingest.sh`: launches `vtremoted` on loopback and verifies a local VideoToolbox hardware-decode pipeline can feed hardware frames into a remote HEVC encode.
