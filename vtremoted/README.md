@@ -48,16 +48,18 @@ From the client, add `-vt_remote_transcode` to a normal VideoToolbox encode comm
 
 ## Performance
 
-The server automatically applies optimal VideoToolbox settings for batch encoding:
+The server uses the client's VideoToolbox options:
 
-- **PrioritizeEncodingSpeedOverQuality**: enabled by default
-- **RealTime**: disabled by default (maximizes throughput)
-- **MaximizePowerEfficiency**: disabled by default (maximizes speed)
-- **MaxFrameDelayCount**: set to 8 for parallel encoding
-- **ExpectedFrameRate**: set from client's framerate
+- **PrioritizeEncodingSpeedOverQuality** is set only when the client explicitly passes `-prio_speed 0` or `-prio_speed 1`.
+- **RealTime** defaults to disabled; `-realtime 1` requests realtime encoding independently of `-prio_speed`.
+- **MaximizePowerEfficiency** defaults to disabled and can be requested with `-power_efficient 1`.
+- **AllowFrameReordering** and **MaxFrameDelayCount** follow the requested B-frame count. Hardware may reject the delay hint; it is not a guaranteed pipeline depth.
+- **ExpectedFrameRate** comes from the client's framerate.
 
-These defaults are optimal for offline transcoding. For realtime/streaming use cases, 
-the client can pass `-realtime 1` to disable speed prioritization.
+Use release builds for throughput measurements. Compare the same input, codec,
+bitrate, B-frame count and speed/quality settings on the same Mac, and validate
+decoded output. See the [integration benchmarks](../tests/integration/README.md)
+for sustained measurements and native VideoToolbox comparisons.
 
 ## Security notes
 

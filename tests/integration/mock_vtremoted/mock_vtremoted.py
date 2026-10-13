@@ -654,7 +654,10 @@ def serve(listen: str, token: str, args: argparse.Namespace) -> None:
         actual_host, actual_port = srv.getsockname()[:2]
         endpoint = f"{actual_host}:{actual_port}"
         if args.ready_file:
-            pathlib.Path(args.ready_file).write_text(endpoint, encoding="utf-8")
+            ready_path = pathlib.Path(args.ready_file)
+            pending_path = ready_path.with_name(f"{ready_path.name}.tmp")
+            pending_path.write_text(endpoint, encoding="utf-8")
+            pending_path.replace(ready_path)
         print(f"mock_vtremoted listening on {endpoint}", file=sys.stderr, flush=True)
         while True:
             conn, addr = srv.accept()
