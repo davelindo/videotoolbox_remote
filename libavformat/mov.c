@@ -1379,7 +1379,7 @@ static int mov_read_clap(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     int width, height, err = 0;
     AVRational aperture_width, aperture_height, horiz_off, vert_off;
     AVRational pc_x, pc_y;
-    uint64_t top, bottom, left, right;
+    int64_t top, bottom, left, right;
 
     item = get_heif_item(c, c->cur_item_id);
     st = get_curr_st(c);
@@ -1407,9 +1407,9 @@ static int mov_read_clap(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     vert_off.num  = avio_rb32(pb);
     vert_off.den  = avio_rb32(pb);
 
-    if (aperture_width.num  < 0 || aperture_width.den  < 0 ||
-        aperture_height.num < 0 || aperture_height.den < 0 ||
-        horiz_off.den       < 0 || vert_off.den        < 0) {
+    if (aperture_width.num  < 0 || aperture_width.den  <= 0 ||
+        aperture_height.num < 0 || aperture_height.den <= 0 ||
+        horiz_off.den      <= 0 || vert_off.den        <= 0) {
         err = AVERROR_INVALIDDATA;
         goto fail;
     }
@@ -1438,8 +1438,8 @@ static int mov_read_clap(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     top    = av_q2d(av_sub_q(pc_y, aperture_height));
     bottom = av_q2d(av_add_q(pc_y, aperture_height));
 
-    if (bottom > (height - 1) ||
-        right  > (width  - 1)) {
+    if (top  < 0 || bottom < 0 || bottom > (height - 1) ||
+        left < 0 || right  < 0 || right  > (width  - 1)) {
         err = AVERROR_INVALIDDATA;
         goto fail;
     }
@@ -11682,6 +11682,22 @@ static int mov_parse_heif_layered_video_tmap(AVFormatContext *s, const HEIFGroup
         }
         gain = NULL;
 
+        for (int k = 0; k < item->nb_iref_to_list; k++) {
+            HEIFItem *ref = get_heif_item(mov, item->iref_to_list[k].item_id);
+
+            av_assert0(ref);
+            // Remove auxl reference so we don't create the same group we made with
+            // this tmap using it. Strictly speaking, the chances for Apple style
+            // Exif values being present on a base item referenced by a tmap item
+            // are very low, but better safe than sorry.
+            if (item->iref_to_list[k].type == MKTAG('a','u','x','l') &&
+                (ref == tmap->item_list[!j])) {
+                if (k != (item->nb_iref_to_list - 1))
+                    item->iref_to_list[k] = item->iref_to_list[item->nb_iref_to_list - 1];
+                --item->nb_iref_to_list;
+                break;
+            }
+        }
         break;
     }
     av_free(gain);
