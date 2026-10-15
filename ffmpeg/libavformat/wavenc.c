@@ -86,6 +86,7 @@ typedef struct WAVMuxContext {
     int peak_block_size;
     int peak_format;
     int peak_block_pos;
+    int peak_channel;
     int peak_ppv;
     int peak_bps;
 } WAVMuxContext;
@@ -148,6 +149,11 @@ static void bwf_write_bext_chunk(AVFormatContext *s)
 static av_cold int wav_init(AVFormatContext *s)
 {
     WAVMuxContext *wav = s->priv_data;
+
+    if (s->streams[0]->codecpar->ch_layout.nb_channels <= 0) {
+        av_log(s, AV_LOG_ERROR, "Invalid number of channels\n");
+        return AVERROR(EINVAL);
+    }
 
     if (wav->write_peak == PEAK_ONLY) {
         if (wav->rf64 == RF64_ALWAYS) {
@@ -404,7 +410,7 @@ static int wav_write_packet(AVFormatContext *s, AVPacket *pkt)
         avio_write(pb, pkt->data, pkt->size);
 
     if (wav->write_peak) {
-        int c = 0;
+        int c = wav->peak_channel;
         int i;
         for (i = 0; i < pkt->size; i += wav->peak_bps) {
             if (wav->peak_bps == 1) {
@@ -424,6 +430,7 @@ static int wav_write_packet(AVFormatContext *s, AVPacket *pkt)
                 }
             }
         }
+        wav->peak_channel = c;
     }
 
     if(pkt->pts != AV_NOPTS_VALUE) {
