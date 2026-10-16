@@ -27889,7 +27889,20 @@ set with @option{param}; the default is 3.
 Controls the output pixel format. By default, or if none is specified, the input
 pixel format is used.
 
-The filter does not support converting between YUV and RGB pixel formats.
+Converting between @code{yuv420p}, @code{yuv422p}, @code{yuv444p},
+@code{yuv420p10}, @code{yuv422p10}, @code{yuv444p10}, @code{nv12}, @code{nv16},
+@code{p010} or @code{p210} and @code{bgra}, @code{rgba}, @code{bgr0} or
+@code{rgb0} is supported, also together with resizing. Resizing is then done
+on the RGB side, after converting from YUV or before converting to YUV, and
+always uses the generic filters selected with @option{interp_algo}. Resizing
+the YUV side in a separate instance instead needs less intermediate memory and
+may be faster, but filters chroma differently.
+YUV to RGB conversion uses the YCbCr matrix and range of the input, RGB to YUV
+conversion those selected for the output (see @option{out_color_matrix} and
+@option{out_range}). An unspecified matrix is treated as BT.601 and an
+unspecified range as limited. The conversion samples chroma independently of
+@option{interp_algo}: YUV to RGB conversion uses the nearest chroma sample, RGB
+to YUV conversion averages, which centers the chroma samples.
 
 @item passthrough
 If set to 0, every frame is processed, even if no conversion is necessary.
@@ -27904,7 +27917,8 @@ If set to 1, filter with a generic weight LUT instead of using fixed-function
 shader kernels. May be faster or slower depending on the hardware. A value
 of @code{auto} (the default) enables this automatically when required for
 correct anti-aliasing when downscaling, and for high-quality Lanczos scaling.
-Set this to 0 to use the legacy fixed 4-tap Lanczos kernel.
+Set this to 0 to use the legacy fixed 4-tap Lanczos kernel. Resizing during
+YUV to RGB or RGB to YUV conversion always uses the generic filters.
 
 @item param
 Algorithm-specific parameter. For @var{bicubic}, this affects the filter
@@ -27917,6 +27931,28 @@ Work the same as the identical @ref{scale} filter options.
 
 @item reset_sar
 Works the same as the identical @ref{scale} filter option.
+
+@item out_range
+Set the output YCbCr sample range. One of @code{auto} (the default),
+@code{jpeg}/@code{full}/@code{pc}, or @code{mpeg}/@code{limited}/@code{tv}.
+
+@item out_color_matrix
+Set the output YCbCr matrix. One of @code{auto} (the default), @code{bt601},
+@code{smpte170m}, @code{bt470}, @code{bt470bg}, @code{bt709}, @code{fcc},
+@code{smpte240m}, @code{ycgco}, @code{bt2020} or @code{bt2020nc}.
+
+With @code{auto}, @option{out_range} and @option{out_color_matrix} are left to
+filter-graph negotiation. They follow a single range and matrix negotiated for
+the input, as for decoded video, and otherwise prefer BT.601 limited range. For
+RGB to YUV conversion, @code{auto} thus means BT.601 limited range, unless the
+filter graph requires otherwise; converting full range YUV to RGB and back keeps
+the full range.
+
+Outside RGB to YUV conversion, these options describe the existing samples
+without remapping them; an unspecified input description may adopt the
+negotiated output description, while conflicting specified descriptions are
+rejected. Both options can only be used with YUV output; RGB output is full
+range.
 
 @end table
 
@@ -27941,6 +27977,19 @@ This can be useful to deal with a filter and encode chain that otherwise exhaust
 decoders frame pool.
 @example
 scale_cuda=passthrough=0
+@end example
+
+@item
+Convert BT.709 input to RGB for a filter that requires it, then back to
+BT.709 NV12 with limited range.
+@example
+scale_cuda=format=bgra,scale_cuda=format=nv12:out_color_matrix=bt709:out_range=limited
+@end example
+
+@item
+Scale to 720p while converting to RGB.
+@example
+scale_cuda=-2:720:format=bgra
 @end example
 @end itemize
 
