@@ -2544,6 +2544,7 @@ SYSTEM_FUNCS="
     pthread_set_name_np
     pthread_setaffinity_np
     pthread_setname_np
+    realpath
     sched_getaffinity
     SecItemImport
     SetConsoleTextAttribute
@@ -2793,6 +2794,7 @@ CONFIG_EXTRA="
     snappy
     srtp
     startcode
+    swscale_vulkan
     texturedsp
     texturedspenc
     tpeldsp
@@ -3184,6 +3186,7 @@ iac_decoder_select="imc_decoder"
 imc_decoder_select="bswapdsp sinewin"
 imm4_decoder_select="bswapdsp idctdsp"
 imm5_decoder_select="h264_decoder hevc_decoder"
+imm6_decoder_select="h264_decoder"
 indeo3_decoder_select="hpeldsp"
 indeo4_decoder_select="ividsp"
 indeo5_decoder_select="ividsp"
@@ -3361,6 +3364,8 @@ vulkan_deps="threads"
 vulkan_deps_any="libdl LoadLibrary"
 spirv_headers_spirv_h_deps="vulkan"
 spirv_unified1_spirv_h_deps="vulkan"
+swscale_vulkan_deps="vulkan"
+swscale_vulkan_if_any="spirv_headers_spirv_h spirv_unified1_spirv_h"
 
 apv_vulkan_hwaccel_deps="vulkan spirv_compiler"
 apv_vulkan_hwaccel_select="apv_decoder"
@@ -4367,8 +4372,8 @@ ffmpeg_select="aformat_filter anull_filter atrim_filter crop_filter
                transpose_filter trim_filter vflip_filter"
 ffmpeg_suggest="ole32 psapi shell32"
 ffplay_deps="avcodec avformat avfilter swscale swresample sdl2"
-ffplay_select="crop_filter transpose_filter hflip_filter vflip_filter rotate_filter lcevc_merge_bsf color_filter"
-ffplay_suggest="shell32 libplacebo vulkan ass_filter"
+ffplay_select="crop_filter transpose_filter hflip_filter vflip_filter rotate_filter lcevc_merge_bsf"
+ffplay_suggest="shell32 libplacebo vulkan libass"
 ffprobe_deps="avcodec avformat"
 ffprobe_suggest="shell32"
 
@@ -6911,6 +6916,7 @@ check_func_headers mach/mach_time.h mach_absolute_time
 check_func_headers setjmp.h siglongjmp
 check_func_headers signal.h sigaction
 check_func_headers stdlib.h getenv
+check_func_headers stdlib.h realpath
 check_func_headers sys/ioctl.h ioctl
 check_func_headers sys/stat.h lstat
 check_func_headers sys/auxv.h getauxval

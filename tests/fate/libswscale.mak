@@ -36,6 +36,16 @@ fate-sws-yuv-range: CMD = framecrc \
   -frames 1 \
   -vf scale=in_color_matrix=bt601:in_range=limited:out_color_matrix=bt601:out_range=full:flags=+accurate_rnd+bitexact
 
+# Partial bytes in the one-tap and bilinear two-tap monochrome ED paths.
+FATE_LIBSWSCALE_FFMPEG-$(call FILTERFRAMECRC, COLOR SCALE FORMAT) += fate-sws-monob-ed-tail \
+                                                                 fate-sws-monow-ed-tail \
+                                                                 fate-sws-monob-ed-tail-bilinear \
+                                                                 fate-sws-monow-ed-tail-bilinear
+fate-sws-monob-ed-tail: CMD = framecrc -lavfi color=white:s=100x8:r=1,scale=flags=bilinear+bitexact:sws_dither=ed,format=monob -frames:v 1
+fate-sws-monow-ed-tail: CMD = framecrc -lavfi color=black:s=100x8:r=1,scale=flags=bilinear+bitexact:sws_dither=ed,format=monow -frames:v 1
+fate-sws-monob-ed-tail-bilinear: CMD = framecrc -lavfi color=white:s=102x8:r=1,scale=102:16:flags=bilinear+bitexact:sws_dither=ed,format=monob -frames:v 1
+fate-sws-monow-ed-tail-bilinear: CMD = framecrc -lavfi color=black:s=102x8:r=1,scale=102:16:flags=bilinear+bitexact:sws_dither=ed,format=monow -frames:v 1
+
 ifeq ($(CONFIG_UNSTABLE),yes)
 SWS_UNSTABLE_BACKENDS-yes                            += c memcpy
 ifeq ($(ARCH_X86_64),yes)
@@ -44,9 +54,7 @@ endif
 ifeq ($(ARCH_AARCH64),yes)
 SWS_UNSTABLE_BACKENDS-$(HAVE_NEON)                   += aarch64
 endif
-# TODO: enable spirv tests once they pass on all Vulkan devices.
-# SWS_UNSTABLE_BACKENDS-$(HAVE_SPIRV_HEADERS_SPIRV_H)  += spirv
-# SWS_UNSTABLE_BACKENDS-$(HAVE_SPIRV_UNIFIED1_SPIRV_H) += spirv
+SWS_UNSTABLE_BACKENDS-$(CONFIG_SWSCALE_VULKAN)       += spirv
 
 # Set -hw default for Vulkan tests.
 fate-sws-unscaled-spirv fate-sws-unstable-spirv: SWS_HW = -hw default
