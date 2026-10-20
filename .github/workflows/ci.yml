@@ -537,36 +537,37 @@ jobs:
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          # MINGW64 is deprecated and no longer provides all FFmpeg dependencies.
+          msystem: UCRT64
           update: true
           install: >-
             base-devel
-            mingw-w64-x86_64-toolchain
-            mingw-w64-x86_64-pkg-config
-            mingw-w64-x86_64-lz4
-            mingw-w64-x86_64-zstd
-            mingw-w64-x86_64-vmaf
-            mingw-w64-x86_64-aom
-            mingw-w64-x86_64-dav1d
-            mingw-w64-x86_64-svt-av1
-            mingw-w64-x86_64-nasm
-            mingw-w64-x86_64-yasm
-            mingw-w64-x86_64-ccache
-            mingw-w64-x86_64-opus
-            mingw-w64-x86_64-libvorbis
-            mingw-w64-x86_64-lame
-            mingw-w64-x86_64-libx264
-            mingw-w64-x86_64-x265
-            mingw-w64-x86_64-libvpx
-            mingw-w64-x86_64-libass
-            mingw-w64-x86_64-freetype
-            mingw-w64-x86_64-fontconfig
-            mingw-w64-x86_64-fribidi
-            mingw-w64-x86_64-harfbuzz
-            mingw-w64-x86_64-libxml2
-            mingw-w64-x86_64-zimg
-            mingw-w64-x86_64-libwebp
-            mingw-w64-x86_64-SDL2
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-pkg-config
+            mingw-w64-ucrt-x86_64-lz4
+            mingw-w64-ucrt-x86_64-zstd
+            mingw-w64-ucrt-x86_64-vmaf
+            mingw-w64-ucrt-x86_64-aom
+            mingw-w64-ucrt-x86_64-dav1d
+            mingw-w64-ucrt-x86_64-svt-av1
+            mingw-w64-ucrt-x86_64-nasm
+            mingw-w64-ucrt-x86_64-yasm
+            mingw-w64-ucrt-x86_64-ccache
+            mingw-w64-ucrt-x86_64-opus
+            mingw-w64-ucrt-x86_64-libvorbis
+            mingw-w64-ucrt-x86_64-lame
+            mingw-w64-ucrt-x86_64-libx264
+            mingw-w64-ucrt-x86_64-x265
+            mingw-w64-ucrt-x86_64-libvpx
+            mingw-w64-ucrt-x86_64-libass
+            mingw-w64-ucrt-x86_64-freetype
+            mingw-w64-ucrt-x86_64-fontconfig
+            mingw-w64-ucrt-x86_64-fribidi
+            mingw-w64-ucrt-x86_64-harfbuzz
+            mingw-w64-ucrt-x86_64-libxml2
+            mingw-w64-ucrt-x86_64-zimg
+            mingw-w64-ucrt-x86_64-libwebp
+            mingw-w64-ucrt-x86_64-SDL2
 
       - name: Cache ccache
         uses: actions/cache@v4
