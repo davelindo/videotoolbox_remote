@@ -169,7 +169,7 @@ typedef struct DASHContext {
 
 } DASHContext;
 
-static int ishttp(char *url)
+static int ishttp(const char *url)
 {
     const char *proto_name = avio_find_protocol_name(url);
     return proto_name && av_strstart(proto_name, "http", NULL);
@@ -698,8 +698,8 @@ static int parse_manifest_segmenttimeline(AVFormatContext *s, struct representat
             val = xmlGetProp(fragment_timeline_node, attr->name);
 
             if (!val) {
-                av_log(s, AV_LOG_WARNING, "parse_manifest_segmenttimeline attr->name = %s val is NULL\n", attr->name);
-                continue;
+                av_free(tml);
+                return AVERROR(ENOMEM);
             }
 
             if (!av_strcasecmp(attr->name, "t")) {
@@ -726,7 +726,6 @@ static int resolve_content_path(AVFormatContext *s, const char *url, int *max_ur
 {
     char *tmp_str = NULL;
     char *path = NULL;
-    char *mpdName = NULL;
     xmlNodePtr node = NULL;
     char *baseurl = NULL;
     char *root_url = NULL;
@@ -757,31 +756,30 @@ static int resolve_content_path(AVFormatContext *s, const char *url, int *max_ur
     updated = add_url_size(&tmp_max_url_size, url_len);
     if (updated < 0)
         goto end;
-    text = av_mallocz(tmp_max_url_size + 1);
-    if (!text) {
-        updated = AVERROR(ENOMEM);
-        goto end;
-    }
-    av_strlcpy(text, url, strlen(url)+1);
-    tmp = text;
-    while (mpdName = av_strtok(tmp, "/", &tmp))  {
-        size = strlen(mpdName);
-    }
-    av_free(text);
-
     path = av_mallocz(tmp_max_url_size + 2);
-    tmp_str = av_mallocz(tmp_max_url_size);
+    tmp_str = av_mallocz(tmp_max_url_size + 2);
     if (!tmp_str || !path) {
         updated = AVERROR(ENOMEM);
         goto end;
     }
 
-    av_strlcpy (path, url, strlen(url) - size + 1);
+    if (ishttp(url)) {
+        const char *colon = strchr(url, ':');
+        if (colon && colon[1] == '/' && colon[2] == '/') {
+            updated = ff_make_absolute_url(path, tmp_max_url_size + 2, url, ".");
+            if (updated < 0)
+                goto end;
+        }
+    }
     for (rootId = n_baseurl_nodes - 1; rootId > 0; rootId --) {
         if (!(node = baseurl_nodes[rootId])) {
             continue;
         }
         text = xmlNodeGetContent(node);
+        if (!text) {
+            updated = AVERROR(ENOMEM);
+            goto end;
+        }
         if (ishttp(text)) {
             xmlFree(text);
             break;
@@ -791,15 +789,13 @@ static int resolve_content_path(AVFormatContext *s, const char *url, int *max_ur
 
     node = baseurl_nodes[rootId];
     baseurl = xmlNodeGetContent(node);
-    if (baseurl) {
-        size_t len = xmlStrlen(baseurl)+2;
-        char *tmp = xmlRealloc(baseurl, len);
-        if (!tmp) {
-            updated = AVERROR(ENOMEM);
-            goto end;
-        }
-        baseurl = tmp;
+    if (baseurl)
+        tmp = xmlRealloc(baseurl, xmlStrlen(baseurl) + 2);
+    if (!tmp) {
+        updated = AVERROR(ENOMEM);
+        goto end;
     }
+    baseurl = tmp;
     root_url = (av_strcasecmp(baseurl, "")) ? baseurl : path;
     if (node) {
         xmlChar *escaped = xmlEncodeSpecialChars(NULL, root_url);
@@ -817,7 +813,6 @@ static int resolve_content_path(AVFormatContext *s, const char *url, int *max_ur
 
     if (size > 0 && root_url[size - 1] != token) {
         av_strlcat(root_url, "/", size + 2);
-        size += 2;
     }
 
     for (i = 0; i < n_baseurl_nodes; ++i) {
@@ -828,7 +823,7 @@ static int resolve_content_path(AVFormatContext *s, const char *url, int *max_ur
         if (text && !av_strstart(text, "/", NULL)) {
             memset(tmp_str, 0, strlen(tmp_str));
             if (!ishttp(text) && isRootHttp) {
-                av_strlcpy(tmp_str, root_url, size + 1);
+                av_strlcpy(tmp_str, root_url, tmp_max_url_size + 2);
             }
             start = (text[0] == token);
             if (start && av_stristr(tmp_str, text)) {
@@ -841,7 +836,7 @@ static int resolve_content_path(AVFormatContext *s, const char *url, int *max_ur
                 p = strchr(p, '/');
                 memset(p + 1, 0, strlen(p));
             }
-            av_strlcat(tmp_str, text + start, tmp_max_url_size);
+            av_strlcat(tmp_str, text + start, tmp_max_url_size + 2);
             xmlFree(text);
             xmlChar* escaped = xmlEncodeSpecialChars(NULL, tmp_str);
             if (!escaped) {
@@ -851,6 +846,8 @@ static int resolve_content_path(AVFormatContext *s, const char *url, int *max_ur
             xmlNodeSetContent(baseurl_nodes[i], escaped);
             updated = 1;
             xmlFree(escaped);
+        } else {
+            xmlFree(text);
         }
     }
 
@@ -1318,6 +1315,12 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
 
     if (av_opt_get(in, "location", AV_OPT_SEARCH_CHILDREN, (uint8_t**)&c->base_url) < 0)
         c->base_url = av_strdup(url);
+    if (!c->base_url) {
+        if (close_in)
+            ff_format_io_close(s, &in);
+        return AVERROR(ENOMEM);
+    }
+    url = c->base_url;
 
     av_bprint_init(&buf, 0, INT_MAX); // xmlReadMemory uses integer bufsize
 
@@ -1359,6 +1362,10 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
         attr = node->properties;
         while (attr) {
             val = xmlGetProp(node, attr->name);
+            if (!val) {
+                ret = AVERROR(ENOMEM);
+                goto cleanup;
+            }
 
             if (!av_strcasecmp(attr->name, "availabilityStartTime")) {
                 c->availability_start_time = get_utc_date_time_insec(s, val);
@@ -1405,6 +1412,10 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
                 attr = node->properties;
                 while (attr) {
                     val = xmlGetProp(node, attr->name);
+                    if (!val) {
+                        ret = AVERROR(ENOMEM);
+                        goto cleanup;
+                    }
                     if (!av_strcasecmp(attr->name, "duration")) {
                         period_duration_sec = get_duration_insec(s, val);
                     } else if (!av_strcasecmp(attr->name, "start")) {

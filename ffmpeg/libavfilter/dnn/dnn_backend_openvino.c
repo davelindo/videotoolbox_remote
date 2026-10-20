@@ -682,7 +682,6 @@ static int init_model_ov(OVModel *ov_model, const char *input_name, const char *
         }
         nb_outputs = output_size;
     }
-    ov_model->nb_outputs = nb_outputs;
     for (int i = 0; i < nb_outputs; i++) {
         if (output_names)
             status = ov_preprocess_prepostprocessor_get_output_info_by_name(
@@ -750,8 +749,6 @@ static int init_model_ov(OVModel *ov_model, const char *input_name, const char *
     status = ov_preprocess_prepostprocessor_build(ov_model->preprocess, &ov_model->ov_model);
     if (status != OK) {
         av_log(ctx, AV_LOG_ERROR, "Failed to update OV model\n");
-        ov_model_free(tmp_ov_model);
-        tmp_ov_model = NULL;
         ret = ov2_map_error(status, NULL);
         goto err;
     }
@@ -764,6 +761,7 @@ static int init_model_ov(OVModel *ov_model, const char *input_name, const char *
             ret = AVERROR(ENOMEM);
             goto err;
         }
+        ov_model->nb_outputs = nb_outputs;
     } else
         for (int i = 0; i < nb_outputs; i++) {
             ov_output_const_port_free(ov_model->output_ports[i]);
@@ -1280,7 +1278,7 @@ static int get_output_ov(DNNModel *model, const char *input_name, int input_widt
     int ret;
     OVModel *ov_model = (OVModel *)model;
     DnnContext *ctx = ov_model->ctx;
-    TaskItem task;
+    TaskItem task = { 0 };
     OVRequestItem *request;
     DNNExecBaseParams exec_params = {
         .input_name     = input_name,

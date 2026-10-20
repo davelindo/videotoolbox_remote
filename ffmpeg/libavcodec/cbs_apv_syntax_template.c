@@ -353,6 +353,9 @@ static int FUNC(metadata_itu_t_t35)(CodedBitstreamContext *ctx,
 
     ub(8, itu_t_t35_country_code);
 
+    if (payload_size < 1 + (current->itu_t_t35_country_code == 0xff))
+        return AVERROR_INVALIDDATA;
+
     if (current->itu_t_t35_country_code == 0xff) {
         ub(8, itu_t_t35_country_code_extension);
         --read_size;
@@ -440,6 +443,9 @@ static int FUNC(metadata_user_defined)(CodedBitstreamContext *ctx,
     int err;
 
     HEADER("User-Defined Metadata");
+
+    if (payload_size < 16)
+        return AVERROR_INVALIDDATA;
 
     for (int i = 0; i < 16; i++)
         ubs(8, uuid[i], 1, i);

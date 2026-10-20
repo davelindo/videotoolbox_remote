@@ -65,6 +65,14 @@ tests/data/streamgroups/%: TAG = COPY
 tests/data/streamgroups/%: $(SRC_PATH)/tests/streamgroups/% | tests/data/streamgroups
 	$(M)cp $< $@
 
+tests/data/fate/%.amr: TAG = GEN
+tests/data/fate/%.amr: tests/amrgen$(HOSTEXESUF) | tests/data/fate
+	$(M)./$< $@
+
+tests/data/fate/apng-small-bpp-%.png: TAG = GEN
+tests/data/fate/apng-small-bpp-%.png: tests/apnggen$(HOSTEXESUF) | tests/data/fate
+	$(M)./$< $@
+
 RUNNING_FATE := $(filter check fate%,$(filter-out fate-rsync,$(MAKECMDGOALS)))
 
 # Check sanity of dependencies when running FATE tests.
@@ -244,6 +252,7 @@ include $(SRC_PATH)/tests/fate/qoa.mak
 include $(SRC_PATH)/tests/fate/qt.mak
 include $(SRC_PATH)/tests/fate/qtrle.mak
 include $(SRC_PATH)/tests/fate/real.mak
+include $(SRC_PATH)/tests/fate/rtsp.mak
 include $(SRC_PATH)/tests/fate/sbc.mak
 include $(SRC_PATH)/tests/fate/screen.mak
 include $(SRC_PATH)/tests/fate/segafilm.mak
