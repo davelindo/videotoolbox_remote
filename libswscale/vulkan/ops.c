@@ -27,9 +27,7 @@
 
 #include "ops.h"
 
-#if HAVE_SPIRV_HEADERS_SPIRV_H || HAVE_SPIRV_UNIFIED1_SPIRV_H
 #include "spvasm.h"
-#endif
 
 static void ff_sws_vk_uninit(AVRefStructOpaque opaque, void *obj)
 {
@@ -88,8 +86,8 @@ typedef struct VulkanPriv {
     FFVulkanShader shd;
     FFVkBuffer data_bufs[MAX_DATA_BUFS];
     int nb_data_bufs;
-    enum FFVkShaderRepFormat src_rep;
-    enum FFVkShaderRepFormat dst_rep;
+    VkFormat src_view_fmt[AV_NUM_DATA_POINTERS];
+    VkFormat dst_view_fmt[AV_NUM_DATA_POINTERS];
     int interlaced;
 } VulkanPriv;
 
@@ -112,8 +110,10 @@ static void process(const SwsFrame *dst, const SwsFrame *src, int y, int h,
 
     VkImageView src_views[AV_NUM_DATA_POINTERS];
     VkImageView dst_views[AV_NUM_DATA_POINTERS];
-    ff_vk_create_imageviews(&p->s->vkctx, ec, src_views, src_f, p->src_rep);
-    ff_vk_create_imageviews(&p->s->vkctx, ec, dst_views, dst_f, p->dst_rep);
+    ff_vk_create_imageviews_fmt(&p->s->vkctx, ec, src_views, src_f,
+                                p->src_view_fmt);
+    ff_vk_create_imageviews_fmt(&p->s->vkctx, ec, dst_views, dst_f,
+                                p->dst_view_fmt);
 
     ff_vk_shader_update_img_array(&p->s->vkctx, ec, &p->shd, src_f, src_views,
                                   0, 0, VK_IMAGE_LAYOUT_GENERAL, VK_NULL_HANDLE);
@@ -278,7 +278,6 @@ fail:
     return err;
 }
 
-#if HAVE_SPIRV_HEADERS_SPIRV_H || HAVE_SPIRV_UNIFIED1_SPIRV_H
 struct DitherData {
         int size;
         int arr_1d_id;
@@ -506,7 +505,7 @@ static void define_shader_consts(SwsContext *sws, const SwsOpList *ops,
 
     /* Constants */
     id->u32_p = spi_OpUndef(spi, u32_type);
-    id->f32_p = spi_OpUndef(spi, f32_type);
+    id->f32_p = spi_OpConstantFloat(spi, f32_type, 0);
     id->f32_0 = spi_OpConstantFloat(spi, f32_type, 0);
     for (int i = 0; i < 5; i++)
         id->u32_cid[i] = spi_OpConstantUInt(spi, u32_type, i);
@@ -535,6 +534,23 @@ static void define_shader_consts(SwsContext *sws, const SwsOpList *ops,
                 }
             }
             break;
+        case SWS_OP_PACK:
+        case SWS_OP_UNPACK: {
+            uint64_t mask[4];
+            int shift[4], tmp[4];
+            ff_sws_pack_op_decode(op, mask, shift);
+            for (int i = 0; i < 4; i++)
+                tmp[i] = spi_OpConstantUInt(spi, u32_type, shift[i]);
+            id->const_ids[id->nb_const_ids++] =
+                spi_OpConstantComposite(spi, id->u32vec4_type,
+                                        tmp[0], tmp[1], tmp[2], tmp[3]);
+            for (int i = 0; i < 4; i++)
+                tmp[i] = spi_OpConstantUInt(spi, u32_type, mask[i]);
+            id->const_ids[id->nb_const_ids++] =
+                spi_OpConstantComposite(spi, id->u32vec4_type,
+                                        tmp[0], tmp[1], tmp[2], tmp[3]);
+            break;
+        }
         case SWS_OP_LSHIFT:
         case SWS_OP_RSHIFT: {
             int tmp = spi_OpConstantUInt(spi, u32_type, op->shift.amount);
@@ -887,6 +903,41 @@ static int read_filtered(SPICtx *spi, SPIRVIDs *id, const SwsOpList *ops,
                                     acc_s[0], acc_s[1], acc_s[2], acc_s[3]);
 }
 
+/* Sub-packed formats are accessed as a single raw word per pixel, which is
+ * then (un)packed manually. */
+static VkFormat packed_word_fmt(const SwsOp *op)
+{
+    if (!op || op->rw.mode != SWS_RW_PACKED || op->rw.elems != 1)
+        return VK_FORMAT_UNDEFINED;
+
+    switch (op->type) {
+    case SWS_PIXEL_U8:  return VK_FORMAT_R8_UINT;
+    case SWS_PIXEL_U16: return VK_FORMAT_R16_UINT;
+    case SWS_PIXEL_U32: return VK_FORMAT_R32_UINT;
+    default:            return VK_FORMAT_UNDEFINED;
+    }
+}
+
+static int get_view_fmts(VkFormat view_fmts[AV_NUM_DATA_POINTERS],
+                         enum AVPixelFormat fmt, const SwsOp *op)
+{
+    const VkFormat *vk_fmts = av_vkfmt_from_pixfmt(fmt);
+    const VkFormat word_fmt = packed_word_fmt(op);
+    enum FFVkShaderRepFormat rep = FF_VK_REP_NATIVE;
+    if (op)
+        rep = op->type == SWS_PIXEL_F32 ? FF_VK_REP_FLOAT : FF_VK_REP_UINT;
+    if (!vk_fmts)
+        return AVERROR(ENOTSUP);
+
+    for (int i = 0; i < av_pix_fmt_count_planes(fmt); i++) {
+        view_fmts[i] = word_fmt ? word_fmt : ff_vk_map_fmt_to_rep(vk_fmts[i], rep);
+        if (view_fmts[i] == VK_FORMAT_UNDEFINED)
+            return AVERROR(ENOTSUP);
+    }
+
+    return 0;
+}
+
 /* Plane indices refer to actual frame planes, so the image handle arrays
  * have to cover the highest plane referenced, not just the plane count. */
 static int rw_op_img_count(const SwsOp *op, const uint8_t *planes)
@@ -919,12 +970,15 @@ static int add_ops_spirv(SwsContext *sws, VulkanPriv *p, FFVulkanOpsCtx *s,
     /* Image ops, to determine types */
     const SwsOp *op_w = ff_sws_op_list_output(ops);
     int out_img_count = rw_op_img_count(op_w, ops->plane_dst);
-    p->dst_rep = op_w->type == SWS_PIXEL_F32 ? FF_VK_REP_FLOAT : FF_VK_REP_UINT;
-
     const SwsOp *op_r = ff_sws_op_list_input(ops);
     int in_img_count = op_r ? rw_op_img_count(op_r, ops->plane_src) : 0;
-    if (op_r)
-        p->src_rep = op_r->type == SWS_PIXEL_F32 ? FF_VK_REP_FLOAT : FF_VK_REP_UINT;
+
+    int err = get_view_fmts(p->dst_view_fmt, ops->dst.format, op_w);
+    if (err < 0)
+        return err;
+    err = get_view_fmts(p->src_view_fmt, ops->src.format, op_r);
+    if (err < 0)
+        return err;
 
     FFVulkanDescriptorSetBinding desc_set[MAX_DATA_BUFS] = {
         {
@@ -941,7 +995,7 @@ static int add_ops_spirv(SwsContext *sws, VulkanPriv *p, FFVulkanOpsCtx *s,
     ff_vk_shader_add_descriptor_set(&s->vkctx, shd, desc_set, 2, 0);
 
     /* Create dither buffers */
-    int err = create_bufs(s, p, ops);
+    err = create_bufs(s, p, ops);
     if (err < 0)
         return err;
 
@@ -1249,18 +1303,27 @@ static int add_ops_spirv(SwsContext *sws, VulkanPriv *p, FFVulkanOpsCtx *s,
             nb_const_ids += 5*5 + 1;
             break;
         }
-        case SWS_OP_UNPACK:
-            if (ops->src.format == AV_PIX_FMT_X2BGR10)
-                data = spi_OpVectorShuffle(spi, type_v, data, data, 3, 2, 1, 0);
-            else
-                data = spi_OpVectorShuffle(spi, type_v, data, data, 3, 0, 1, 2);
+        case SWS_OP_UNPACK: {
+            int shift = id->const_ids[nb_const_ids++];
+            int mask  = id->const_ids[nb_const_ids++];
+            data = spi_OpVectorShuffle(spi, type_v, data, data, 0, 0, 0, 0);
+            data = spi_OpShiftRightLogical(spi, type_v, data, shift);
+            data = spi_OpBitwiseAnd(spi, type_v, data, mask);
             break;
-        case SWS_OP_PACK:
-            if (ops->dst.format == AV_PIX_FMT_X2BGR10)
-                data = spi_OpVectorShuffle(spi, type_v, data, data, 3, 2, 1, 0);
-            else
-                data = spi_OpVectorShuffle(spi, type_v, data, data, 1, 2, 3, 0);
+        }
+        case SWS_OP_PACK: {
+            int shift = id->const_ids[nb_const_ids++];
+            int mask  = id->const_ids[nb_const_ids++];
+            data = spi_OpBitwiseAnd(spi, type_v, data, mask);
+            data = spi_OpShiftLeftLogical(spi, type_v, data, shift);
+            int val = spi_OpCompositeExtract(spi, type_s, data, 0);
+            for (int i = 1; i < 4; i++) {
+                int tmp = spi_OpCompositeExtract(spi, type_s, data, i);
+                val = spi_OpBitwiseOr(spi, type_s, val, tmp);
+            }
+            data = spi_OpCompositeConstruct(spi, type_v, val, val, val, val);
             break;
+        }
         default:
             return AVERROR(ENOTSUP);
         }
@@ -1276,7 +1339,6 @@ static int add_ops_spirv(SwsContext *sws, VulkanPriv *p, FFVulkanOpsCtx *s,
 
     return ff_vk_shader_link(&s->vkctx, shd, spvbuf, len, "main");
 }
-#endif
 
 static int compile(SwsContext *sws, const SwsOpList *ops, SwsCompiledOp *out)
 {
@@ -1296,10 +1358,7 @@ static int compile(SwsContext *sws, const SwsOpList *ops, SwsCompiledOp *out)
     if (err < 0)
         goto fail;
 
-    err = AVERROR(ENOTSUP);
-#if HAVE_SPIRV_HEADERS_SPIRV_H || HAVE_SPIRV_UNIFIED1_SPIRV_H
     err = add_ops_spirv(sws, p, s, ops, &p->shd);
-#endif
     if (err < 0)
         goto fail;
 
@@ -1326,7 +1385,6 @@ fail:
     return err;
 }
 
-#if HAVE_SPIRV_HEADERS_SPIRV_H || HAVE_SPIRV_UNIFIED1_SPIRV_H
 static int compile_spirv(SwsContext *sws, const SwsOpList *ops,
                          SwsCompiledOp *out)
 {
@@ -1339,4 +1397,3 @@ const SwsOpBackend backend_spirv = {
     .compile   = compile_spirv,
     .hw_format = AV_PIX_FMT_VULKAN,
 };
-#endif

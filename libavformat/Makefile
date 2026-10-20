@@ -140,8 +140,6 @@ OBJS-$(CONFIG_ARGO_CVG_DEMUXER)          += argo_cvg.o
 OBJS-$(CONFIG_ARGO_CVG_MUXER)            += argo_cvg.o
 OBJS-$(CONFIG_ASF_DEMUXER)               += asfdec_f.o asf.o asfcrypt.o \
                                             asf_tags.o
-OBJS-$(CONFIG_ASF_O_DEMUXER)             += asfdec_o.o asf.o asfcrypt.o \
-                                            asf_tags.o
 OBJS-$(CONFIG_ASF_MUXER)                 += asfenc.o asf.o asf_tags.o
 OBJS-$(CONFIG_ASS_DEMUXER)               += assdec.o subtitles.o
 OBJS-$(CONFIG_ASS_MUXER)                 += assenc.o
@@ -597,7 +595,7 @@ OBJS-$(CONFIG_SRT_DEMUXER)               += srtdec.o subtitles.o
 OBJS-$(CONFIG_SRT_MUXER)                 += srtenc.o
 OBJS-$(CONFIG_STL_DEMUXER)               += stldec.o subtitles.o
 OBJS-$(CONFIG_STR_DEMUXER)               += psxstr.o
-OBJS-$(CONFIG_STREAMHASH_MUXER)          += hashenc.o
+OBJS-$(CONFIG_STREAMHASH_MUXER)          += hashenc.o framehash.o
 OBJS-$(CONFIG_STREAM_SEGMENT_MUXER)      += segment.o
 OBJS-$(CONFIG_SUBVIEWER1_DEMUXER)        += subviewer1dec.o subtitles.o
 OBJS-$(CONFIG_SUBVIEWER_DEMUXER)         += subviewerdec.o subtitles.o

@@ -2544,6 +2544,7 @@ SYSTEM_FUNCS="
     pthread_set_name_np
     pthread_setaffinity_np
     pthread_setname_np
+    realpath
     sched_getaffinity
     SecItemImport
     SetConsoleTextAttribute
@@ -2720,6 +2721,7 @@ CONFIG_EXTRA="
     deflate_wrapper
     dirac_parse
     dnn
+    dnn_onnx_d3d12
     dovi_rpudec
     dovi_rpuenc
     dvprofile
@@ -2793,6 +2795,7 @@ CONFIG_EXTRA="
     snappy
     srtp
     startcode
+    swscale_vulkan
     texturedsp
     texturedspenc
     tpeldsp
@@ -3184,6 +3187,7 @@ iac_decoder_select="imc_decoder"
 imc_decoder_select="bswapdsp sinewin"
 imm4_decoder_select="bswapdsp idctdsp"
 imm5_decoder_select="h264_decoder hevc_decoder"
+imm6_decoder_select="h264_decoder"
 indeo3_decoder_select="hpeldsp"
 indeo4_decoder_select="ividsp"
 indeo5_decoder_select="ividsp"
@@ -3361,6 +3365,8 @@ vulkan_deps="threads"
 vulkan_deps_any="libdl LoadLibrary"
 spirv_headers_spirv_h_deps="vulkan"
 spirv_unified1_spirv_h_deps="vulkan"
+swscale_vulkan_deps="vulkan"
+swscale_vulkan_if_any="spirv_headers_spirv_h spirv_unified1_spirv_h"
 
 apv_vulkan_hwaccel_deps="vulkan spirv_compiler"
 apv_vulkan_hwaccel_select="apv_decoder"
@@ -3571,6 +3577,7 @@ scale_d3d11_filter_deps="d3d11va"
 scale_d3d12_filter_deps="d3d12va ID3D12VideoProcessor"
 deinterlace_d3d12_filter_deps="d3d12va ID3D12VideoProcessor"
 mestimate_d3d12_filter_deps="d3d12va ID3D12VideoMotionEstimator d3d12_motion_estimator"
+dnn_onnx_d3d12_deps="libonnxruntime d3d12va"
 
 amf_deps_any="libdl LoadLibrary"
 nvenc_deps="ffnvcodec"
@@ -3894,7 +3901,6 @@ aiff_muxer_select="iso_media"
 amv_muxer_select="riffenc"
 apv_demuxer_select="apv_parser"
 asf_demuxer_select="riffdec"
-asf_o_demuxer_select="riffdec"
 asf_muxer_select="riffenc"
 asf_stream_muxer_select="asf_muxer"
 av1_demuxer_select="av1_frame_merge_bsf av1_parser"
@@ -4367,8 +4373,8 @@ ffmpeg_select="aformat_filter anull_filter atrim_filter crop_filter
                transpose_filter trim_filter vflip_filter"
 ffmpeg_suggest="ole32 psapi shell32"
 ffplay_deps="avcodec avformat avfilter swscale swresample sdl2"
-ffplay_select="crop_filter transpose_filter hflip_filter vflip_filter rotate_filter lcevc_merge_bsf color_filter"
-ffplay_suggest="shell32 libplacebo vulkan ass_filter"
+ffplay_select="crop_filter transpose_filter hflip_filter vflip_filter rotate_filter lcevc_merge_bsf"
+ffplay_suggest="shell32 libplacebo vulkan libass"
 ffprobe_deps="avcodec avformat"
 ffprobe_suggest="shell32"
 
@@ -6911,6 +6917,7 @@ check_func_headers mach/mach_time.h mach_absolute_time
 check_func_headers setjmp.h siglongjmp
 check_func_headers signal.h sigaction
 check_func_headers stdlib.h getenv
+check_func_headers stdlib.h realpath
 check_func_headers sys/ioctl.h ioctl
 check_func_headers sys/stat.h lstat
 check_func_headers sys/auxv.h getauxval
@@ -7305,6 +7312,11 @@ enabled libmpeghdec       && require_pkg_config libmpeghdec "mpeghdec >= 3.0.0" 
 enabled libmysofa         && { check_pkg_config libmysofa libmysofa mysofa.h mysofa_neighborhood_init_withstepdefine ||
                                require libmysofa mysofa.h mysofa_neighborhood_init_withstepdefine -lmysofa $zlib_extralibs; }
 enabled libonnxruntime    && require libonnxruntime onnxruntime_c_api.h OrtGetApiBase -lonnxruntime
+enabled libonnxruntime && enabled ID3D12Device &&
+    check_cc dnn_onnx_d3d12 "windows.h d3d12.h d3dcompiler.h dml_provider_factory.h" \
+        "(void)sizeof(((OrtDmlApi *)0)->SessionOptionsAppendExecutionProvider_DML1);
+         (void)sizeof(((OrtDmlApi *)0)->CreateGPUAllocationFromD3DResource);
+         (void)sizeof(((OrtDmlApi *)0)->FreeGPUAllocation);"
 enabled libopencore_amrnb && { check_pkg_config libopencore_amrnb opencore-amrnb opencore-amrnb/interf_dec.h Decoder_Interface_init ||
                                require libopencore_amrnb opencore-amrnb/interf_dec.h Decoder_Interface_init -lopencore-amrnb; }
 enabled libopencore_amrwb && { check_pkg_config libopencore_amrwb opencore-amrwb opencore-amrwb/dec_if.h D_IF_init ||

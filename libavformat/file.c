@@ -416,7 +416,7 @@ static int file_read_dir(URLContext *h, AVIODirEntry **next)
     }
 
     (*next)->name = av_strdup(dir->d_name);
-    return 0;
+    return (*next)->name ? 0 : AVERROR(ENOMEM);
 #else
     return AVERROR(ENOSYS);
 #endif /* HAVE_LSTAT */
@@ -740,8 +740,9 @@ static int android_content_open(URLContext *h, const char *filename, int flags)
         goto done;
 
     if (fstat(fd, &st) < 0) {
+        ret = AVERROR(errno);
         close(fd);
-        return AVERROR(errno);
+        goto done;
     }
 
     c->fd = fd;
