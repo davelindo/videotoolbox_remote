@@ -896,8 +896,8 @@ static int recode_subtitle(AVCodecContext *avctx, const AVPacket **outpkt,
         iconv(cd, NULL, NULL, &outb, &outl) == (size_t)-1 ||
         outl >= buf_pkt->size || inl != 0) {
         ret = FFMIN(AVERROR(errno), -1);
-        av_log(avctx, AV_LOG_ERROR, "Unable to recode subtitle event \"%s\" "
-               "from %s to UTF-8\n", inpkt->data, avctx->sub_charenc);
+        av_log(avctx, AV_LOG_ERROR, "Unable to recode subtitle event \"%.*s\" "
+               "from %s to UTF-8\n", inpkt->size, inpkt->data, avctx->sub_charenc);
         goto end;
     }
     buf_pkt->size -= outl;
@@ -936,6 +936,18 @@ static int utf8_check(const uint8_t *str)
     return 1;
 }
 
+const char *ff_decode_subtitle_text(AVCodecContext *avctx, const AVPacket *avpkt)
+{
+    AVPacket *copy = avctx->internal->buffer_pkt;
+
+    if (avpkt->size <= 0 || !avpkt->data[avpkt->size])
+        return avpkt->data;
+    if (av_new_packet(copy, avpkt->size) < 0)
+        return NULL;
+    memcpy(copy->data, avpkt->data, avpkt->size);
+    return copy->data;
+}
+
 int avcodec_decode_subtitle2(AVCodecContext *avctx, AVSubtitle *sub,
                              int *got_sub_ptr, const AVPacket *avpkt)
 {
@@ -967,8 +979,7 @@ int avcodec_decode_subtitle2(AVCodecContext *avctx, AVSubtitle *sub,
             sub->pts = av_rescale_q(avpkt->pts,
                                     avctx->pkt_timebase, AV_TIME_BASE_Q);
         ret = ffcodec(avctx->codec)->cb.decode_sub(avctx, sub, got_sub_ptr, pkt);
-        if (pkt == avci->buffer_pkt) // did we recode?
-            av_packet_unref(avci->buffer_pkt);
+        av_packet_unref(avci->buffer_pkt);
         if (ret < 0) {
             *got_sub_ptr = 0;
             avsubtitle_free(sub);

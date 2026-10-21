@@ -11669,8 +11669,8 @@ static int mov_parse_heif_layered_video_tmap(AVFormatContext *s, const HEIFGroup
     }
     avio_r8(s->pb); /* version */
 
-    err = avio_read(s->pb, payload, tmap->item->extent_length);
-    if (err == tmap->item->extent_length)
+    err = avio_read(s->pb, payload, tmap->item->extent_length - 1);
+    if (err == (tmap->item->extent_length - 1))
         err64 = avio_seek(s->pb, pos, SEEK_SET);
     else {
         err = err < 0 ? err : AVERROR_INVALIDDATA;
@@ -11681,11 +11681,14 @@ static int mov_parse_heif_layered_video_tmap(AVFormatContext *s, const HEIFGroup
         goto fail;
     }
 
-    err = av_gain_map_params_from_iso21496(gain, payload, tmap->item->extent_length);
+    err = av_gain_map_params_from_iso21496(gain, payload, tmap->item->extent_length - 1);
     av_freep(&payload);
-    if (err < 0)
+    if (err < 0) {
+        av_log(s, AV_LOG_ERROR, "Invalid ISO 21496-1 gain map payload\n");
+        ff_remove_stream_group(s, stg);
+        err = (s->error_recognition & (AV_EF_COMPLIANT|AV_EF_EXPLODE)) ? AVERROR_INVALIDDATA : 0;
         goto fail;
-
+    }
     for (int j = 0; j < tmap->nb_items; j++) {
         HEIFItem *item = tmap->item_list[j];
         AVPacketSideData *sd;

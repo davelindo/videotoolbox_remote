@@ -21,6 +21,7 @@
 #include "avcodec.h"
 #include "bytestream.h"
 #include "codec_internal.h"
+#include "libavutil/avassert.h"
 #include "libavutil/colorspace.h"
 #include "libavutil/opt.h"
 
@@ -54,7 +55,7 @@ static int dvb_encode_rle2(uint8_t **pq, int buf_size,
 
     for(y = 0; y < h; y++) {
         // Worst case line is 3 bits per value + 4 bytes overhead
-        if (buf_size * 8 < w * 3 + 32)
+        if (buf_size * 8LL < w * 3 + 32)
             return AVERROR_BUFFER_TOO_SMALL;
         line_begin = q;
         *q++ = 0x10;
@@ -149,7 +150,7 @@ static int dvb_encode_rle4(uint8_t **pq, int buf_size,
 
     for(y = 0; y < h; y++) {
         // Worst case line is 6 bits per value, + 4 bytes overhead
-        if (buf_size * 8 < w * 6 + 32)
+        if (buf_size * 8LL < w * 6 + 32)
             return AVERROR_BUFFER_TOO_SMALL;
         line_begin = q;
         *q++ = 0x11;
@@ -222,7 +223,7 @@ static int dvb_encode_rle8(uint8_t **pq, int buf_size,
 
     for (y = 0; y < h; y++) {
         // Worst case line is 12 bits per value, + 4 bytes overhead
-        if (buf_size * 8 < w * 12 + 32)
+        if (buf_size * 8LL < w * 12 + 32)
             return AVERROR_BUFFER_TOO_SMALL;
         line_begin = q;
         *q++ = 0x12;
@@ -301,6 +302,13 @@ static int dvbsub_encode(AVCodecContext *avctx, uint8_t *outbuf, int buf_size,
 
     if (h->num_rects >= 256)
         return AVERROR(EINVAL);
+
+    for (i = 0; i < h->num_rects; i++) {
+        av_assert0(h->rects[i]->w >= 0 && h->rects[i]->h >= 0 &&
+                   h->rects[i]->nb_colors >= 0 && h->rects[i]->nb_colors <= 256);
+        if (h->rects[i]->w > 0xFFFF || h->rects[i]->h > 0xFFFF)
+            return AVERROR(EINVAL);
+    }
 
     if (avctx->width > 0 && avctx->height > 0) {
         if (buf_size < 11)
