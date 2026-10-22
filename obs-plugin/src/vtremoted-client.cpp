@@ -15,6 +15,7 @@
 #include <array>
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -34,6 +35,7 @@ typedef SOCKET socket_t;
 #define close_socket closesocket
 #else
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
@@ -46,8 +48,11 @@ typedef int socket_t;
 #define close_socket close
 #endif
 
-enum { READ_OK = 0, READ_ERROR = -1, READ_DISCONNECTED = -2 };
-static int read_exact(socket_t sock, void *buf, size_t len);
+using SocketClock = std::chrono::steady_clock;
+using SocketDeadline = SocketClock::time_point;
+
+enum { READ_OK = 0, READ_PENDING = 1, READ_ERROR = -1, READ_DISCONNECTED = -2 };
+static int read_exact(socket_t sock, void *buf, size_t len, SocketDeadline deadline);
 static void vtr_log(const char *fmt, ...);
 static void vtr_log_debug(const char *fmt, ...);
 
@@ -57,6 +62,30 @@ constexpr uint32_t HELLO_ACK_MAX_BYTES = 64 * 1024;
 constexpr uint32_t CONFIGURE_ACK_MAX_BYTES = 4 * 1024 * 1024;
 constexpr uint32_t INBOUND_MESSAGE_MAX_BYTES = 8 * 1024 * 1024;
 constexpr int SOCKET_TIMEOUT_MS = 5000;
+
+int wait_socket(socket_t sock, bool writing, SocketDeadline deadline) {
+  for (;;) {
+    auto remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - SocketClock::now());
+    int timeout_ms = static_cast<int>(std::clamp<int64_t>(
+        remaining.count(), 0, std::numeric_limits<int>::max()));
+#ifdef _WIN32
+    fd_set descriptors;
+    FD_ZERO(&descriptors);
+    FD_SET(sock, &descriptors);
+    timeval timeout = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
+    int ready = select(0, writing ? nullptr : &descriptors,
+                       writing ? &descriptors : nullptr, nullptr, &timeout);
+    if (ready < 0 && WSAGetLastError() == WSAEINTR)
+      continue;
+#else
+    pollfd descriptor = {sock, static_cast<short>(writing ? POLLOUT : POLLIN), 0};
+    int ready = poll(&descriptor, 1, timeout_ms);
+    if (ready < 0 && errno == EINTR)
+      continue;
+#endif
+    return ready;
+  }
+}
 
 bool append_string(std::vector<uint8_t> &buf, const char *value, size_t len) {
   if (len > std::numeric_limits<uint16_t>::max()) {
@@ -102,6 +131,16 @@ bool configure_socket_io(socket_t sock) {
 #endif
 #endif
   return true;
+}
+
+bool make_socket_nonblocking(socket_t sock) {
+#ifdef _WIN32
+  u_long nonblocking = 1;
+  return ioctlsocket(sock, FIONBIO, &nonblocking) == 0;
+#else
+  int flags = fcntl(sock, F_GETFL, 0);
+  return flags >= 0 && fcntl(sock, F_SETFL, flags | O_NONBLOCK) == 0;
+#endif
 }
 
 const char *wire_compression_name(int mode) {
@@ -214,7 +253,7 @@ struct VTRemotedClient {
 
   std::atomic<bool> connected;
   std::atomic<bool> configured;
-  std::mutex send_mutex;
+  std::timed_mutex send_mutex;
   std::mutex error_mutex;
   std::string error;
 
@@ -226,6 +265,13 @@ struct VTRemotedClient {
   std::vector<uint8_t> send_buf;
   std::vector<uint8_t> recv_buf;
   std::vector<uint8_t> compress_buf;
+  std::array<uint8_t, 12> recv_header{};
+  size_t recv_header_read = 0;
+  size_t recv_body_read = 0;
+  SocketDeadline recv_deadline = SocketDeadline::max();
+  /* Protected by send_mutex; retain completed output until its PING is consumed. */
+  std::vector<uint8_t> pong_buf;
+  size_t pong_sent = 0;
 
   int wire_compression;
 
@@ -244,11 +290,16 @@ void vtremoted_client_destroy(VTRemotedClient *client) {
   delete client;
 }
 
-static int read_exact(socket_t sock, void *buf, size_t len) {
+static int read_progress(socket_t sock, void *buf, size_t len, size_t &got,
+                         SocketDeadline deadline) {
   uint8_t *p = (uint8_t *)buf;
-  size_t got = 0;
   while (got < len) {
-    ssize_t r = recv(sock, (char *)(p + got), (int)(len - got), 0);
+    int flags = 0;
+#ifndef _WIN32
+    flags = MSG_DONTWAIT;
+#endif
+    int chunk = static_cast<int>(std::min<size_t>(len - got, std::numeric_limits<int>::max()));
+    auto r = recv(sock, (char *)(p + got), chunk, flags);
     if (r == 0)
       return READ_DISCONNECTED;
     if (r < 0) {
@@ -256,15 +307,30 @@ static int read_exact(socket_t sock, void *buf, size_t len) {
       int err = WSAGetLastError();
       if (err == WSAEINTR)
         continue;
+      bool pending = err == WSAEWOULDBLOCK;
 #else
       if (errno == EINTR)
         continue;
+      bool pending = errno == EAGAIN || errno == EWOULDBLOCK;
 #endif
+      if (pending) {
+        int ready = wait_socket(sock, false, deadline);
+        if (ready > 0)
+          continue;
+        return ready == 0 ? READ_PENDING : READ_ERROR;
+      }
       return READ_ERROR;
     }
     got += r;
+    if (got < len && SocketClock::now() >= deadline)
+      return READ_PENDING;
   }
   return READ_OK;
+}
+
+static int read_exact(socket_t sock, void *buf, size_t len, SocketDeadline deadline) {
+  size_t got = 0;
+  return read_progress(sock, buf, len, got, deadline);
 }
 
 static void vtr_vlog(char *buffer, size_t buffer_size, const char *fmt,
@@ -292,58 +358,87 @@ static void vtr_log_debug(const char *fmt, ...) {
   blog(LOG_INFO, "[vtremoted-client] %s", buffer);
 }
 
-static bool write_all(socket_t sock, const void *buf, size_t len) {
+enum { WRITE_OK = 0, WRITE_PENDING = 1, WRITE_ERROR = -1 };
+
+static int write_progress(socket_t sock, const void *buf, size_t len, size_t &sent,
+                          SocketDeadline deadline) {
   const uint8_t *p = (const uint8_t *)buf;
-  size_t sent = 0;
+  bool attempted = false;
   int flags = 0;
 #if !defined(_WIN32) && defined(MSG_NOSIGNAL)
   flags |= MSG_NOSIGNAL;
 #endif
+#ifndef _WIN32
+  flags |= MSG_DONTWAIT;
+#endif
   while (sent < len) {
+    if (attempted && SocketClock::now() >= deadline)
+      return WRITE_PENDING;
+    attempted = true;
     const size_t remaining = len - sent;
     const int chunk = static_cast<int>(std::min<size_t>(
         remaining, static_cast<size_t>(std::numeric_limits<int>::max())));
-    ssize_t w = send(sock, (const char *)(p + sent), chunk, flags);
+    auto w = send(sock, (const char *)(p + sent), chunk, flags);
     if (w <= 0) {
 #ifdef _WIN32
       const int err = WSAGetLastError();
       if (w < 0 && err == WSAEINTR)
         continue;
-      vtr_log("write_all failed: w=%zd error=%d", w, err);
+      bool pending = w < 0 && err == WSAEWOULDBLOCK;
 #else
       const int err = errno;
       if (w < 0 && err == EINTR)
         continue;
-      vtr_log("write_all failed: w=%zd errno=%d", w, err);
+      bool pending = w < 0 && (err == EAGAIN || err == EWOULDBLOCK);
 #endif
-      return false;
+      if (pending) {
+        int ready = wait_socket(sock, true, deadline);
+        if (ready > 0)
+          continue;
+        return ready == 0 ? WRITE_PENDING : WRITE_ERROR;
+      }
+      vtr_log("write_all failed: error=%d", err);
+      return WRITE_ERROR;
     }
     sent += w;
   }
-  return true;
+  return WRITE_OK;
+}
+
+static bool write_all(socket_t sock, const void *buf, size_t len, SocketDeadline deadline) {
+  size_t sent = 0;
+  return write_progress(sock, buf, len, sent, deadline) == WRITE_OK;
+}
+
+/* Caller holds send_mutex. Do not clear the completion marker here: a sender
+ * can finish this reply before the receiver revisits the retained PING. */
+static int finish_pong(VTRemotedClient *client, SocketDeadline deadline) {
+  return write_progress(client->sock, client->pong_buf.data(), client->pong_buf.size(),
+                         client->pong_sent, deadline);
 }
 
 static bool send_msg(socket_t sock, uint16_t type, const uint8_t *body,
-                     uint32_t len) {
+                     uint32_t len, SocketDeadline deadline =
+                         SocketClock::now() + std::chrono::milliseconds(SOCKET_TIMEOUT_MS)) {
   uint8_t hdr[12];
   write_be32(hdr, VTR_MAGIC);
   write_be16(hdr + 4, VTR_VERSION);
   write_be16(hdr + 6, type);
   write_be32(hdr + 8, len);
-  if (!write_all(sock, hdr, 12)) {
+  if (!write_all(sock, hdr, 12, deadline)) {
     vtr_log("send_msg header failed type=%d", type);
     return false;
   }
-  if (len > 0 && !write_all(sock, body, len)) {
+  if (len > 0 && !write_all(sock, body, len, deadline)) {
     vtr_log("send_msg body failed type=%d len=%d", type, len);
     return false;
   }
   return true;
 }
 
-static bool recv_header(socket_t sock, struct vtr_header *hdr) {
+static bool recv_header(socket_t sock, struct vtr_header *hdr, SocketDeadline deadline) {
   uint8_t buf[12];
-  if (read_exact(sock, buf, 12))
+  if (read_exact(sock, buf, 12, deadline))
     return false;
   hdr->magic = vtr_read_be32(buf);
   hdr->version = vtr_read_be16(buf + 4);
@@ -406,6 +501,10 @@ bool vtremoted_client_connect(VTRemotedClient *client, const char *host,
     client->sock = SOCKET_INVALID;
     return false;
   }
+  if (!make_socket_nonblocking(client->sock)) {
+    vtremoted_client_disconnect(client);
+    return false;
+  }
 
   client->connected = true;
 
@@ -431,7 +530,8 @@ bool vtremoted_client_connect(VTRemotedClient *client, const char *host,
 
   /* Receive HELLO_ACK */
   struct vtr_header hdr;
-  if (!recv_header(client->sock, &hdr)) {
+  auto deadline = SocketClock::now() + std::chrono::milliseconds(SOCKET_TIMEOUT_MS);
+  if (!recv_header(client->sock, &hdr, deadline)) {
     vtr_log("Recv HELLO_ACK header failed");
     vtremoted_client_disconnect(client);
     return false;
@@ -448,7 +548,7 @@ bool vtremoted_client_connect(VTRemotedClient *client, const char *host,
   vtr_log_debug("Received HELLO_ACK header, len=%d", hdr.length);
 
   std::vector<uint8_t> ack_body(hdr.length);
-  if (hdr.length > 0 && read_exact(client->sock, ack_body.data(), hdr.length)) {
+  if (hdr.length > 0 && read_exact(client->sock, ack_body.data(), hdr.length, deadline)) {
     vtr_log("Recv HELLO_ACK body failed");
     vtremoted_client_disconnect(client);
     return false;
@@ -475,6 +575,10 @@ void vtremoted_client_disconnect(VTRemotedClient *client) {
   }
   client->connected = false;
   client->configured = false;
+  client->recv_header_read = client->recv_body_read = 0;
+  client->recv_deadline = SocketDeadline::max();
+  client->pong_buf.clear();
+  client->pong_sent = 0;
 }
 
 bool vtremoted_client_is_connected(VTRemotedClient *client) {
@@ -512,8 +616,10 @@ static VTRReceiveResult fail_client(VTRemotedClient *client, const std::string &
 
 bool vtremoted_client_flush(VTRemotedClient *client) {
   if (!client || !client->connected) return false;
-  std::lock_guard<std::mutex> lock(client->send_mutex);
-  if (send_msg(client->sock, VTR_MSG_FLUSH, nullptr, 0)) return true;
+  std::lock_guard<std::timed_mutex> lock(client->send_mutex);
+  auto deadline = SocketClock::now() + std::chrono::milliseconds(SOCKET_TIMEOUT_MS);
+  if (finish_pong(client, deadline) == WRITE_OK &&
+      send_msg(client->sock, VTR_MSG_FLUSH, nullptr, 0, deadline)) return true;
   fail_client(client, "FLUSH send failed");
   return false;
 }
@@ -597,7 +703,8 @@ bool vtremoted_client_configure(VTRemotedClient *client, uint32_t width,
   /* Receive CONFIGURE_ACK */
   struct vtr_header hdr;
   vtr_log("Waiting for CONFIGURE_ACK");
-  if (!recv_header(client->sock, &hdr)) {
+  auto deadline = SocketClock::now() + std::chrono::milliseconds(SOCKET_TIMEOUT_MS);
+  if (!recv_header(client->sock, &hdr, deadline)) {
     vtr_log("Recv CONFIGURE_ACK header failed");
     return false;
   }
@@ -612,7 +719,7 @@ bool vtremoted_client_configure(VTRemotedClient *client, uint32_t width,
   vtr_log("Received CONFIGURE_ACK, len=%d", hdr.length);
 
   std::vector<uint8_t> ack_body(hdr.length);
-  if (hdr.length > 0 && read_exact(client->sock, ack_body.data(), hdr.length)) {
+  if (hdr.length > 0 && read_exact(client->sock, ack_body.data(), hdr.length, deadline)) {
     vtr_log("Recv CONFIGURE_ACK body failed");
     return false;
   }
@@ -694,8 +801,10 @@ bool vtremoted_client_send_frame(VTRemotedClient *client, int64_t pts,
   // Side data count (0)
   buf.push_back(0);
 
-  std::lock_guard<std::mutex> lock(client->send_mutex);
-  if (send_msg(client->sock, VTR_MSG_FRAME, buf.data(), (uint32_t)buf.size()))
+  std::lock_guard<std::timed_mutex> lock(client->send_mutex);
+  auto deadline = SocketClock::now() + std::chrono::milliseconds(SOCKET_TIMEOUT_MS);
+  if (finish_pong(client, deadline) == WRITE_OK &&
+      send_msg(client->sock, VTR_MSG_FRAME, buf.data(), (uint32_t)buf.size(), deadline))
     return true;
   fail_client(client, "FRAME send failed");
   return false;
@@ -707,20 +816,34 @@ VTRReceiveResult vtremoted_client_receive_packet(VTRemotedClient *client,
                                      bool *out_keyframe, int wait_ms) {
   if (!client || !client->connected)
     return VTR_RECEIVE_ERROR;
+  if (wait_ms < 0)
+    return fail_client(client, "Invalid PACKET receive timeout");
 
-  fd_set readers;
-  FD_ZERO(&readers);
-  FD_SET(client->sock, &readers);
-  timeval timeout = {wait_ms / 1000, (wait_ms % 1000) * 1000};
-  int ready = select((int)client->sock + 1, &readers, nullptr, nullptr, &timeout);
-  if (ready == 0)
-    return wait_ms == 0 ? VTR_RECEIVE_PENDING : fail_client(client, "PACKET receive timed out");
-  if (ready < 0)
-    return fail_client(client, "PACKET receive poll failed");
-
-  struct vtr_header hdr;
-  if (!recv_header(client->sock, &hdr))
+  auto now = SocketClock::now();
+  bool partial = client->recv_header_read != 0;
+  auto message_deadline = partial ? client->recv_deadline
+      : now + std::chrono::milliseconds(SOCKET_TIMEOUT_MS);
+  if (now >= message_deadline)
+    return fail_client(client, "PACKET receive timed out");
+  auto deadline = std::min(now + std::chrono::milliseconds(wait_ms), message_deadline);
+  auto pending = [&] {
+    return wait_ms == 0 && SocketClock::now() < message_deadline
+        ? VTR_RECEIVE_PENDING : fail_client(client, "PACKET receive timed out");
+  };
+  int result = read_progress(client->sock, client->recv_header.data(),
+                            client->recv_header.size(), client->recv_header_read, deadline);
+  if (!partial && client->recv_header_read)
+    client->recv_deadline = message_deadline;
+  if (result == READ_PENDING)
+    return pending();
+  if (result != READ_OK)
     return fail_client(client, "Invalid, truncated, or disconnected PACKET header");
+
+  const uint8_t *header = client->recv_header.data();
+  struct vtr_header hdr = {vtr_read_be32(header), vtr_read_be16(header + 4),
+                           vtr_read_be16(header + 6), vtr_read_be32(header + 8)};
+  if (hdr.magic != VTR_MAGIC || hdr.version != VTR_VERSION)
+    return fail_client(client, "Invalid PACKET header");
   if (!validate_inbound_length(hdr.type, hdr.length,
                                INBOUND_MESSAGE_MAX_BYTES)) {
     return fail_client(client, "Oversized PACKET message");
@@ -729,8 +852,15 @@ VTRReceiveResult vtremoted_client_receive_packet(VTRemotedClient *client,
   /* Packet: pts(8) + dts(8) + duration(8) + flags(4) + data */
   std::vector<uint8_t> &buf = client->recv_buf;
   buf.resize(hdr.length);
-  if (read_exact(client->sock, buf.data(), hdr.length))
+  result = read_progress(client->sock, buf.data(), hdr.length, client->recv_body_read, deadline);
+  if (result == READ_PENDING)
+    return pending();
+  if (result != READ_OK)
     return fail_client(client, "Truncated or timed out PACKET body");
+  auto consumed = [&] {
+    client->recv_header_read = client->recv_body_read = 0;
+    client->recv_deadline = SocketDeadline::max();
+  };
 
   if (hdr.type == VTR_MSG_ERROR) {
     if (buf.size() < 6 || vtr_read_be16(buf.data() + 4) > buf.size() - 6)
@@ -744,13 +874,35 @@ VTRReceiveResult vtremoted_client_receive_packet(VTRemotedClient *client,
     return VTR_RECEIVE_DONE;
   }
   if (hdr.type == VTR_MSG_PING) {
-    std::lock_guard<std::mutex> lock(client->send_mutex);
-    if (!send_msg(client->sock, VTR_MSG_PONG, buf.data(), (uint32_t)buf.size()))
+    std::unique_lock<std::timed_mutex> lock(client->send_mutex, std::defer_lock);
+    if (wait_ms == 0) {
+      if (!lock.try_lock())
+        return pending();
+    } else if (!lock.try_lock_until(deadline)) {
+      return fail_client(client, "PONG send timed out");
+    }
+    if (client->pong_buf.empty()) {
+      client->pong_buf.resize(12 + buf.size());
+      write_be32(client->pong_buf.data(), VTR_MAGIC);
+      write_be16(client->pong_buf.data() + 4, VTR_VERSION);
+      write_be16(client->pong_buf.data() + 6, VTR_MSG_PONG);
+      write_be32(client->pong_buf.data() + 8, static_cast<uint32_t>(buf.size()));
+      std::copy(buf.begin(), buf.end(), client->pong_buf.begin() + 12);
+      client->pong_sent = 0;
+    }
+    int sent = finish_pong(client, deadline);
+    if (sent == WRITE_PENDING)
+      return pending();
+    if (sent != WRITE_OK)
       return fail_client(client, "PONG send failed");
+    client->pong_buf.clear();
+    client->pong_sent = 0;
+    consumed();
     return VTR_RECEIVE_PENDING;
   }
   if (hdr.type != VTR_MSG_PACKET)
     return fail_client(client, "Unexpected message while awaiting PACKET");
+  consumed();
 
   if (buf.size() < 32) {
     vtr_log("Packet message too short: len=%zu min=32", buf.size());

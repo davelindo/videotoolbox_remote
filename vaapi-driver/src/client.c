@@ -279,7 +279,6 @@ static int socket_connect_timeout(const char *endpoint, int timeout_ms,
         struct pollfd pfd;
         socklen_t optlen;
         int so_error = 0;
-        struct timeval tv;
 
         fd = socket(it->ai_family, it->ai_socktype, it->ai_protocol);
         if (fd < 0) {
@@ -325,16 +324,8 @@ static int socket_connect_timeout(const char *endpoint, int timeout_ms,
                 continue;
             }
         }
-        if (fcntl(fd, F_SETFL, flags) < 0) {
-            last_error = errno;
-            close(fd);
-            fd = -1;
-            continue;
-        }
-        tv.tv_sec = timeout_ms / 1000;
-        tv.tv_usec = (timeout_ms % 1000) * 1000;
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+        /* Keep nonblocking mode: complete-message deadlines are enforced by
+         * poll, including platforms where MSG_DONTWAIT is insufficient. */
         break;
     }
     freeaddrinfo(addresses);
@@ -345,24 +336,43 @@ static int socket_connect_timeout(const char *endpoint, int timeout_ms,
     return fd;
 }
 
-static int write_all(int fd, const uint8_t *data, size_t size) {
-    size_t offset = 0;
-    while (offset < size) {
-        ssize_t written = send(fd, data + offset, size - offset, MSG_NOSIGNAL);
-        if (written < 0) {
-            if (errno == EINTR) continue;
-            return -errno;
-        }
-        if (written == 0) return -EPIPE;
-        offset += (size_t)written;
-    }
-    return 0;
-}
-
 static int64_t now_ms(void) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     return (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+
+static int write_progress(int fd, const uint8_t *data, size_t size, size_t *offset,
+                           int64_t deadline) {
+    int attempted = 0;
+    while (*offset < size) {
+        if (attempted && now_ms() >= deadline) return -EAGAIN;
+        attempted = 1;
+        ssize_t written = send(fd, data + *offset, size - *offset, MSG_NOSIGNAL | MSG_DONTWAIT);
+        if (written < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                struct pollfd pfd = {fd, POLLOUT, 0};
+                int64_t remaining = deadline - now_ms();
+                int ready;
+                if (remaining <= 0) return -EAGAIN;
+                ready = poll(&pfd, 1, (int)remaining);
+                if (!ready) return -EAGAIN;
+                if (ready < 0 && errno != EINTR) return -errno;
+                continue;
+            }
+            return -errno;
+        }
+        if (written == 0) return -EPIPE;
+        *offset += (size_t)written;
+    }
+    return 0;
+}
+
+static int write_all(int fd, const uint8_t *data, size_t size, int64_t deadline) {
+    size_t offset = 0;
+    int rc = write_progress(fd, data, size, &offset, deadline);
+    return rc == -EAGAIN ? -ETIMEDOUT : rc;
 }
 
 static int read_progress(int fd, uint8_t *data, size_t size, size_t *offset, int64_t deadline) {
@@ -389,8 +399,8 @@ static int read_progress(int fd, uint8_t *data, size_t size, size_t *offset, int
     return 0;
 }
 
-static int send_message(VTRClient *client, uint16_t type,
-                        const uint8_t *payload, size_t payload_size) {
+static int send_message_until(VTRClient *client, uint16_t type,
+                              const uint8_t *payload, size_t payload_size, int64_t deadline) {
     uint8_t header[VTR_HEADER_SIZE];
     uint32_t wire_size;
     int rc;
@@ -402,9 +412,32 @@ static int send_message(VTRClient *client, uint16_t type,
     write_be16(header + 4, VTR_PROTO_VERSION);
     write_be16(header + 6, type);
     write_be32(header + 8, wire_size);
-    if ((rc = write_all(client->fd, header, sizeof(header))) < 0) return rc;
-    if (payload_size) return write_all(client->fd, payload, payload_size);
+    if ((rc = write_all(client->fd, header, sizeof(header), deadline)) < 0) return rc;
+    if (payload_size) return write_all(client->fd, payload, payload_size, deadline);
     return 0;
+}
+
+static int send_message(VTRClient *client, uint16_t type,
+                        const uint8_t *payload, size_t payload_size) {
+    int64_t deadline = now_ms() + (client ? client->timeout_ms : 0);
+    int rc;
+    if (!client || client->fd < 0) return -ENOTCONN;
+    rc = write_progress(client->fd, client->pong_tx.data, client->pong_tx.size,
+                         &client->pong_tx_sent, deadline);
+    if (rc < 0) return rc == -EAGAIN ? -ETIMEDOUT : rc;
+    /* The receiver clears completed PONG state, preventing duplicate replies. */
+    return send_message_until(client, type, payload, payload_size, deadline);
+}
+
+static int queue_pong(VTRClient *client, const VTRMessage *message) {
+    int rc;
+    vtr_buffer_reset(&client->pong_tx);
+    client->pong_tx_sent = 0;
+    if ((rc = vtr_put_u32(&client->pong_tx, VTR_PROTO_MAGIC)) < 0 ||
+        (rc = vtr_put_u16(&client->pong_tx, VTR_PROTO_VERSION)) < 0 ||
+        (rc = vtr_put_u16(&client->pong_tx, VTR_MSG_PONG)) < 0 ||
+        (rc = vtr_put_u32(&client->pong_tx, message->payload_size)) < 0) return rc;
+    return vtr_put_bytes(&client->pong_tx, message->payload, message->payload_size);
 }
 
 static int receive_message_until(VTRClient *client, VTRMessage *message, int64_t deadline) {
@@ -423,7 +456,9 @@ static int receive_message_until(VTRClient *client, VTRMessage *message, int64_t
     size = read_be32(header + 8);
     if (magic != VTR_PROTO_MAGIC || version != VTR_PROTO_VERSION) return -EPROTO;
     if (vtr_validate_message_size(message->type, size) < 0) return -EOVERFLOW;
-    if (vtr_buffer_reserve(&client->rx, size) < 0) return -ENOMEM;
+    /* Reserve takes an additional count; body storage starts at offset zero. */
+    size_t additional = size > client->rx.size ? size - client->rx.size : 0;
+    if (vtr_buffer_reserve(&client->rx, additional) < 0) return -ENOMEM;
     client->rx.size = size;
     if (size && (rc = read_progress(client->fd, client->rx.data, size, &client->rx_body_read, deadline)) < 0) return rc;
     client->rx_header_read = client->rx_body_read = 0;
@@ -634,6 +669,7 @@ void vtr_client_init(VTRClient *client) {
     client->fd = -1;
     vtr_buffer_init(&client->tx);
     vtr_buffer_init(&client->rx);
+    vtr_buffer_init(&client->pong_tx);
     vtr_buffer_init(&client->parameter_sets);
 }
 
@@ -644,6 +680,7 @@ void vtr_client_destroy(VTRClient *client) {
     client->connected = 0;
     vtr_buffer_free(&client->tx);
     vtr_buffer_free(&client->rx);
+    vtr_buffer_free(&client->pong_tx);
     vtr_buffer_free(&client->parameter_sets);
 }
 
@@ -774,13 +811,21 @@ int vtr_client_receive_packet_timeout(VTRClient *client, VTRBuffer *packet,
     int64_t deadline = now_ms() + timeout_ms;
     if (!client || !client->connected || !packet || timeout_ms < 0) return -EINVAL;
     for (;;) {
+        if (client->pong_tx.size) {
+            rc = write_progress(client->fd, client->pong_tx.data, client->pong_tx.size,
+                                 &client->pong_tx_sent, deadline);
+            if (rc < 0) return rc == -EAGAIN ? rc : terminal_error(client, rc);
+            vtr_buffer_reset(&client->pong_tx);
+            client->pong_tx_sent = 0;
+            if (now_ms() >= deadline) return -EAGAIN;
+        }
         if ((rc = receive_message_until(client, &message, deadline)) < 0) {
             set_error(error, error_size, "PACKET receive failed: %s", strerror(-rc));
             return rc == -EAGAIN ? rc : terminal_error(client, rc);
         }
         if (message.type == VTR_MSG_PING) {
-            rc = send_message(client, VTR_MSG_PONG, message.payload, message.payload_size);
-            if (rc < 0) return terminal_error(client, rc == -EAGAIN ? -ETIMEDOUT : rc);
+            rc = queue_pong(client, &message);
+            if (rc < 0) return terminal_error(client, rc);
             continue;
         }
         if (message.type == VTR_MSG_ERROR) {
@@ -788,6 +833,10 @@ int vtr_client_receive_packet_timeout(VTRClient *client, VTRBuffer *packet,
             return terminal_error(client, -EIO);
         }
         if (message.type == VTR_MSG_DONE && client->flushing && !client->pending_count) {
+            if (message.payload_size) {
+                set_error(error, error_size, "DONE payload must be empty");
+                return terminal_error(client, -EPROTO);
+            }
             client->connected = 0;
             return 1;
         }

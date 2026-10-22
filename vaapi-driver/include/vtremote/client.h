@@ -42,6 +42,8 @@ typedef struct VTRClient {
     VTRBuffer parameter_sets;
     VTRBuffer tx;
     VTRBuffer rx;
+    VTRBuffer pong_tx;
+    size_t pong_tx_sent; /* Completed replies remain marked until receive consumes them. */
     unsigned pending_count;
     int64_t pending_pts[16];
     int flushing;
@@ -61,7 +63,7 @@ int vtr_client_send_frame(VTRClient *client, const VTRFrame *frame,
 int vtr_client_receive_packet(VTRClient *client, VTRBuffer *packet,
                               int64_t *packet_pts, int64_t *packet_dts,
                               uint32_t *packet_flags, char *error, size_t error_size);
-/* -EAGAIN preserves partial input and permits another bounded wait. */
+/* -EAGAIN preserves partial input/control output and permits another bounded wait. */
 int vtr_client_receive_packet_timeout(VTRClient *client, VTRBuffer *packet,
     int64_t *packet_pts, int64_t *packet_dts, uint32_t *packet_flags,
     char *error, size_t error_size, int timeout_ms);

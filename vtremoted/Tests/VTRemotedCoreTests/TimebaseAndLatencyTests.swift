@@ -43,6 +43,44 @@ final class TimebaseAndLatencyTests: XCTestCase {
         XCTAssertEqual(ticks, 1)
     }
 
+    func testTimebasePreservesLargeNanosecondTimestamps() {
+        let timebase = Timebase(num: 1, den: 1_000_000_000)
+        let values: [Int64] = [20_000_000_000, -20_000_000_000, Int64.max, Int64.min]
+        for value in values {
+            XCTAssertEqual(timebase.ticks(from: RationalTime(value: value, timescale: 1_000_000_000)), value)
+        }
+    }
+
+    func testTimebaseRescalesDifferentRatesAndTruncatesTowardZero() {
+        let timebase = Timebase(num: 3, den: 1_000_000_000)
+        XCTAssertEqual(timebase.ticks(from: RationalTime(value: 30_000_000_001, timescale: 2_000_000_000)),
+                       5_000_000_000)
+        XCTAssertEqual(timebase.ticks(from: RationalTime(value: -30_000_000_001, timescale: 2_000_000_000)),
+                       -5_000_000_000)
+        XCTAssertEqual(Timebase(num: 2, den: 3).ticks(from: RationalTime(value: 7, timescale: 4)), 2)
+        XCTAssertEqual(Timebase(num: 2, den: 3).ticks(from: RationalTime(value: -7, timescale: 4)), -2)
+    }
+
+    func testTimebaseKeepsWideIntermediateUntilNumeratorDivision() {
+        let timebase = Timebase(num: Int.max, den: Int.max)
+        let values: [Int64] = [Int64.max, Int64.min, 1, -1, 0]
+        for value in values {
+            XCTAssertEqual(timebase.ticks(from: RationalTime(value: value, timescale: 1)), value)
+        }
+    }
+
+    func testTimebaseSaturatesOnlyUnrepresentableFinalResults() {
+        let doubled = Timebase(num: 1, den: 2)
+        XCTAssertEqual(doubled.ticks(from: RationalTime(value: Int64.max, timescale: 1)), Int64.max)
+        XCTAssertEqual(doubled.ticks(from: RationalTime(value: Int64.min, timescale: 1)), Int64.min)
+        XCTAssertEqual(doubled.ticks(from: RationalTime(value: Int64.max / 2 + 1, timescale: 1)), Int64.max)
+        XCTAssertEqual(doubled.ticks(from: RationalTime(value: Int64.min / 2, timescale: 1)), Int64.min)
+
+        let halved = Timebase(num: 4, den: 2)
+        XCTAssertEqual(halved.ticks(from: RationalTime(value: Int64.max, timescale: 1)), Int64.max / 2)
+        XCTAssertEqual(halved.ticks(from: RationalTime(value: Int64.min, timescale: 1)), Int64.min / 2)
+    }
+
     func testLatencyTrackerAverageAndMax() {
         var tracker = LatencyTracker()
         tracker.submit(at: 1000)

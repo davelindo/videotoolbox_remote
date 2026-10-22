@@ -2,7 +2,9 @@
 
 This tree holds VideoToolbox Remote integration tests and benchmarks.
 
-- `run_transport_regressions.py`: complete-message daemon deadlines, session-slot release, normal/BUSY version identity and encoder DONE/error handling. Use `--skip-daemon` on Windows/Linux.
+- `run_transport_regressions.py`: complete-message daemon deadlines, session-slot release, normal/BUSY version identity and encoder/transcode DONE/error handling. Use `--skip-daemon` on Windows/Linux.
+- `run_encode_negative_stride.py`: public encoder API checks for positive, negative and mixed plane strides across eight pixel formats and none/LZ4/Zstd transport, with exact wire pixel comparisons.
+- `run_configure_ack.py`: public encoder and transcode API checks for valid and truncated server H.264 configuration records.
 - `socket_timeouts.c`: runtime getsockopt/receive/blocked-send checks for the shared FFmpeg timeout helper, including Winsock milliseconds. Windows CI compiles and runs it.
 - `run_decode_duplex.py`: public decoder API regression for simultaneous large uploads/downloads and explicit truncation/timeout errors.
 - `run_session_reset.sh`: hardware H.264/HEVC same-context decoder/BSF reuse, including reset with output pending and exact decoded plane checks.

@@ -137,6 +137,17 @@ PY
   $ZSTD_LIBS \
   -o "$BUILD_DIR/obs_plugin_client_smoke"
 
+"$CXX" -std=c++17 -pthread -UNDEBUG \
+  "$ROOT/tests/integration/obs_client_transport.cpp" \
+  -I"$ROOT/tests/integration/obs_plugin_test_stubs" \
+  $LZ4_CFLAGS \
+  $ZSTD_CFLAGS \
+  $LZ4_LIBS \
+  $ZSTD_LIBS \
+  -o "$BUILD_DIR/obs_client_transport"
+
+run_with_timeout "$CLIENT_TIMEOUT_SECS" "$BUILD_DIR/obs_client_transport"
+
 run_case() {
   local name="$1"
   local expected="$2"

@@ -55,6 +55,9 @@ typedef enum VTRReceiveResult {
 void vtremoted_client_cancel(VTRemotedClient *client);
 void vtremoted_client_get_error(VTRemotedClient *client, char *error, size_t size);
 bool vtremoted_client_flush(VTRemotedClient *client);
+/* Zero wait polls without blocking and preserves partial messages. Positive
+ * waits bound the complete receive operation; partial messages also have a
+ * five-second deadline across repeated polls. */
 VTRReceiveResult vtremoted_client_receive_packet(VTRemotedClient *client,
                                      const uint8_t **out_data, size_t *out_size,
                                      int64_t *out_pts, int64_t *out_dts,

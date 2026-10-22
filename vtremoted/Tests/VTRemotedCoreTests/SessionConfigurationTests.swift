@@ -35,6 +35,42 @@ final class SessionConfigurationTests: XCTestCase {
         XCTAssertNoThrow(try SessionConfiguration(codec: .h264, request: request))
     }
 
+    func testAcceptsSupportedDecodeReorderDepths() throws {
+        for mode in ["encode", "decode", "transcode"] {
+            for depth in [0, 1, 2, 64] {
+                var request = makeRequest()
+                request.options["mode"] = mode
+                request.options["decode_reorder_depth"] = String(depth)
+                let config = try SessionConfiguration(codec: .h264, request: request)
+                XCTAssertEqual(config.options.decodeReorderDepth, depth)
+            }
+        }
+    }
+
+    func testOmittedAndExplicitDefaultDecodeReorderDepth() throws {
+        for mode in ["decode", "transcode"] {
+            var request = makeRequest()
+            request.options["mode"] = mode
+            XCTAssertEqual(try SessionConfiguration(codec: .h264, request: request).options.decodeReorderDepth, 2)
+            // The transcode client sends -1 explicitly; the decoder client omits it.
+            request.options["decode_reorder_depth"] = "-1"
+            XCTAssertEqual(try SessionConfiguration(codec: .h264, request: request).options.decodeReorderDepth, 2)
+        }
+    }
+
+    func testRejectsInvalidDecodeReorderDepths() {
+        let invalid = ["", "invalid", "2.5", "-2", "65", String(Int.max), String(Int.min), String(UInt64.max)]
+        for mode in ["encode", "decode", "transcode"] {
+            for depth in invalid {
+                var request = makeRequest()
+                request.options["mode"] = mode
+                request.options["decode_reorder_depth"] = depth
+                XCTAssertThrowsError(try SessionConfiguration(codec: .h264, request: request),
+                                     "accepted depth=\(depth) for mode=\(mode)")
+            }
+        }
+    }
+
     func testRejectsFrameGeometryAboveConfiguredLimit() {
         XCTAssertThrowsError(try SessionConfiguration(
             codec: .h264,

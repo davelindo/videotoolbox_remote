@@ -43,10 +43,10 @@ def hello():
     return message(1, b"".join(string(s) for s in ("", "h264", "regression", "test")))
 
 
-def accept_h264_encoder(peer, name, build):
+def accept_h264_encoder(peer, name, build, extra_capabilities=()):
     """Complete the shared H.264/NV12 handshake for controlled encoder peers."""
     assert read_message(peer)[0] == 1
-    capabilities = ["h264", "pixfmt.nv12"]
+    capabilities = ["h264", "pixfmt.nv12", *extra_capabilities]
     ack = b"\0" + string(name) + string(build) + bytes([len(capabilities)])
     ack += b"".join(string(cap) for cap in capabilities) + struct.pack(">HH", 4, 1)
     peer.sendall(message(2, ack))
@@ -249,6 +249,73 @@ def encoder_drain(binary, completion):
         print(f"PASS encoder drain completion={completion}")
 
 
+def transcode_drain(binary, completion):
+    """A BSF must distinguish a valid DONE from truncated or early completion."""
+    failures = queue.Queue()
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        listener.settimeout(10)
+        port = listener.getsockname()[1]
+
+        def server():
+            try:
+                with listener.accept()[0] as peer:
+                    peer.settimeout(10)
+                    accept_h264_encoder(peer, "transcode-test", "test",
+                                        ("mode.transcode", "packet_ack.v1"))
+                    packets = []
+                    while True:
+                        kind, body = read_message(peer)
+                        if kind == 6:
+                            if completion == "early_done":
+                                peer.sendall(message(8))
+                                return
+                            packets.append(body)
+                            peer.sendall(message(12))
+                        elif kind == 7:
+                            break
+                        else:
+                            raise AssertionError(f"unexpected message {kind}")
+                    assert len(packets) == 3, len(packets)
+                    for body in packets:
+                        peer.sendall(message(6, body))
+                    if completion == "reset":
+                        reset_on_close(peer)
+                    elif completion == "partial":
+                        peer.sendall(message(8)[:5])
+                    elif completion == "nonempty_done":
+                        peer.sendall(message(8, b"x"))
+                    elif completion == "done":
+                        peer.sendall(message(8))
+            except Exception as error:
+                failures.put(error)
+
+        thread = threading.Thread(target=server, daemon=True)
+        thread.start()
+        result = subprocess.run(
+            [binary, "-hide_banner", "-v", "error", "-xerror",
+             "-f", "lavfi", "-i", "testsrc2=size=64x64:rate=30:duration=0.1",
+             "-c:v", "libx264", "-preset", "ultrafast",
+             "-tune", "zerolatency", "-bf", "0", "-bsf:v",
+             f"vtremote_transcode=vt_remote_host=127.0.0.1:vt_remote_port={port}:"
+             "vt_remote_inflight=1:vt_remote_timeout_ms=1000",
+             "-f", "framemd5", "-"],
+            capture_output=True, text=True, timeout=15,
+        )
+        thread.join(timeout=2)
+        assert not thread.is_alive(), "transcode mock did not finish"
+        if not failures.empty():
+            raise failures.get()
+        if completion == "done":
+            assert result.returncode == 0, result.stderr
+            packets = [line for line in result.stdout.splitlines() if line and not line.startswith("#")]
+            assert len(packets) == 3, result.stdout
+        else:
+            assert result.returncode != 0, f"accepted {completion} as success: {result.stderr}"
+        print(f"PASS transcode drain completion={completion}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ffmpeg", default=str(ROOT / "ffmpeg/ffmpeg"))
@@ -261,3 +328,5 @@ if __name__ == "__main__":
     if not args.skip_ffmpeg:
         for completion in ("eof", "reset", "partial", "early_done", "done"):
             encoder_drain(args.ffmpeg, completion)
+        for completion in ("eof", "reset", "partial", "early_done", "nonempty_done", "done"):
+            transcode_drain(args.ffmpeg, completion)

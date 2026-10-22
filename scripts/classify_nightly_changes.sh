@@ -99,6 +99,7 @@ else
             tests/integration/run_obs_plugin_client_mock.sh|\
             tests/integration/run_obs_plugin_integration.sh|\
             tests/integration/obs_plugin_client_smoke.cpp|\
+            tests/integration/obs_client_transport.cpp|\
             tests/integration/obs_plugin_integration.cpp|\
             tests/integration/obs_recording.cpp|\
             tests/integration/api-regressions.mk|\
