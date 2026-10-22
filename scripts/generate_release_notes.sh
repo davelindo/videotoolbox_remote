@@ -99,7 +99,7 @@ See the [Plex guide](${plex_url}), [VA-API guide](${vaapi_url}), and [OBS guide]
 tar -xzf vtremoted-macos-arm64.tar.gz
 brew install lz4 zstd
 # Replace the example with the Mac's private LAN address. See the security guide for tokens/tunnels.
-./vtremoted/vtremoted --listen 192.168.1.20:5555 --log-level 1
+./vtremoted/vtremoted --listen "<MAC_IP>:5555" --log-level 1
 \`\`\`
 
 4. Run a remote encode from the client:
