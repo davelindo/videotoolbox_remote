@@ -30,11 +30,28 @@ public struct Timebase: Equatable, Sendable {
     }
 
     public func ticks(from time: RationalTime) -> Int64 {
-        let targetScale = Int64(max(1, den))
-        let srcScale = Int64(max(1, time.timescale))
-        let (mul, overflow) = time.value.multipliedReportingOverflow(by: targetScale)
-        let safeMul = overflow ? (time.value >= 0 ? Int64.max : Int64.min) : mul
-        let scaled = safeMul / srcScale
-        return scaled / Int64(max(1, num))
+        let targetScale = UInt64(max(1, den))
+        let srcScale = UInt64(max(1, time.timescale))
+        let numerator = UInt64(max(1, num))
+        let product = time.value.magnitude.multipliedFullWidth(by: targetScale)
+        let magnitude: UInt64
+        if product.high == 0 {
+            magnitude = product.low / srcScale / numerator
+        } else {
+            // Keep both words after the first division: its quotient may exceed
+            // UInt64 even when division by the timebase numerator brings it in range.
+            // Positive divisors make staged truncation equivalent to one division.
+            let high = product.high / srcScale
+            let low = srcScale.dividingFullWidth((high: product.high % srcScale, low: product.low)).quotient
+            guard high < numerator else {
+                return time.value < 0 ? Int64.min : Int64.max
+            }
+            magnitude = numerator.dividingFullWidth((high: high, low: low)).quotient
+        }
+        if time.value >= 0 {
+            return Int64(clamping: magnitude)
+        }
+        guard magnitude <= UInt64(Int64.max) else { return Int64.min }
+        return -Int64(magnitude)
     }
 }

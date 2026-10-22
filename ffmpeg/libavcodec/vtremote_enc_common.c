@@ -338,19 +338,6 @@ static void vtremote_copy_frame_props(AVFrame *dst, const AVFrame *src) {
   dst->flags |= (src->flags & AV_FRAME_FLAG_KEY);
 }
 
-static void vtremote_copy_plane_rows(uint8_t *dst, int dst_linesize,
-                                     const uint8_t *src, int src_linesize,
-                                     int row_bytes, int rows) {
-  if (src_linesize < 0)
-    src += (rows - 1) * (int64_t)src_linesize;
-  if (dst_linesize < 0)
-    dst += (rows - 1) * (int64_t)dst_linesize;
-
-  for (int y = 0; y < rows; y++) {
-    memcpy(dst + y * dst_linesize, src + y * src_linesize, row_bytes);
-  }
-}
-
 static int vtremote_prepare_videotoolbox_frame(AVCodecContext *avctx,
                                                const AVFrame *frame,
                                                const AVFrame **out_frame) {
@@ -450,9 +437,9 @@ static int vtremote_prepare_videotoolbox_frame(AVCodecContext *avctx,
     }
 
     src_stride = (int)src_stride_size;
-    vtremote_copy_plane_rows(s->convert_frame->data[i],
-                             s->convert_frame->linesize[i], src, src_stride,
-                             row_bytes, rows);
+    av_image_copy_plane(s->convert_frame->data[i],
+                        s->convert_frame->linesize[i], src, src_stride,
+                        row_bytes, rows);
   }
 
   vtremote_copy_frame_props(s->convert_frame, frame);
@@ -488,7 +475,24 @@ static int vtremote_prepare_upload_frame(AVCodecContext *avctx,
 
   dst_fmt = vtremote_target_upload_pix_fmt(frame, s->codec_id);
   if (frame->format == dst_fmt && vtremote_is_upload_pix_fmt(dst_fmt)) {
-    *out_frame = frame;
+    int needs_copy = 0;
+    for (int i = 0; i < vtremote_upload_plane_count(dst_fmt); i++)
+      needs_copy |= frame->linesize[i] < 0;
+    if (!needs_copy) {
+      *out_frame = frame;
+      return 0;
+    }
+
+    /* Wire planes have unsigned strides and contiguous forwards storage.
+     * Normalize flipped input while retaining the positive-stride fast path. */
+    ret = vtremote_ensure_convert_frame(s, dst_fmt, frame->width, frame->height);
+    if (ret < 0)
+      return ret;
+    ret = av_frame_copy(s->convert_frame, frame);
+    if (ret < 0)
+      return ret;
+    vtremote_copy_frame_props(s->convert_frame, frame);
+    *out_frame = s->convert_frame;
     return 0;
   }
 
@@ -512,8 +516,8 @@ static int vtremote_prepare_upload_frame(AVCodecContext *avctx,
     const int ch = (height + 1) >> 1;
 
     if (dst_fmt == AV_PIX_FMT_NV12) {
-      vtremote_copy_plane_rows(s->convert_frame->data[0], s->convert_frame->linesize[0],
-                               frame->data[0], frame->linesize[0], width, height);
+      av_image_copy_plane(s->convert_frame->data[0], s->convert_frame->linesize[0],
+                          frame->data[0], frame->linesize[0], width, height);
       for (int y = 0; y < ch; y++) {
         const uint8_t *u = frame->data[1] + y * frame->linesize[1];
         const uint8_t *v = frame->data[2] + y * frame->linesize[2];
@@ -1540,7 +1544,9 @@ static int vtremote_handle_configure_ack(AVCodecContext *avctx,
     return AVERROR_INVALIDDATA;
 
   uint16_t extralen = 0;
-  vtremote_rbuf_read_u16(&r, &extralen);
+  ret = vtremote_rbuf_read_u16(&r, &extralen);
+  if (ret < 0)
+    return ret;
   if (extralen) {
     if (extralen > len - r.pos)
       return AVERROR_INVALIDDATA;
@@ -1558,23 +1564,31 @@ static int vtremote_handle_configure_ack(AVCodecContext *avctx,
       avctx->extradata = annexb;
       avctx->extradata_size = annexb_size;
       /* Convert avcC to AnnexB extradata so muxers can reformat packets. */
-    } else if (avcc[0] == 1 && extralen > 6) {
+    } else if (avcc[0] == 1) {
+      if (extralen < 7)
+        return AVERROR_INVALIDDATA;
       int pos = 5;
       int sps_count = avcc[pos++] & 0x1f;
-      for (int i = 0; i < sps_count && pos + 2 <= extralen; i++) {
+      for (int i = 0; i < sps_count; i++) {
+        if (pos + 2 > extralen)
+          return AVERROR_INVALIDDATA;
         int sps_len = AV_RB16(avcc + pos);
         pos += 2;
         if (pos + sps_len > extralen)
-          break;
+          return AVERROR_INVALIDDATA;
         annexb_size += 4 + sps_len;
         pos += sps_len;
       }
+      if (pos >= extralen)
+        return AVERROR_INVALIDDATA;
       int pps_count = avcc[pos++] & 0xff;
-      for (int i = 0; i < pps_count && pos + 2 <= extralen; i++) {
+      for (int i = 0; i < pps_count; i++) {
+        if (pos + 2 > extralen)
+          return AVERROR_INVALIDDATA;
         int pps_len = AV_RB16(avcc + pos);
         pos += 2;
         if (pos + pps_len > extralen)
-          break;
+          return AVERROR_INVALIDDATA;
         annexb_size += 4 + pps_len;
         pos += pps_len;
       }

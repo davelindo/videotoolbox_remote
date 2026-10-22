@@ -15,7 +15,7 @@ final class EncodeReorderBuffer<Payload> {
 
     private let depth: Int
     private let compactionThreshold = 64
-    private var pending: [Pending] = []
+    private var pending: [Pending?] = []
     private var head: Int = 0
 
     private var pendingCount: Int {
@@ -53,7 +53,7 @@ final class EncodeReorderBuffer<Payload> {
         // Insertion sort by (dtsTicks, seq).
         var idx = pending.count
         while idx > head {
-            let prev = pending[idx - 1]
+            let prev = pending[idx - 1]!
             if prev.dtsTicks < pkt.dtsTicks || (prev.dtsTicks == pkt.dtsTicks && prev.seq <= pkt.seq) {
                 break
             }
@@ -68,7 +68,9 @@ final class EncodeReorderBuffer<Payload> {
         var emitted: [Payload] = []
         emitted.reserveCapacity(drainCount)
         while pendingCount > targetCount {
-            emitted.append(pending[head].payload)
+            emitted.append(pending[head]!.payload)
+            // Release emitted media immediately; compaction only reclaims slots.
+            pending[head] = nil
             head += 1
         }
         compactIfNeeded()

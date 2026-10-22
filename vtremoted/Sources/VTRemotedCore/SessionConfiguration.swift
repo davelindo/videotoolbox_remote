@@ -161,6 +161,13 @@ public struct SessionConfiguration: Sendable {
         timebase = request.timebase
         frameRate = request.frameRate
         options = SessionOptions(options: request.options)
+        if let rawDepth = request.options["decode_reorder_depth"] {
+            guard let depth = Int(rawDepth), (-1...64).contains(depth) else {
+                throw VTRemotedError.unsupported("decode_reorder_depth must be -1 or 0...64")
+            }
+            // The decoder omits -1; the transcode client sends this default sentinel.
+            options.decodeReorderDepth = depth == -1 ? 2 : depth
+        }
         configExtradata = request.extradata
         self.maxFrameBytes = frameLimit
 

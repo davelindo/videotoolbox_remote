@@ -7,6 +7,24 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
+## [v0.10.0] - 2026-10-22
+
+### Fixed
+- Preserve logical pixel order when FFmpeg encoder input uses negative plane strides, including native wire formats and planar conversion paths.
+- Reject truncated configuration replies and malformed H.264 SPS/PPS data before converting codec extradata.
+- Treat transcode socket failures as errors, reject premature or malformed completion messages, and drain queued output before reporting completion. Suppress SIGPIPE during vector writes.
+- Keep OBS polling and client sends bounded under partial messages and socket backpressure. Resume partial ping replies without duplicates and complete them before subsequent frame or flush messages.
+- Rescale large timestamps without premature intermediate overflow, including negative timestamps and final-result saturation.
+- Reject invalid decode reorder depths; accept -1 for the default or explicit values from 0 through 64.
+
+### Changed
+- Release emitted encoder payloads immediately instead of retaining them until queue compaction, and avoid excess VA-API receive-buffer reservation.
+- The experimental VA-API static client SDK now stores pending ping replies in its client structure. Applications embedding the SDK must rebuild against the updated headers.
+
+### Added
+- Regression coverage for signed-stride pixels and timestamps, malformed configuration replies, drain completion, timestamp boundaries, payload lifetimes, and partial transport with ordered ping replies.
+- Run the new FFmpeg API regressions in CI and classify standalone OBS transport-test changes for the OBS job.
+
 ## [v0.9.30] - 2026-10-21
 
 ### Changed

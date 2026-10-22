@@ -54,7 +54,7 @@ assert_probe_fields() {
   shift
   local output
   output=$("$FFPROBE_BIN" -hide_banner -v error \
-    -show_entries stream=codec_tag_string,color_range,color_space,color_transfer,color_primaries,profile,pix_fmt \
+    -show_entries stream=codec_name,codec_tag_string,color_range,color_space,color_transfer,color_primaries,profile,pix_fmt \
     -of default=nw=1 \
     "$target")
   for expected in "$@"; do
@@ -417,6 +417,8 @@ run_non_mp4_mux_case() {
     -vt_remote_host "$SERVER_HOST" \
     -vt_remote_port "$SERVER_PORT" \
     ${transcode_args[@]+"${transcode_args[@]}"} \
+    -vt_remote_out_codec hevc \
+    -pix_fmt:v p010le \
     -f flv "$out_flv" > /dev/null 2>"$ffmpeg_log"
 
   wait_mock_server
@@ -426,6 +428,7 @@ run_non_mp4_mux_case() {
     cat "$ffmpeg_log" >&2
     exit 1
   fi
+  assert_probe_fields "$out_flv" "codec_name=hevc" "profile=Main 10"
 }
 
 run_override_case

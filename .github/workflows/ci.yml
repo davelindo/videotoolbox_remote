@@ -141,6 +141,7 @@ jobs:
               - 'tests/integration/run_obs_plugin_client_mock.sh'
               - 'tests/integration/run_obs_plugin_integration.sh'
               - 'tests/integration/obs_plugin_client_smoke.cpp'
+              - 'tests/integration/obs_client_transport.cpp'
               - 'tests/integration/obs_plugin_integration.cpp'
               - 'tests/integration/obs_recording.cpp'
               - 'tests/integration/api-regressions.mk'
@@ -360,6 +361,8 @@ jobs:
         run: |
           python3 tests/integration/run_transport_regressions.py --skip-daemon
           python3 tests/integration/run_decode_duplex.py
+          python3 tests/integration/run_encode_negative_stride.py
+          python3 tests/integration/run_configure_ack.py
           python3 tests/integration/bench_inflight.py --frames 600 --repeats 1 --depths 0 --changing-capacity --output vtremote-inflight.json
           bash tests/integration/run_mock_roundtrip.sh
           bash tests/integration/run_mock_wire_compression.sh
@@ -475,6 +478,8 @@ jobs:
         run: |
           python3 tests/integration/run_transport_regressions.py --skip-daemon
           python3 tests/integration/run_decode_duplex.py
+          python3 tests/integration/run_encode_negative_stride.py
+          python3 tests/integration/run_configure_ack.py
           python3 tests/integration/bench_inflight.py --frames 600 --repeats 1 --depths 0 --changing-capacity --output vtremote-inflight.json
           bash tests/integration/run_mock_roundtrip.sh
           bash tests/integration/run_mock_wire_compression.sh
@@ -613,6 +618,8 @@ jobs:
         run: |
           python3 tests/integration/run_transport_regressions.py --skip-daemon
           python3 tests/integration/run_decode_duplex.py
+          python3 tests/integration/run_encode_negative_stride.py
+          python3 tests/integration/run_configure_ack.py
           python3 tests/integration/bench_inflight.py --frames 600 --repeats 1 --depths 0 --changing-capacity --output vtremote-inflight.json
 
       - name: Package ffmpeg (macOS)

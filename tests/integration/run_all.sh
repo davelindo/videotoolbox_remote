@@ -44,6 +44,8 @@ run_step() {
   "$@"
 }
 
+run_step "encoder_signed_strides" python3 "${ROOT}/tests/integration/run_encode_negative_stride.py"
+run_step "configure_ack"       python3 "${ROOT}/tests/integration/run_configure_ack.py"
 run_step "mock_roundtrip"      bash "${ROOT}/tests/integration/run_mock_roundtrip.sh"
 run_step "mock_wire_compression" bash "${ROOT}/tests/integration/run_mock_wire_compression.sh"
 run_step "mock_pts_dts"        bash "${ROOT}/tests/integration/run_mock_pts_dts_semantics.sh"

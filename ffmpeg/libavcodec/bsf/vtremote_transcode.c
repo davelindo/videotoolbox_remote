@@ -211,7 +211,7 @@ static int write_full_iov(int fd, const uint8_t *buf0, int size0,
         msg.msg_iov = iov;
         msg.msg_iovlen = iovcnt;
 
-        ssize_t r = sendmsg(fd, &msg, 0);
+        ssize_t r = sendmsg(fd, &msg, vtremote_send_flags(0));
         if (r < 0) {
             int err = vtremote_sock_errno();
             if (err == EINTR)
@@ -632,20 +632,26 @@ static int vtremote_h264_extradata_to_annexb(const uint8_t *in, int in_size,
 
     int pos = 5;
     int sps_count = in[pos++] & 0x1f;
-    for (int i = 0; i < sps_count && pos + 2 <= in_size; i++) {
+    for (int i = 0; i < sps_count; i++) {
+        if (pos + 2 > in_size)
+            return AVERROR_INVALIDDATA;
         int sps_len = AV_RB16(in + pos);
         pos += 2;
         if (pos + sps_len > in_size)
-            break;
+            return AVERROR_INVALIDDATA;
         size += 4 + sps_len;
         pos += sps_len;
     }
+    if (pos >= in_size)
+        return AVERROR_INVALIDDATA;
     int pps_count = in[pos++] & 0xff;
-    for (int i = 0; i < pps_count && pos + 2 <= in_size; i++) {
+    for (int i = 0; i < pps_count; i++) {
+        if (pos + 2 > in_size)
+            return AVERROR_INVALIDDATA;
         int pps_len = AV_RB16(in + pos);
         pos += 2;
         if (pos + pps_len > in_size)
-            break;
+            return AVERROR_INVALIDDATA;
         size += 4 + pps_len;
         pos += pps_len;
     }
@@ -756,7 +762,7 @@ static int vtremote_recv_some(VTRemoteTranscodeContext *s, uint8_t *dst, int siz
             return AVERROR(err);
         }
         if (r == 0)
-            return AVERROR_EOF;
+            return AVERROR(EIO);
         return r;
     }
 }
@@ -903,7 +909,9 @@ static int vtremote_handle_configure_ack(AVBSFContext *ctx, const uint8_t *paylo
         return AVERROR_INVALIDDATA;
 
     uint16_t extralen = 0;
-    vtremote_rbuf_read_u16(&r, &extralen);
+    ret = vtremote_rbuf_read_u16(&r, &extralen);
+    if (ret < 0)
+        return ret;
     if (extralen) {
         if (extralen > len - r.pos)
             return AVERROR_INVALIDDATA;
@@ -1388,6 +1396,17 @@ static int vtremote_handle_packet_ack(VTRemoteTranscodeContext *s,
     return 0;
 }
 
+static int vtremote_handle_done(AVBSFContext *ctx, const VTRemoteMsgHeader *hdr)
+{
+    VTRemoteTranscodeContext *s = ctx->priv_data;
+    if (!s->flushing || hdr->length != 0) {
+        av_log(ctx, AV_LOG_ERROR, "Unexpected or malformed vtremote_transcode DONE\n");
+        return AVERROR_INVALIDDATA;
+    }
+    s->done = 1;
+    return 0;
+}
+
 static int vtremote_drain_available_packets(AVBSFContext *ctx) {
     VTRemoteTranscodeContext *s = ctx->priv_data;
     int packets_read = 0;
@@ -1414,7 +1433,9 @@ static int vtremote_drain_available_packets(AVBSFContext *ctx) {
                 return ret;
             break;
         case VTREMOTE_MSG_DONE:
-            s->done = 1;
+            ret = vtremote_handle_done(ctx, &hdr);
+            if (ret < 0)
+                return ret;
             return packets_read;
         case VTREMOTE_MSG_PING: {
             VTRemoteWBuf empty = {0};
@@ -1449,8 +1470,7 @@ static int vtremote_receive_packet_blocking(AVBSFContext *ctx) {
         case VTREMOTE_MSG_PACKET_ACK:
             return vtremote_handle_packet_ack(s, &hdr);
         case VTREMOTE_MSG_DONE:
-            s->done = 1;
-            return 0;
+            return vtremote_handle_done(ctx, &hdr);
         case VTREMOTE_MSG_PING: {
             VTRemoteWBuf empty = {0};
             vtremote_send_msg(s, VTREMOTE_MSG_PONG, &empty);
@@ -1776,6 +1796,8 @@ static int vtremote_transcode_filter(AVBSFContext *ctx, AVPacket *pkt) {
     if (s->pkt_q_count > 0) {
         return pop_packet(s, pkt);
     }
+    if (s->done)
+        return AVERROR_EOF;
 
     ret = vtremote_drain_available_packets(ctx);
     if (ret < 0 && ret != AVERROR(EAGAIN))
