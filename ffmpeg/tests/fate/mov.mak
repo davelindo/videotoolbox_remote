@@ -233,6 +233,12 @@ $(eval $(call FATE_MOV_CENC_TEST,h264_iso,H264,matroska,MATROSKA,h264/dts_5frame
 $(eval $(call FATE_MOV_CENC_TEST,hevc,HEVC,hevc,HEVC,hevc-conformance/ipcm_A_NEC_3.bit))
 $(eval $(call FATE_MOV_CENC_TEST,hevc_iso,HEVC,mov,MOV,hevc/extradata-reload-multi-stsd.mov))
 
+# avif muxing - still image with 1 item.
+FATE_MOV_FFMPEG_SAMPLES-$(call REMUX, AVIF OBU, AV1_DECODER AV1_PARSER) \
+                           += fate-mov-avif-mux-still-image-1-item
+fate-mov-avif-mux-still-image-1-item: CMD = stream_remux obu $(TARGET_SAMPLES)/av1/still_picture_rgb.obu "" avif \
+  "" "-c:v av1" "-c:v copy"
+
 # avif demuxing - still image with 1 item.
 FATE_MOV_FFMPEG_SAMPLES-$(call FRAMECRC, MOV, AV1, AV1_PARSER) \
                            += fate-mov-avif-demux-still-image-1-item
@@ -482,6 +488,17 @@ fate-mov-mp4-iamf-stereo: CMD = transcode wav $(SRC) mp4 " \
   -/stream_group $(TARGET_PATH)/tests/data/streamgroups/mix_presentation-stereo \
   -streamid 0:0 -c:a flac -t 1" "-c:a copy -map 0" \
   "-show_entries stream_group=index,id,nb_streams,type:stream_group_components:stream_group_disposition:stream_group_tags:stream_group_stream=index,id:stream_group_stream_disposition"
+
+# Two audio elements and a mix presentation whose id equals the id of the first audio element.
+FATE_MOV_FFMPEG_FFPROBE-$(call TRANSCODE, FLAC, MP4 MOV, WAV_DEMUXER PCM_S16LE_DECODER IAMFENC IAMFDEC) += fate-mov-mp4-iamf-stereo-id-collision
+fate-mov-mp4-iamf-stereo-id-collision: tests/data/asynth-44100-2.wav tests/data/streamgroups/audio_element-stereo tests/data/streamgroups/audio_element-stereo-2 tests/data/streamgroups/mix_presentation-stereo-id-1
+fate-mov-mp4-iamf-stereo-id-collision: SRC = $(TARGET_PATH)/tests/data/asynth-44100-2.wav
+fate-mov-mp4-iamf-stereo-id-collision: CMD = transcode wav $(SRC) mp4 " \
+  -/stream_group $(TARGET_PATH)/tests/data/streamgroups/audio_element-stereo \
+  -/stream_group $(TARGET_PATH)/tests/data/streamgroups/audio_element-stereo-2 \
+  -/stream_group $(TARGET_PATH)/tests/data/streamgroups/mix_presentation-stereo-id-1 \
+  -map 0:a -map 0:a -streamid 0:0 -streamid 1:1 -c:a flac -t 1" "-c:a copy -map 0" \
+  "-show_entries stream_group=index,id,nb_streams,type:stream_group_stream=index,id:stream=index,id,duration_ts"
 
 FATE_MOV_FFMPEG_FFPROBE-$(call TRANSCODE, FLAC, MP4 MOV, WAV_DEMUXER PCM_S16LE_DECODER ARESAMPLE_FILTER) += fate-mov-mp4-iamf-5_1_4
 fate-mov-mp4-iamf-5_1_4: tests/data/asynth-44100-10.wav tests/data/filtergraphs/iamf_5_1_4 tests/data/streamgroups/audio_element-5_1_4 tests/data/streamgroups/mix_presentation-5_1_4

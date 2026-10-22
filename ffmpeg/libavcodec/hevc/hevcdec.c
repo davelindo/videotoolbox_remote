@@ -768,6 +768,8 @@ static int set_sps(HEVCContext *s, HEVCLayerContext *l, const HEVCSPS *sps)
     if (!sps)
         return 0;
 
+    av_refstruct_unref(&s->vps);
+
     ret = pic_arrays_init(l, sps);
     if (ret < 0)
         goto fail;
@@ -3449,6 +3451,9 @@ static int hevc_frame_start(HEVCContext *s, HEVCLayerContext *l,
                        "Base/non-base layer SPS have unsupported parameter combination\n");
                 return AVERROR(ENOSYS);
             }
+        } else {
+            for (int i = 1; i < FF_ARRAY_ELEMS(s->layers); i++)
+                set_sps(s, &s->layers[i], NULL);
         }
 
         ff_hevc_clear_refs(l);
