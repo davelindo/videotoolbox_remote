@@ -6,6 +6,10 @@ FATE_LIBAVFORMAT-$(CONFIG_MP3_MUXER) += fate-id3v2enc
 fate-id3v2enc: libavformat/tests/id3v2enc$(EXESUF)
 fate-id3v2enc: CMD = run libavformat/tests/id3v2enc$(EXESUF)
 
+FATE_LIBAVFORMAT-$(CONFIG_MP3_MUXER) += fate-id3v2chap
+fate-id3v2chap: libavformat/tests/id3v2chap$(EXESUF)
+fate-id3v2chap: CMD = run libavformat/tests/id3v2chap$(EXESUF)
+
 FATE_LIBAVFORMAT += fate-mkdir
 fate-mkdir: libavformat/tests/mkdir$(EXESUF)
 fate-mkdir: CMD = run libavformat/tests/mkdir$(EXESUF)
@@ -63,6 +67,49 @@ fate-srtp: CMD = run libavformat/tests/srtp$(EXESUF)
 FATE_LIBAVFORMAT-yes += fate-url
 fate-url: libavformat/tests/url$(EXESUF)
 fate-url: CMD = run libavformat/tests/url$(EXESUF)
+
+tests/data/hls-parse-master.m3u8: TAG = GEN
+tests/data/hls-parse-master.m3u8: | tests/data
+	$(Q)printf '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=64000\na.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=32000\nb.m3u8\n' > $@
+
+tests/data/hls-parse-master-start.m3u8: TAG = GEN
+tests/data/hls-parse-master-start.m3u8: | tests/data
+	$(Q)printf '#EXTM3U\n#EXT-X-START:TIME-OFFSET=1.5\n#EXT-X-STREAM-INF:BANDWIDTH=64000\na.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=32000\nb.m3u8\n' > $@
+
+tests/data/hls-parse-media.m3u8: TAG = GEN
+tests/data/hls-parse-media.m3u8: | tests/data
+	$(Q)printf '#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nseg0.ts\n#EXTINF:2,\nseg1.ts\n#EXTINF:2,\nseg2.ts\n' > $@
+
+tests/data/hls-parse-media-start.m3u8: TAG = GEN
+tests/data/hls-parse-media-start.m3u8: | tests/data
+	$(Q)printf '#EXTM3U\n#EXT-X-START:TIME-OFFSET=4\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nseg0.ts\n#EXTINF:2,\nseg1.ts\n#EXTINF:2,\nseg2.ts\n' > $@
+
+tests/data/hls-parse-media-start-endlist.m3u8: TAG = GEN
+tests/data/hls-parse-media-start-endlist.m3u8: | tests/data
+	$(Q)printf '#EXTM3U\n#EXT-X-START:TIME-OFFSET=4\n#EXT-X-ENDLIST\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nseg0.ts\n#EXTINF:2,\nseg1.ts\n#EXTINF:2,\nseg2.ts\n' > $@
+
+FATE_HLS_PARSE = fate-hls-parse-media-start           \
+                 fate-hls-parse-media-start-endlist   \
+                 fate-hls-parse-master-start          \
+                 fate-hls-parse-master-start-media    \
+                 fate-hls-parse-master-start-override \
+                 fate-hls-parse-master-media-start
+
+$(FATE_HLS_PARSE): libavformat/tests/hls$(EXESUF)
+fate-hls-parse-media-start: tests/data/hls-parse-media-start.m3u8
+fate-hls-parse-media-start: CMD = run libavformat/tests/hls$(EXESUF) $(TARGET_PATH)/tests/data/hls-parse-media-start.m3u8
+fate-hls-parse-media-start-endlist: tests/data/hls-parse-media-start-endlist.m3u8
+fate-hls-parse-media-start-endlist: CMD = run libavformat/tests/hls$(EXESUF) $(TARGET_PATH)/tests/data/hls-parse-media-start-endlist.m3u8
+fate-hls-parse-master-start: tests/data/hls-parse-master-start.m3u8
+fate-hls-parse-master-start: CMD = run libavformat/tests/hls$(EXESUF) $(TARGET_PATH)/tests/data/hls-parse-master-start.m3u8
+fate-hls-parse-master-start-media: tests/data/hls-parse-master-start.m3u8 tests/data/hls-parse-media.m3u8
+fate-hls-parse-master-start-media: CMD = run libavformat/tests/hls$(EXESUF) $(TARGET_PATH)/tests/data/hls-parse-master-start.m3u8 $(TARGET_PATH)/tests/data/hls-parse-media.m3u8
+fate-hls-parse-master-start-override: tests/data/hls-parse-master-start.m3u8 tests/data/hls-parse-media-start.m3u8
+fate-hls-parse-master-start-override: CMD = run libavformat/tests/hls$(EXESUF) $(TARGET_PATH)/tests/data/hls-parse-master-start.m3u8 $(TARGET_PATH)/tests/data/hls-parse-media-start.m3u8
+fate-hls-parse-master-media-start: tests/data/hls-parse-master.m3u8 tests/data/hls-parse-media-start.m3u8
+fate-hls-parse-master-media-start: CMD = run libavformat/tests/hls$(EXESUF) $(TARGET_PATH)/tests/data/hls-parse-master.m3u8 $(TARGET_PATH)/tests/data/hls-parse-media-start.m3u8
+
+FATE_LIBAVFORMAT-$(call ALLYES, HLS_DEMUXER FILE_PROTOCOL) += $(FATE_HLS_PARSE)
 
 FATE_LIBAVFORMAT-$(CONFIG_IMF_DEMUXER) += fate-imf
 fate-imf: libavformat/tests/imf$(EXESUF)
