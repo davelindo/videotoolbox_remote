@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproducible Intel/software/local-Mac/LAN-Mac performance comparisons.
+"""Reproducible Intel/software/VideoToolbox/NVENC performance comparisons.
 
 Prepare and measure on the designated hosts. The coordinating computer only
 dispatches jobs and collects results; it never encodes benchmark video.
@@ -24,20 +24,31 @@ import time
 import zipfile
 
 BACKENDS = ("intel-vaapi", "cpu-fast", "cpu-medium", "videotoolbox", "videotoolbox-remote")
+NVENC_BACKENDS = ("nvenc-p4", "nvenc-p7")
+MAC_ENERGY_BACKENDS = ("videotoolbox",)
+GPU_ENERGY_KEYS = ("gpu_board_joules", "gpu_board_average_watts", "gpu_board_frames_per_joule")
+MAC_ENERGY_KEYS = ("mac_system_joules", "mac_system_average_watts", "mac_system_frames_per_joule")
 FIXTURES = ("big-buck-bunny", "testsrc2", "smptebars")
 BITRATES = {("h264", 720): 4_000_000, ("hevc", 720): 3_000_000,
             ("h264", 1080): 6_000_000, ("hevc", 1080): 4_000_000}
+CALIBRATION_MEASUREMENT = "Whole-file bitrate reported by ffprobe; container overhead and codec filler included"
 BBB_URL = "https://download.blender.org/demo/movies/BBB/bbb_sunflower_1080p_30fps_normal.mp4.zip"
 LABELS = {"intel-vaapi": "Intel iGPU VA-API", "cpu-fast": "CPU fast", "cpu-medium": "CPU medium",
-          "videotoolbox": "VideoToolbox local", "videotoolbox-remote": "VideoToolbox remote"}
+          "videotoolbox": "VideoToolbox local", "videotoolbox-remote": "VideoToolbox remote",
+          "nvenc-p4": "NVIDIA NVENC P4", "nvenc-p7": "NVIDIA NVENC P7"}
 
 
 def public_results(summary):
     """Export a strict allowlist, never host inventory, paths or commands."""
     metadata = summary["metadata"]
-    if metadata["frames"] != 1800 or metadata["repeats"] != 3 or not summary["all_correct"]:
+    if metadata["frames"] != 1800 or metadata["repeats"] != 3 or metadata["warmup_frames"] != 60 or not summary["all_correct"]:
         raise ValueError("only complete, validated three-repeat comparisons can be published")
-    expected = set(itertools.product(FIXTURES, ("h264", "hevc"), ("1280x720", "1920x1080"), BACKENDS))
+    if metadata["calibration_measurement"] != CALIBRATION_MEASUREMENT:
+        raise ValueError("public results require the supported whole-file calibration method")
+    backends = tuple(metadata["backends"])
+    if backends not in (BACKENDS, NVENC_BACKENDS, MAC_ENERGY_BACKENDS):
+        raise ValueError("public results require a complete measured comparison")
+    expected = set(itertools.product(FIXTURES, ("h264", "hevc"), ("1280x720", "1920x1080"), backends))
     actual = [(row["fixture"], row["codec"], row["size"], row["backend"]) for row in summary["rows"]]
     if len(actual) != len(expected) or set(actual) != expected or not all(row["all_correct"] for row in summary["rows"]):
         raise ValueError("public comparison is incomplete or contains duplicate or invalid rows")
@@ -50,9 +61,39 @@ def public_results(summary):
             "median_filler_mbps", "target_mbps", "requested_mbps", "all_correct",
             "all_file_within_2_percent_target", "max_file_target_deviation_percent", "max_b_picture_frames", "max_decoder_reorder_frames",
             "max_gop_frames", "vmaf", "ssim", "vmaf_frame_stride", "vmaf_sampled_frames")
-    rows = [{**{key: row[key] for key in keys}, "label": LABELS[row["backend"]],
-             "comparison": "control" if row["fixture"] == "smptebars" else "common-bitrate-budget",
-             "scored_output": row["scored_output"], "measured_repeats": row["measured_repeats"]} for row in summary["rows"]]
+    repeat_keys = ("repeat", "output_sha256", "file_bytes", "duration_seconds", "container_mbps",
+                   "video_mbps", "filler_mbps", "fps", "client_cpu_seconds", "correct")
+    def public_repeat(repeat, energy_keys):
+        allowed = repeat_keys + energy_keys
+        result = {key: repeat[key] for key in allowed}
+        if not re.fullmatch(r"[0-9a-f]{64}", result["output_sha256"]):
+            raise ValueError("invalid public output hash")
+        if type(result["correct"]) is not bool or not result["correct"]:
+            raise ValueError("public repeats must pass validation")
+        for key in set(allowed) - {"output_sha256", "correct"}:
+            if isinstance(result[key], bool) or not isinstance(result[key], (int, float)) or not math.isfinite(result[key]) or result[key] < 0:
+                raise ValueError("public repeat measurements must be finite nonnegative numbers")
+        if any(result[key] <= 0 for key in ("repeat", "file_bytes", "duration_seconds", "fps") + energy_keys):
+            raise ValueError("public timing, output size, and energy must be positive")
+        return result
+
+    rows = []
+    for row in summary["rows"]:
+        nvenc = row["backend"] in NVENC_BACKENDS
+        energy_keys = GPU_ENERGY_KEYS if nvenc else MAC_ENERGY_KEYS if backends == MAC_ENERGY_BACKENDS else ()
+        if energy_keys and row["fixture"] != "smptebars" and not row["all_file_within_2_percent_target"]:
+            raise ValueError("moving energy measurements must match the common file budget")
+        repeats = [public_repeat(repeat, energy_keys) for repeat in row["measured_repeats"]]
+        if len(repeats) != 3 or [repeat["repeat"] for repeat in repeats] != [1, 2, 3]:
+            raise ValueError("public rows need exactly three measured repeats")
+        scored = public_repeat(row["scored_output"], energy_keys)
+        if scored != repeats[0]:
+            raise ValueError("quality must identify the first measured output")
+        rows.append({**{key: row[key] for key in keys}, "label": LABELS[row["backend"]],
+                     "comparison": "control" if row["fixture"] == "smptebars" else "common-bitrate-budget",
+                     "scored_output": scored, "measured_repeats": repeats})
+        if energy_keys:
+            rows[-1].update({f"median_{key}": statistics.median(repeat[key] for repeat in repeats) for key in energy_keys})
     numeric_keys = set(keys) - {"fixture", "codec", "size", "backend", "all_correct", "all_file_within_2_percent_target"}
     for row in rows:
         if any(isinstance(row[key], bool) or not isinstance(row[key], (int, float)) or not math.isfinite(row[key]) for key in numeric_keys):
@@ -74,14 +115,14 @@ def public_results(summary):
                 source_hashes.append(record)
         for key in ("native_ffmpeg", "remote_ffmpeg", "quality_ffmpeg"):
             info = host[key]
-            match = re.match(r"ffmpeg version (git-\d{4}-\d{2}-\d{2}-[0-9a-f]+|\d+\.\d+(?:\.\d+|\.git)?(?:-\d+ubuntu[0-9.+a-z]+)?) ", info["version"])
+            match = re.match(r"ffmpeg version (git-\d{4}-\d{2}-\d{2}-[0-9a-f]+|n\d+\.\d+\.\d+-\d+-g[0-9a-f]+-\d{8}|\d+\.\d+(?:\.\d+|\.git)?(?:-\d+ubuntu[0-9.+a-z]+)?) ", info["version"])
             if not match or not re.fullmatch(r"[0-9a-f]{64}", info["sha256"]):
                 raise ValueError("build identity needs a safe public version and hash")
             record = {"version": match[1], "sha256": info["sha256"]}
             if record not in builds:
                 builds.append(record)
     scorer = next(build for build in builds if build["sha256"] == metadata["quality_scorer"]["sha256"])
-    return {"date": datetime.fromisoformat(metadata["created_at"]).date().isoformat() + " UTC",
+    result = {"date": datetime.fromisoformat(metadata["created_at"]).date().isoformat() + " UTC",
             "release": metadata["release"], "fixtures": fixtures, "outputs": outputs,
             "source_hashes": source_hashes, "builds": builds, "quality_scorer": scorer,
             "frames": metadata["frames"], "repeats": metadata["repeats"],
@@ -89,8 +130,107 @@ def public_results(summary):
             "rate_control": "average/VBR, -bf 0 and zero frame reordering, 60-frame maximum GOP",
             "intel_hevc_picture_types": "Driver-required GPB B-slices use past references; no future references or frame reordering",
             "output_cost_scope": "physical output files including container overhead and every filler byte",
-            "calibration_measurement": metadata["calibration_measurement"],
+            "calibration_measurement": CALIBRATION_MEASUREMENT,
             "rows": rows}
+    if backends == NVENC_BACKENDS:
+        if len(metadata["hosts"]) != 1:
+            raise ValueError("NVENC results require one measured host")
+        host = next(iter(metadata["hosts"].values()))
+        fields = [value.strip() for value in host["nvidia"].split(",")]
+        if len(fields) != 4 or not re.fullmatch(r"NVIDIA GeForce RTX \d{4}(?: Ti| SUPER)?", fields[0]) or not re.fullmatch(r"\d{3}\.\d+\.\d+", fields[1]):
+            raise ValueError("invalid public GPU model or driver version")
+        limits = [float(value) for value in fields[2:]]
+        if any(not math.isfinite(value) or value <= 0 for value in limits):
+            raise ValueError("invalid GPU power limits")
+        result["nvenc"] = {"gpu": fields[0], "driver": fields[1],
+                           "power_limit_watts": limits[0], "default_power_limit_watts": limits[1],
+                           "encoder": next(build for build in builds if build["sha256"] == host["native_ffmpeg"]["sha256"]),
+                           "presets": ["p4", "p7"], "tuning": "hq", "multipass": "disabled",
+                           "scaler": "scale_cuda bicubic", "power_scope": "GPU board, including idle; CPU and other system components excluded"}
+        if "reference_gpu_activity_validation" in metadata:
+            audit = metadata["reference_gpu_activity_validation"]
+            audited = [repeat["output_sha256"] for row in rows
+                       if row["fixture"] == "big-buck-bunny" and row["codec"] == "hevc"
+                       and row["size"] == "1920x1080" for repeat in row["measured_repeats"]]
+            if sorted(audit["output_sha256"]) != sorted(audited) or len(audited) != 6:
+                raise ValueError("GPU activity validation must identify all six reference outputs")
+            counts = ("telemetry_samples", "encoder_activity_samples", "unrelated_active_samples")
+            if any(type(audit[key]) is not int or audit[key] < 0 for key in counts):
+                raise ValueError("GPU activity validation needs nonnegative integer counts")
+            if not audit["telemetry_samples"] or not audit["encoder_activity_samples"] or audit["unrelated_active_samples"]:
+                raise ValueError("GPU activity validation requires observed encoder activity without unrelated activity")
+            result["nvenc"]["reference_activity_validation"] = {
+                "date": datetime.fromisoformat(audit["created_at"]).date().isoformat() + " UTC",
+                "fixture": "big-buck-bunny", "codec": "hevc", "size": "1920x1080",
+                "monitored_repeats": 6, "method": "NVML per-process SM, memory, encoder and decoder activity",
+                "energy_counter_reads": "FFmpeg start and end only",
+                **{key: audit[key] for key in counts}, "output_sha256": list(audit["output_sha256"])}
+    if backends == MAC_ENERGY_BACKENDS:
+        sampler = metadata["mac_power_sampler"]
+        version = re.fullmatch(r"mactop version: v(\d+\.\d+\.\d+)", sampler["version"])
+        if not version or not re.fullmatch(r"[0-9a-f]{64}", sampler["sha256"]):
+            raise ValueError("invalid Mac power sampler identity")
+        result["mac_power"] = {"sampler": {"version": version[1], "sha256": sampler["sha256"]},
+                               "sensor": "SMC PSTR", "power_scope": "Mac system, including idle consumption"}
+    return result
+
+
+def append_nvenc_results(existing, addition):
+    """Add a complete exported NVIDIA matrix to the retained measured data."""
+    if "nvenc" not in addition:
+        raise ValueError("only an exported NVENC comparison can be appended")
+    expected = set(itertools.product(FIXTURES, ("h264", "hevc"), ("1280x720", "1920x1080"), BACKENDS))
+    identities = [(row["fixture"], row["codec"], row["size"], row["backend"]) for row in existing["rows"]]
+    if len(identities) != len(expected) or set(identities) != expected:
+        raise ValueError("existing data must contain the complete original comparison exactly once")
+    if existing["frames"] != addition["frames"] or existing["repeats"] != addition["repeats"]:
+        raise ValueError("benchmark frame and repeat counts differ")
+    scorer = addition["quality_scorer"]
+    encoder = addition["nvenc"]["encoder"]
+    sources = {record["fixture"]: record["sha256"] for record in addition["source_hashes"]}
+    rows = [{**row, "measurement_date": addition["date"],
+             "release": "FFmpeg " + encoder["version"].removeprefix("n").split("-")[0],
+             "quality_scorer_sha256": scorer["sha256"], "encoding_build_sha256": encoder["sha256"],
+             "source_sha256": sources[row["fixture"]]} for row in addition["rows"]]
+    result = {**existing, "rows": [*existing["rows"], *rows],
+              "nvenc": {**addition["nvenc"], "date": addition["date"], "source_hashes": addition["source_hashes"],
+                        "calibration_measurement": addition["calibration_measurement"]}}
+    moving = [(row, repeat) for row in result["rows"] if row["fixture"] != "smptebars"
+              for repeat in row["measured_repeats"]]
+    deviations = [abs(repeat["container_mbps"] / row["target_mbps"] - 1) * 100 for row, repeat in moving]
+    result["original_file_budget_audit"] = existing["file_budget_audit"]
+    result["file_budget_audit"] = {
+        "measured_outputs": sum(len(row["measured_repeats"]) for row in result["rows"]),
+        "moving_outputs": len(moving),
+        "moving_outputs_within_2_percent_file_target": sum(deviation <= 2 for deviation in deviations),
+        "moving_outputs_outside_2_percent_file_target": sum(deviation > 2 for deviation in deviations),
+        "max_file_target_deviation_percent": max(deviations),
+        "zero_filler_measured_outputs": sum(repeat["filler_mbps"] == 0 for row in result["rows"] for repeat in row["measured_repeats"]),
+    }
+    for key, records in (("builds", addition["builds"]), ("quality_scorers", [scorer])):
+        result[key] = list(existing[key])
+        for record in records:
+            if record not in result[key]:
+                result[key].append(record)
+    return result
+
+
+def append_mac_energy(existing, addition):
+    """Attach independently measured Mac energy without relabelling prior results."""
+    if "mac_power" not in addition or any(row["backend"] != "videotoolbox" for row in addition["rows"]):
+        raise ValueError("Mac energy requires a complete exported VideoToolbox measurement")
+    expected = set(itertools.product(FIXTURES, ("h264", "hevc"), ("1280x720", "1920x1080"), BACKENDS + NVENC_BACKENDS))
+    identities = [(row["fixture"], row["codec"], row["size"], row["backend"]) for row in existing["rows"]]
+    if len(identities) != len(expected) or set(identities) != expected:
+        raise ValueError("Mac energy must be attached to the complete seven-pipeline comparison")
+    if any(existing[key] != addition[key] for key in ("frames", "repeats", "warmup_frames", "vmaf_model")):
+        raise ValueError("Mac energy and the retained comparison use different measurement settings")
+    fixture_hashes = lambda records: {record["fixture"]: record["sha256"] for record in records}
+    if fixture_hashes(existing["nvenc"]["source_hashes"]) != fixture_hashes(addition["source_hashes"]):
+        raise ValueError("Mac energy and NVENC must use identical prepared inputs")
+    fields = ("date", "frames", "repeats", "warmup_frames", "vmaf_model", "source_hashes",
+              "builds", "quality_scorer", "calibration_measurement", "mac_power", "rows")
+    return {**existing, "videotoolbox_energy": {key: addition[key] for key in fields}}
 
 
 def identity(path):
@@ -114,9 +254,12 @@ def probe(ffprobe, path, count=False, pictures=False):
     return json.loads(capture(command))
 
 
-def measure(command, log, env=None):
+def measure(command, log, env=None, gpu=None, mac_power=None):
     started = time.monotonic()
     with Path(log).open("w") as output:
+        if gpu is not None:
+            import pynvml
+            energy_before = pynvml.nvmlDeviceGetTotalEnergyConsumption(gpu)
         process = subprocess.Popen(command, stdout=output, stderr=output, env=env)
         try:
             _, status, usage = os.wait4(process.pid, 0)
@@ -124,15 +267,26 @@ def measure(command, log, env=None):
             process.terminate()
             process.wait()
             raise
+        if gpu is not None:
+            energy_after = pynvml.nvmlDeviceGetTotalEnergyConsumption(gpu)
+    ended = time.monotonic()
     process.returncode = os.waitstatus_to_exitcode(status)
     result = {
-        "elapsed_seconds": time.monotonic() - started,
+        "elapsed_seconds": ended - started,
         "cpu_seconds": usage.ru_utime + usage.ru_stime,
         "peak_rss_bytes": usage.ru_maxrss * (1024 if platform.system() == "Linux" else 1),
         "exit_code": process.returncode,
     }
     if process.returncode:
         raise RuntimeError(f"command failed ({process.returncode}); inspect {log}")
+    if gpu is not None:
+        joules = (energy_after - energy_before) / 1000
+        if joules <= 0:
+            raise RuntimeError("GPU energy counter did not advance")
+        result.update(gpu_board_joules=joules,
+                      gpu_board_average_watts=joules / result["elapsed_seconds"])
+    if mac_power is not None:
+        result.update(mac_power.energy_between(started, ended))
     return result
 
 
@@ -195,6 +349,8 @@ def encoder_command(args, source, output):
                     "-hwaccel_output_format", "vaapi"]
     elif args.backend == "videotoolbox":
         command += ["-hwaccel", "videotoolbox", "-hwaccel_output_format", "videotoolbox_vld"]
+    elif args.backend in NVENC_BACKENDS:
+        command += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
     # Bound demuxing as well as output: older VA-API filter pools can exhaust
     # when downstream stops accepting frames but the input continues decoding.
     command += ["-t", str(args.frames / 30), "-i", str(source), "-map", "0:v:0", "-an", "-sn",
@@ -215,6 +371,10 @@ def encoder_command(args, source, output):
         elif args.backend == "videotoolbox":
             command += ["-vf", f"scale_vt=w={width}:h={height}", "-c:v", f"{args.codec}_videotoolbox",
                         "-constant_bit_rate", "0", "-allow_sw", "0", "-realtime", "0", "-prio_speed", "0"]
+        elif args.backend in NVENC_BACKENDS:
+            command += ["-vf", f"scale_cuda=w={width}:h={height}:format=yuv420p:interp_algo=bicubic",
+                        "-c:v", f"{args.codec}_nvenc", "-preset", args.backend.removeprefix("nvenc-"),
+                        "-tune", "hq", "-rc", "vbr", "-multipass", "disabled"]
         else:
             preset = args.backend.removeprefix("cpu-")
             command += ["-vf", f"scale={width}:{height}:flags=bicubic,format=yuv420p",
@@ -287,9 +447,26 @@ def worker(args):
     env = os.environ.copy()
     if args.backend == "intel-vaapi":
         env["LIBVA_DRIVER_NAME"] = "iHD"
-    before = rapl()
-    usage = measure(command, directory / "encode.log", env=env)
-    after = rapl()
+    gpu = None
+    if args.backend in NVENC_BACKENDS:
+        import pynvml
+        pynvml.nvmlInit()
+        gpu = pynvml.nvmlDeviceGetHandleByIndex(0)
+    before = rapl() if args.backend not in NVENC_BACKENDS else None
+    try:
+        if args.backend == "videotoolbox" and args.mac_power_tool:
+            from mac_power import MacPowerSampler
+            with MacPowerSampler(args.mac_power_tool, directory) as sampler:
+                usage = measure(command, directory / "encode.log", env=env, mac_power=sampler)
+            usage["mac_system_frames_per_joule"] = args.frames / usage["mac_system_joules"]
+        else:
+            usage = measure(command, directory / "encode.log", env=env, gpu=gpu)
+    finally:
+        if gpu is not None:
+            pynvml.nvmlShutdown()
+    if gpu is not None:
+        usage["gpu_board_frames_per_joule"] = args.frames / usage["gpu_board_joules"]
+    after = rapl() if args.backend not in NVENC_BACKENDS else None
     if before and after:
         usage["intel_package_joules"] = ((after["energy_uj"] - before["energy_uj"]) % before["range_uj"]) / 1_000_000
     info = probe(args.ffprobe, output, count=True, pictures=True)
@@ -367,6 +544,77 @@ def remote_command(host, argv):
     return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, shlex.join(argv)]
 
 
+def local_suite(args):
+    """Measure local hardware pipelines; staging and SSH are outside timed work."""
+    backends = args.local_backends
+    args.output.mkdir(parents=True, exist_ok=False)
+    common = [sys.executable, str(Path(__file__).resolve()), "--workdir", str(args.workdir)]
+    tools = ["--ffmpeg", args.ffmpeg, "--remote-ffmpeg", args.ffmpeg,
+             "--quality-ffmpeg", args.quality_ffmpeg, "--ffprobe", args.ffprobe]
+    information = json.loads(capture([*common, "inventory", *tools, *(["--nvidia"] if backends == NVENC_BACKENDS else [])]))
+    metadata = {"created_at": datetime.now(timezone.utc).isoformat(), "release": args.release,
+                "hosts": {platform.node(): information}, "frames": args.frames,
+                "repeats": args.repeats, "warmup_frames": args.warmup_frames,
+                "fixtures": args.fixtures, "codecs": args.codecs, "sizes": args.sizes,
+                "backends": list(backends), "quality_scorer": information["quality_ffmpeg"],
+                "calibration_measurement": CALIBRATION_MEASUREMENT,
+                "method": "Local NVDEC, bicubic scale_cuda, NVENC P4/P7 HQ VBR single-pass; zero B frames, 60-frame maximum GOP; whole-file calibration; sequential rotating repeats; full-frame VMAF/SSIM on first repeat",
+                "power_scope": "NVML cumulative GPU-board energy during the complete FFmpeg transcode; includes board idle consumption; excludes CPU and other system components"}
+    if backends == MAC_ENERGY_BACKENDS:
+        metadata["method"] = "Local hardware VideoToolbox decode, scale_vt, hardware VBR encoding; zero B frames, 60-frame maximum GOP; whole-file calibration; sequential repeats; full-frame VMAF/SSIM on first repeat"
+        metadata["power_scope"] = "SMC PSTR whole-Mac power integrated during the complete FFmpeg transcode, including idle consumption"
+        metadata["mac_power_sampler"] = {**identity(args.mac_power_tool), "version": capture([args.mac_power_tool, "--version"])}
+    (args.output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    runs = []
+    cases = list(itertools.product(args.fixtures, args.codecs, args.sizes))
+    for case_index, (fixture, codec, size) in enumerate(cases):
+        requested_rates = {backend: BITRATES[(codec, int(size.split("x")[1]))] for backend in backends}
+
+        def run_job(backend, run_id, frames, with_quality=False):
+            command = [*common, "worker", *tools, "--backend", backend, "--codec", codec,
+                       "--fixture", fixture, "--size", size, "--frames", str(frames),
+                       "--run-id", run_id, "--bitrate", str(requested_rates[backend])]
+            if with_quality:
+                command.append("--quality")
+            if backends == MAC_ENERGY_BACKENDS:
+                command += ["--mac-power-tool", args.mac_power_tool]
+            with (args.output / f"{run_id}.worker.log").open("w") as log:
+                return json.loads(capture(command, stderr=log))
+
+        if fixture != "smptebars":
+            for backend in backends:
+                for attempt in range(4):
+                    run_id = f"{args.output.name}-{fixture}-{codec}-{size}-{backend}-cal{attempt}"
+                    print(f"PERFORMANCE calibration={case_index + 1}/{len(cases)} attempt={attempt + 1} {backend} {fixture} {codec} {size}", flush=True)
+                    result = run_job(backend, run_id, args.frames)
+                    with (args.output / "calibration.jsonl").open("a") as stream:
+                        stream.write(json.dumps(result) + "\n")
+                    ratio = result["container_bitrate"] / result["target_bitrate"]
+                    if abs(ratio - 1) <= 0.02:
+                        break
+                    requested_rates[backend] = round(requested_rates[backend] / ratio)
+                else:
+                    raise RuntimeError(f"could not match whole-file bitrate: {fixture} {codec} {size} {backend}")
+        for repeat in range(args.repeats + 1):
+            order = list(backends)
+            if (case_index + max(repeat - 1, 0)) % 2:
+                order.reverse()
+            for backend in order:
+                run_id = f"{args.output.name}-{fixture}-{codec}-{size}-{backend}-r{repeat}"
+                print(f"PERFORMANCE case={case_index + 1}/{len(cases)} repeat={repeat}/{args.repeats} {backend} {fixture} {codec} {size}", flush=True)
+                result = run_job(backend, run_id, args.warmup_frames if repeat == 0 else args.frames, repeat == 1)
+                if repeat and fixture != "smptebars" and not result["file_within_2_percent_target"]:
+                    raise RuntimeError(f"whole-file bitrate outside 2% comparison tolerance: {run_id}")
+                result["repeat"] = repeat
+                with (args.output / "runs.jsonl").open("a") as stream:
+                    stream.write(json.dumps(result) + "\n")
+                if repeat:
+                    runs.append(result)
+    summary = summarize(metadata, runs)
+    (args.output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    print(f"PERFORMANCE complete rows={len(summary['rows'])} all_correct={summary['all_correct']}", flush=True)
+
+
 def suite(args):
     args.output.mkdir(parents=True, exist_ok=False)
     script = str(args.workdir / "performance.py")
@@ -395,7 +643,7 @@ def suite(args):
             raise RuntimeError("Intel and Mac fixtures differ; refusing the comparison")
         metadata = {"created_at": datetime.now(timezone.utc).isoformat(), "release": args.release, "server": ready,
                     "hosts": host_info, "method": f"Sequential full-video pipelines; average/VBR on every backend; common -bf 0 and zero frame reordering, with driver-required past-reference GPB slices on Intel HEVC; 60-frame maximum GOP; identical byte-only full-clip calibration for every moving-video backend; whole-file bitrate within 2%; {args.warmup_frames}-frame warm-up and {args.repeats} rotating measured repeats; static bars are a control; VMAF and SSIM over every frame on one common Linux scorer on the first measured repeat",
-                    "calibration_measurement": "Whole-file bitrate reported by ffprobe; container overhead and codec filler included",
+                    "calibration_measurement": CALIBRATION_MEASUREMENT,
                     "quality_scorer": host_info[args.linux_host]["quality_ffmpeg"],
                     "frames": args.frames, "warmup_frames": args.warmup_frames, "repeats": args.repeats,
                     "sizes": args.sizes, "fixtures": args.fixtures, "codecs": args.codecs, "backends": args.backends,
@@ -504,6 +752,10 @@ def summarize(metadata, runs):
                     "filler_mbps": run["filler_bitrate"] / 1_000_000, "fps": run["fps"],
                     "client_cpu_seconds": run["usage"]["cpu_seconds"], "correct": run["correct"]}
                    for run in sorted(group, key=lambda run: run["repeat"])]
+        energy_keys = GPU_ENERGY_KEYS if backend in NVENC_BACKENDS else MAC_ENERGY_KEYS if "mac_system_joules" in group[0]["usage"] else ()
+        if energy_keys:
+            for repeat, run in zip(repeats, sorted(group, key=lambda run: run["repeat"])):
+                repeat.update({key: run["usage"][key] for key in energy_keys})
         rows.append({"fixture": fixture, "codec": codec, "size": size, "backend": backend,
                      "median_fps": statistics.median(rates), "min_fps": min(rates), "max_fps": max(rates),
                      "fps_cv_percent": statistics.stdev(rates) / statistics.mean(rates) * 100 if len(rates) > 1 else 0,
@@ -532,7 +784,11 @@ def inventory(args):
         information["hardware"] = capture(["/usr/sbin/sysctl", "-n", "hw.model", "hw.memsize", "machdep.cpu.brand_string"])
     else:
         information["hardware"] = capture(["lscpu", "--json"])
-        information["vaapi"] = capture(["vainfo", "--display", "drm", "--device", args.render_node], stderr=subprocess.STDOUT)
+        if args.nvidia:
+            information["nvidia"] = capture(["nvidia-smi", "--query-gpu=name,driver_version,power.limit,power.default_limit",
+                                              "--format=csv,noheader,nounits"])
+        else:
+            information["vaapi"] = capture(["vainfo", "--display", "drm", "--device", args.render_node], stderr=subprocess.STDOUT)
     for label, path in (("native_ffmpeg", args.ffmpeg), ("remote_ffmpeg", args.remote_ffmpeg), ("quality_ffmpeg", args.quality_ffmpeg), ("ffprobe", args.ffprobe)):
         information[label] = {**identity(path), "version": capture([path, "-version"])}
     information["fixture_manifest"] = json.loads((args.workdir / "fixtures/manifest.json").read_text())
@@ -560,8 +816,11 @@ def main():
         job.add_argument("--quality-ffmpeg", required=True)
         job.add_argument("--ffprobe", default="/usr/bin/ffprobe")
         job.add_argument("--render-node", default="/dev/dri/renderD128")
+        if name == "inventory":
+            job.add_argument("--nvidia", action="store_true")
         if name == "worker":
-            job.add_argument("--backend", choices=BACKENDS, required=True)
+            job.add_argument("--mac-power-tool", help="Installed mactop binary for SMC system-power sampling")
+            job.add_argument("--backend", choices=BACKENDS + NVENC_BACKENDS, required=True)
             job.add_argument("--codec", choices=("h264", "hevc"), required=True)
             job.add_argument("--fixture", choices=FIXTURES, required=True)
             job.add_argument("--size", choices=("1280x720", "1920x1080"), required=True)
@@ -591,16 +850,43 @@ def main():
     run.add_argument("--codecs", nargs="+", choices=("h264", "hevc"), default=["h264", "hevc"])
     run.add_argument("--sizes", nargs="+", choices=("1280x720", "1920x1080"), default=["1280x720", "1920x1080"])
     run.add_argument("--backends", nargs="+", choices=BACKENDS, default=list(BACKENDS))
+    for name, backends in (("nvenc-suite", NVENC_BACKENDS), ("videotoolbox-energy", MAC_ENERGY_BACKENDS)):
+        local = commands.add_parser(name)
+        local.set_defaults(local_backends=backends)
+        local.add_argument("--ffmpeg", required=True)
+        local.add_argument("--ffprobe", required=True)
+        local.add_argument("--quality-ffmpeg", required=True)
+        local.add_argument("--release", required=True)
+        local.add_argument("--output", type=Path, required=True)
+        local.add_argument("--frames", type=int, default=1800)
+        local.add_argument("--warmup-frames", type=int, default=60)
+        local.add_argument("--repeats", type=int, default=3)
+        local.add_argument("--fixtures", nargs="+", choices=FIXTURES, default=list(FIXTURES))
+        local.add_argument("--codecs", nargs="+", choices=("h264", "hevc"), default=["h264", "hevc"])
+        local.add_argument("--sizes", nargs="+", choices=("1280x720", "1920x1080"), default=["1280x720", "1920x1080"])
+        if backends == MAC_ENERGY_BACKENDS:
+            local.add_argument("--mac-power-tool", required=True)
     public = commands.add_parser("public-results")
     public.add_argument("--input", type=Path, required=True)
+    public.add_argument("--append-to", type=Path)
+    public.add_argument("--output", type=Path)
     args = parser.parse_args()
     if getattr(args, "frames", 1) <= 0 or getattr(args, "repeats", 1) <= 0:
         parser.error("frames and repeats must be positive")
     if args.command == "public-results":
-        print(json.dumps(public_results(json.loads(args.input.read_text())), indent=2))
+        result = public_results(json.loads(args.input.read_text()))
+        if args.append_to:
+            existing = json.loads(args.append_to.read_text())
+            result = append_mac_energy(existing, result) if "mac_power" in result else append_nvenc_results(existing, result)
+        serialized = json.dumps(result, indent=2) + "\n"
+        if args.output:
+            args.output.write_text(serialized)
+        else:
+            print(serialized, end="")
         return
     {"prepare": prepare, "worker": worker, "quality": quality_worker,
-     "serve": serve, "suite": suite, "inventory": inventory}[args.command](args)
+     "serve": serve, "suite": suite, "nvenc-suite": local_suite, "videotoolbox-energy": local_suite,
+     "inventory": inventory}[args.command](args)
 
 
 if __name__ == "__main__":

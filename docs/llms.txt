@@ -9,7 +9,7 @@ permalink: /llms.txt
 **Goal**: High-quality, low-power remote hardware video processing: keep Plex and automation on Linux while a macOS 13+ Mac (including macOS 27) supplies VideoToolbox over LAN.
 
 ## What It Does
-VideoToolbox Remote turns an Apple Silicon or supported T2 Mac on a LAN into a hardware H.264/HEVC transcoding engine. FFmpeg clients on Linux, Windows, or macOS select remote codecs (`h264_videotoolbox_remote`, `hevc_videotoolbox_remote`). Supported Plex packet transcodes can run on GPU-less Linux hosts while the Mac performs video decode, optional resize and encode. Batch jobs, stock Linux VA-API encoding and experimental OBS live encoding use the same daemon. Published quality/CPU measurements exist; whole-system watts and energy savings are not yet measured.
+VideoToolbox Remote turns an Apple Silicon or supported T2 Mac on a LAN into a hardware H.264/HEVC transcoding engine. FFmpeg clients on Linux, Windows, or macOS select remote codecs (`h264_videotoolbox_remote`, `hevc_videotoolbox_remote`). Supported Plex packet transcodes can run on GPU-less Linux hosts while the Mac performs video decode, optional resize and encode. Batch jobs, stock Linux VA-API encoding and experimental OBS live encoding use the same daemon. Published benchmarks include speed, quality, CPU time, M2 Mac-system energy and NVENC GPU-board energy.
 
 ## Core Architecture
 - **Server (`vtremoted`)**: Swift daemon wrapping VideoToolbox. Defaults to loopback TCP 5555; explicit private/VPN bind or a tunnel is needed for other hosts.
@@ -66,13 +66,12 @@ make -j$(nproc)
 - **Wire compression**: LZ4, Zstd, or none. FFmpeg/OBS default to LZ4; the VA-API driver defaults to automatic selection. The macOS server loads LZ4/Zstd at runtime only when requested.
 
 ## Performance
-- Published comparisons use Big Buck Bunny and FFmpeg testsrc2/SMPTE color-bar inputs, with identical fixture hashes on both hosts.
-- Pipelines are Intel iGPU VA-API, CPU fast/medium presets, local VideoToolbox and remote VideoToolbox.
-- Local and remote VideoToolbox use the same M2 Mac; the remote client runs on the Intel Linux host.
-- The original five-pipeline comparison was measured with v0.9.14. Big Buck Bunny H.264 local/remote VideoToolbox rows were refreshed with v0.9.16 after closing screen sharing; other valid results retain their original dates and builds. Average/VBR, zero frame reordering and a 60-frame maximum GOP are shared. Intel HEVC uses past-reference GPB B-slices despite `-bf 0`. Of 120 moving outputs, 117 meet the 2% whole-file budget target; three retained CPU-medium HEVC 720p files deviate by at most 2.066%. Static bars are separate controls.
-- Interactive graphs compare transcode throughput, VMAF and submitting-process CPU time by input, codec and resolution. Exact values include measurement dates, release versions, physical file size, full reported container bitrate, SSIM and repeat ranges. All first-repeat quality measurements score all 1,800 frames with the same Linux reference/model settings; original and refreshed scorer hashes are recorded per row. JSON binds scores to their own file sizes/hashes and preserves every measured repeat. Whole-file bitrate includes container overhead and filler.
-- Packet transcoding avoids raw-frame network transport when local video filters are unnecessary. Raw-frame encoding has different bandwidth costs.
-- Intel RAPL package energy is not whole-system power. Whole-system watt savings have not been measured.
+- VideoToolbox Remote gives SBCs, mini PCs and compact Linux servers hardware video processing through a Mac on the LAN, without adding a discrete GPU to the Linux host.
+- Remote VideoToolbox delivers 186–209 fps in the 1080p moving-video tests, using less than one CPU second of Linux FFmpeg work per 60-second clip. Local and remote VideoToolbox use the same M2 Mac.
+- Interactive graphs compare speed, VMAF, CPU time and energy across Intel VA-API, CPU fast/medium, local/remote VideoToolbox and NVIDIA NVENC P4/P7 on an RTX 3070 Ti.
+- Cases use the same Big Buck Bunny segment and FFmpeg test signals, H.264/HEVC at 720p/1080p, common bitrate budgets, a 60-frame GOP, a 60-frame warm-up and three measured repeats. Static bars are controls.
+- VMAF 0.6.1 and SSIM score every frame of the first measured repeat. File sizes and rates include container overhead and filler. Downloadable data includes all repeats, dates, build identities and scored-file hashes.
+- Energy measures the Mac system for local VideoToolbox and the GPU board for NVENC. The fresh Big Buck Bunny HEVC 1080p energy results are 57.6 J for VideoToolbox, 500.8 J for P4 and 1,213.2 J for P7 per 60-second clip. Exact values include watts and frames per joule.
 
 ## Key Constraints
 - Server **must** run on macOS with hardware encoding support.

@@ -129,7 +129,7 @@ All five backends use average/VBR rate control, `-bf 0` (or its remote equivalen
 
 Filler counts as actual storage and bandwidth. A diagnostic operates on a separate copy: `h264_metadata=delete_filler=1` removes H.264 filler units and `filter_units=remove_types=38` removes HEVC filler NAL units. Measured file size and container bitrate include every original byte, including overhead and filler. Quality scoring uses the original output. The diagnostic does not reduce the comparison's output cost.
 
-The published comparison retains valid original v0.9.14 measurements and refreshes the completed Big Buck Bunny H.264 VideoToolbox rows with v0.9.16. Its graphs and exact values come from the same measured dataset, with dates, releases and scorer identities per row. Fix-specific validation stays outside the performance page; do not relabel earlier builds as measurements of a new release.
+Graphs and exact values use `docs/_data/performance.json`. Each row records its measurement date, build and scorer identity, with quality scores bound to the first measured output.
 
 Raw `metadata.json`, `runs.jsonl`, `summary.json`, worker captures and logs contain private infrastructure details. Keep them outside Git. For publication, this command prints measured data, generic labels, tool versions and SHA-256 hashes:
 
@@ -140,6 +140,97 @@ python3 tests/integration/performance.py \
 ```
 
 Review that output before updating `docs/_data/performance.json`. The exporter rejects incomplete, failed, short or sparsely scored comparisons. It preserves every measured repeat and binds each quality score to its own first-repeat file size and hash; infrastructure inventory and connection details stay in the raw records. The page shows full output cost, quality and throughput; client CPU time excludes the remote daemon. Intel RAPL captures are diagnostics, not whole-system power measurements. The performance suite runs manually and is not added to CI.
+
+### NVIDIA NVENC
+
+The `nvenc-suite` command adds P4 and P7 measurements using the same fixtures,
+bitrates, 60-frame GOP, zero frame reordering, calibration, warm-up and repeat
+counts. Both presets use HQ tuning, VBR and single-pass encoding. NVDEC and
+bicubic `scale_cuda` keep decoded frames on the GPU. Input staging, SSH and
+quality scoring are outside the timed transcode.
+
+On the GPU host, install an FFmpeg build with `h264_nvenc`, `hevc_nvenc`, CUDA
+decode, `scale_cuda` and `libvmaf`, plus matching NVIDIA encode/decode runtime
+libraries. Verify the downloaded archive's checksum and both codec pipelines
+before measuring. Install the maintained `nvidia-ml-py` bindings in an isolated
+Python environment. Its cumulative energy counter must be supported; the suite
+records GPU-board joules, average watts and frames per joule for every run.
+
+Use a new working directory outside Git, and stage the standard `fixtures/`
+directory there. Fixtures can be prepared with the same `prepare` command above.
+Copy `performance.py` there, then run directly on the GPU host:
+
+```bash
+/tmp/vtremote-nvenc/venv/bin/python /tmp/vtremote-nvenc/performance.py \
+  --workdir /tmp/vtremote-nvenc nvenc-suite \
+  --ffmpeg /tmp/vtremote-nvenc/tools/bin/ffmpeg \
+  --ffprobe /tmp/vtremote-nvenc/tools/bin/ffprobe \
+  --quality-ffmpeg /tmp/vtremote-nvenc/tools/bin/ffmpeg \
+  --release v0.10.0 --output /tmp/vtremote-nvenc/measured
+```
+
+This measures 24 cases and retains all 72 measured outputs. Start with a separate
+full-length preflight by adding `--fixtures big-buck-bunny --codecs hevc
+--sizes 1920x1080 --repeats 1`; incomplete preflights cannot be published.
+The `--release` value identifies the benchmark harness checkout; exported NVIDIA
+rows identify their actual FFmpeg build separately.
+
+Copy the completed summary to a private coordinator directory. Append the
+allowlisted measurements to the retained comparison:
+
+```bash
+python3 tests/integration/performance.py --workdir /tmp/vtremote-nvenc \
+  public-results --input /tmp/vtremote-nvenc/measured/summary.json \
+  --append-to docs/_data/performance.json --output docs/_data/performance.json
+python3 tests/test_performance.py
+```
+
+Review the exported data and diff before committing. The exporter requires the
+complete NVIDIA matrix, validates repeat-level numbers and output identities,
+and excludes private inventory, paths and commands at every exported depth.
+GPU-board energy includes idle board consumption and excludes the rest of the
+machine. Existing benchmark measurements retain their original dates and builds.
+
+For GPU activity checks, capture NVML per-process SM, memory, encoder and decoder
+activity. Keep process IDs and commands in private captures. The exporter binds
+`metadata.reference_gpu_activity_validation` to the six reference output hashes.
+Read the cumulative energy counter only at transcode start and end; use power
+and process telemetry for continuous monitoring.
+
+### VideoToolbox system energy
+
+On the Mac, stage the same prepared `fixtures/`, `performance.py` and
+`mac_power.py` in a working directory outside Git. Install mactop and verify that
+its SMC system-total power is available. The sampler requires positive system
+power and samples that bracket each complete transcode, rejecting gaps above
+0.8 seconds. It integrates watts at the exact FFmpeg start and end boundaries.
+
+```bash
+/opt/homebrew/bin/python3 /tmp/vtremote-energy/performance.py \
+  --workdir /tmp/vtremote-energy videotoolbox-energy \
+  --ffmpeg /opt/homebrew/bin/ffmpeg --ffprobe /opt/homebrew/bin/ffprobe \
+  --quality-ffmpeg /opt/homebrew/bin/ffmpeg \
+  --mac-power-tool /opt/homebrew/bin/mactop \
+  --release v0.10.0 --output /tmp/vtremote-energy/measured
+```
+
+The twelve cases use the same output budgets, whole-file calibration, warm-up,
+three measured repeats and full-frame VMAF/SSIM checks as the NVIDIA suite.
+Energy includes the Mac system's idle consumption during the transcode. Keep
+raw SMC/process captures outside Git. Copy only the completed summary to a
+private coordinator directory, then attach its allowlisted measurements:
+
+```bash
+python3 tests/integration/performance.py --workdir /tmp/vtremote-energy \
+  public-results --input /tmp/vtremote-energy/measured/summary.json \
+  --append-to docs/_data/performance.json --output docs/_data/performance.json
+python3 tests/test_performance.py
+python3 tests/test_mac_power.py
+```
+
+The exporter requires a complete twelve-case matrix and adds it under
+`videotoolbox_energy`, retaining the seven-pipeline measurements. Mac-system
+and NVIDIA GPU-board energy are labelled with their respective scopes.
 
 ## Integration script options
 

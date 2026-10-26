@@ -55,14 +55,14 @@ home: true
 
 <section class="landing-section performance-preview" aria-labelledby="performance-title">
   <div>
-    <h2 id="performance-title">See the speed.<br>Check the quality.</h2>
-    <p>Compare Intel iGPU VA-API, CPU fast and medium presets, and local and remote VideoToolbox. Explore throughput, VMAF and physical file size at the same bitrate budget.</p>
+    <h2 id="performance-title">Hardware transcoding<br>for compact servers.</h2>
+    <p>Keep Linux on an SBC, mini PC or compact server. Use a Mac already on your LAN for hardware video processing, without adding a discrete GPU to your server.</p>
     <a class="text-link" href="performance.html">Explore the interactive benchmarks →</a>
-    <p class="measurement-note">Big Buck Bunny and FFmpeg test signals. Whole-system power has not been measured; see <a href="performance.html#power-and-quality">power and quality guidance</a>.</p>
+    <p class="measurement-note">Compare speed, quality, CPU time and energy with local VideoToolbox, NVIDIA NVENC, Intel VA-API and CPU encoding.</p>
   </div>
   <figure class="performance-shot">
-    <a href="performance.html" aria-label="Open the interactive performance benchmarks"><img src="assets/performance-preview.png" width="760" height="360" loading="lazy" alt="Measured HEVC 1080p throughput for five pipelines, plotted from zero. Remote VideoToolbox: 186.1 frames per second. Open the benchmarks for all values and quality results."></a>
-    <figcaption>Big Buck Bunny · HEVC · 1080p · 4 Mb/s budget<br>Measured 2026-10-04 · v0.9.14 · median of three runs</figcaption>
+    <a href="performance.html" aria-label="Open the interactive performance benchmarks"><img src="assets/performance-preview.png" width="760" height="360" loading="lazy" alt="Measured HEVC 1080p throughput for seven pipelines, plotted from zero. NVIDIA NVENC P4: 352.5 frames per second. Open the benchmarks for all values and quality results."></a>
+    <figcaption>Big Buck Bunny · HEVC · 1080p · 4 Mb/s budget<br>Median of three runs</figcaption>
   </figure>
 </section>
 

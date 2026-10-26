@@ -1,6 +1,6 @@
 ---
 title: Performance
-description: "Compare Intel VA-API, CPU fast/medium, local VideoToolbox and remote VideoToolbox with graphs of transcode speed, video quality and CPU time at matched file budgets."
+description: "Hardware video processing for SBCs, mini PCs and compact servers. Compare VideoToolbox and NVENC speed, quality, CPU time and energy."
 noindex: true
 ---
 
