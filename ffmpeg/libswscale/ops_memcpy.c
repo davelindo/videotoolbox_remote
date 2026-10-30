@@ -38,8 +38,8 @@ typedef struct MemcpyPriv {
 
 /* Memcpy backend for trivial cases */
 
-static void process(const SwsOpExec *exec, const void *priv,
-                    int x_start, int y_start, int x_end, int y_end)
+static void process_memcpy(const SwsOpExec *exec, const void *priv,
+                           int x_start, int y_start, int x_end, int y_end)
 {
     const MemcpyPriv *p = priv;
     const int lines = y_end - y_start;
@@ -49,9 +49,11 @@ static void process(const SwsOpExec *exec, const void *priv,
         uint8_t *out = exec->out[i];
         const int idx = p->index[i];
         const int bytes = x_end * exec->block_size_out[i];
-        const int use_loop = exec->out_stride[i] > bytes + SWS_MAX_PADDING;
+        const int use_loop = exec->out_stride[i] < 0 ||
+                             exec->out_stride[i] > bytes + SWS_MAX_PADDING;
+        const size_t span = (size_t) (lines - 1) * exec->out_stride[i] + bytes;
         if (idx < 0 && !use_loop) {
-            memset(out, p->clear_value[i], exec->out_stride[i] * lines);
+            memset(out, p->clear_value[i], span);
         } else if (idx < 0) {
             for (int y = y_start; y < y_end; y++) {
                 memset(out, p->clear_value[i], bytes);
@@ -61,7 +63,7 @@ static void process(const SwsOpExec *exec, const void *priv,
             av_assert1(exec->out_stride[i] == exec->in_stride[idx]);
             continue; /* plane was already ref'd */
         } else if (exec->out_stride[i] == exec->in_stride[idx] && !use_loop) {
-            memcpy(out, exec->in[idx], exec->out_stride[i] * lines);
+            memcpy(out, exec->in[idx], span);
         } else {
             const uint8_t *in = exec->in[idx];
             for (int y = y_start; y < y_end; y++) {
@@ -73,7 +75,7 @@ static void process(const SwsOpExec *exec, const void *priv,
     }
 }
 
-static int compile(SwsContext *ctx, const SwsOpList *ops, SwsCompiledOp *out)
+static int compile_ops_memcpy(SwsContext *ctx, const SwsOpList *ops, SwsCompiledOp *out)
 {
     MemcpyPriv p = {0};
 
@@ -137,7 +139,7 @@ static int compile(SwsContext *ctx, const SwsOpList *ops, SwsCompiledOp *out)
     *out = (SwsCompiledOp) {
         .slice_align = 1,
         .block_size  = 1,
-        .func = process,
+        .func = process_memcpy,
         .priv = av_memdup(&p, sizeof(p)),
         .free = av_free,
     };
@@ -147,6 +149,6 @@ static int compile(SwsContext *ctx, const SwsOpList *ops, SwsCompiledOp *out)
 const SwsOpBackend backend_murder = {
     .name       = "memcpy",
     .flags      = SWS_BACKEND_MEMCPY,
-    .compile    = compile,
+    .compile    = compile_ops_memcpy,
     .hw_format  = AV_PIX_FMT_NONE,
 };

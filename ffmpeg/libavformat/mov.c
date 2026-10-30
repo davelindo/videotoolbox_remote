@@ -9451,9 +9451,13 @@ static int mov_read_auxc(MOVContext *c, AVIOContext *pb, MOVAtom atom)
            c->cur_item_id, aux_type.str);
 
     item = get_heif_item(c, c->cur_item_id);
-    if (item && (av_stristr(aux_type.str, "hdrgainmap")))
-        item->is_gainmap = 1;
-
+    if (item) {
+        if ((av_stristr(aux_type.str, "hdrgainmap")))
+            item->is_gainmap = 1;
+        else if (strstr(aux_type.str, "urn:mpeg:hevc:2015:auxid:1") ||
+                 strstr(aux_type.str, "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha"))
+            item->is_alpha = 1;
+    }
     return 0;
 }
 
@@ -11009,6 +11013,12 @@ static int read_tfra(MOVContext *mov, AVIOContext *f)
     if (avio_rb32(f) != MKBETAG('t', 'f', 'r', 'a')) {
         return 1;
     }
+    /* A tfra box can not be smaller than its 24-byte header. A size of 0
+     * would make mov_read_mfra() re-read the same box forever. */
+    if (size < 24) {
+        av_log(mov->fc, AV_LOG_ERROR, "Invalid tfra size %"PRIu32"\n", size);
+        return AVERROR_INVALIDDATA;
+    }
     av_log(mov->fc, AV_LOG_VERBOSE, "found tfra\n");
 
     version = avio_r8(f);
@@ -11110,28 +11120,22 @@ static int set_exif_from_item(AVFormatContext *s,
                                                     AV_PKT_DATA_EXIF);
     const AVExifMetadata *ifd = &item->ifd;
     AVBufferRef *buf = NULL;
-    int64_t offset;
     int err;
 
     if (sd)
         return 0;
 
-    err = av_exif_write(s, ifd, &buf, AV_EXIF_T_OFF);
+    err = av_exif_write(s, ifd, &buf, AV_EXIF_TIFF_HEADER);
     if (err < 0)
         return err;
 
-    offset = AV_RB32(buf->data) + 4;
-    if (offset >= buf->size) {
-        av_buffer_unref(&buf);
-        return AVERROR_INVALIDDATA;
-    }
     sd = av_packet_side_data_new(coded_side_data, nb_coded_side_data,
-                                 AV_PKT_DATA_EXIF, buf->size - offset, 0);
+                                 AV_PKT_DATA_EXIF, buf->size, 0);
     if (!sd) {
         av_buffer_unref(&buf);
         return AVERROR(ENOMEM);
     }
-    memcpy(sd->data, buf->data + offset, buf->size - offset);
+    memcpy(sd->data, buf->data, buf->size);
 
     av_buffer_unref(&buf);
 
@@ -11759,9 +11763,66 @@ fail:
     return err;
 }
 
+static int mov_parse_heif_layered_video_auxl_alpha(AVFormatContext *s,
+                                                   HEIFItem *base, HEIFItem *alpha)
+{
+    AVStreamGroupLayeredVideo *layered_video;
+    AVStreamGroup *stg;
+    int err;
+
+    if ((!alpha->st && !alpha->stg) ||
+        (!base->st && !base->stg)) {
+        av_log(s, AV_LOG_WARNING, "HEIF alpha id %d or its base doesn't reference "
+                                  "a stream or group\n",
+               alpha->item_id);
+        return 0;
+    }
+
+    stg = avformat_stream_group_create(s, AV_STREAM_GROUP_PARAMS_ALPHA, NULL);
+    if (!stg)
+        return AVERROR(ENOMEM);
+
+    stg->id = alpha->item_id;
+    layered_video = stg->params.layered_video;
+
+    layered_video->width  = base->width;
+    layered_video->height = base->height;
+    layered_video->el_index = 1;
+
+    av_assert0(!base->st != !base->stg);
+    if (base->st)
+        err = avformat_stream_group_add_stream(stg, base->st);
+    else
+        err = avformat_stream_group_add_stream_group(stg, base->stg);
+    if (err < 0) {
+        if (err == AVERROR(EEXIST))
+            err = AVERROR_INVALIDDATA;
+        return err;
+    }
+
+    av_assert0(!alpha->st != !alpha->stg);
+    if (alpha->st)
+        err = avformat_stream_group_add_stream(stg, alpha->st);
+    else
+        err = avformat_stream_group_add_stream_group(stg, alpha->stg);
+    if (err < 0) {
+        if (err == AVERROR(EEXIST))
+            err = AVERROR_INVALIDDATA;
+        return err;
+    }
+
+    // Apply all references from the base image to the Alpha group
+    err = mov_apply_heif_item_references(s, base, &stg->coded_side_data,
+                                                  &stg->nb_coded_side_data);
+    if (err < 0)
+        return err;
+
+    return 0;
+}
+
 // Parse Apple style Gain Map metadata from Exif values
 // See https://developer.apple.com/documentation/appkit/applying-apple-hdr-effect-to-your-photos
-static int mov_parse_heif_layered_video_auxl(AVFormatContext *s,
+static int mov_parse_heif_layered_video_auxl_gmap(AVFormatContext *s,
                                              HEIFItem *base, HEIFItem *gain_map)
 {
     AVStreamGroupLayeredVideo *layered_video;
@@ -11922,13 +11983,18 @@ static int mov_parse_heif_layered_video(AVFormatContext *s)
             av_assert0(ref);
             switch(item->iref_to_list[j].type) {
             case MKTAG('a','u','x','l'):
-                if (!item->is_gainmap)
+                if (item->is_alpha) {
+                    err = mov_parse_heif_layered_video_auxl_alpha(s, ref, item);
+                    if (err < 0)
+                       return err;
                     break;
-
-                err = mov_parse_heif_layered_video_auxl(s, ref, item);
-                if (err < 0)
-                   return err;
-                break;
+                }
+                if (item->is_gainmap) {
+                    err = mov_parse_heif_layered_video_auxl_gmap(s, ref, item);
+                    if (err < 0)
+                       return err;
+                    break;
+                }
             }
         }
     }
@@ -11990,15 +12056,13 @@ static int mov_parse_heif_items(AVFormatContext *s)
         mov_build_index(mov, st);
     }
 
-    if (mov->nb_heif_group) {
-        err = mov_parse_tiles(s);
-        if (err < 0)
-            return err;
+    err = mov_parse_tiles(s);
+    if (err < 0)
+        return err;
 
-        err = mov_parse_heif_layered_video(s);
-        if (err < 0)
-            return err;
-    }
+    err = mov_parse_heif_layered_video(s);
+    if (err < 0)
+        return err;
 
     return 0;
 }

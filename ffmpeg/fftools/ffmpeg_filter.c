@@ -199,6 +199,8 @@ typedef struct OutputFilterPriv {
     void                   *log_parent;
     char                    log_name[32];
 
+#define NEEDED_EXPLICIT 1
+#define NEEDED_INTERNAL 2
     int                     needed;
 
     /* desired output stream properties */
@@ -921,7 +923,8 @@ int ofilter_bind_enc(OutputFilter *ofilter, unsigned sched_idx_enc,
     av_assert0(!opts->enc ||
                ofilter->type == opts->enc->type);
 
-    ofp->needed = ofilter->bound = 1;
+    ofp->needed = NEEDED_EXPLICIT;
+    ofilter->bound = 1;
     av_freep(&ofilter->linklabel);
 
     ofp->flags       |= opts->flags;
@@ -1043,7 +1046,7 @@ static int ofilter_bind_ifilter(OutputFilter *ofilter, InputFilterPriv *ifp,
     av_assert0(!ofilter->bound);
     av_assert0(ofilter->type == ifp->ifilter.type);
 
-    ofp->needed = ofilter->bound = 1;
+    ofilter->bound = 1;
     av_freep(&ofilter->linklabel);
 
     ofilter->output_name = av_strdup(opts->name);
@@ -1469,7 +1472,7 @@ static int fg_complex_bind_input(FilterGraph *fg, InputFilter *ifilter, int comm
                             return ret;
                         }
                     } else
-                        ofp_from_ofilter(ofilter)->needed = 1;
+                        ofp_from_ofilter(ofilter)->needed = NEEDED_INTERNAL;
                     return 0;
                 }
             }
@@ -1544,7 +1547,7 @@ static int fg_complex_bind_input(FilterGraph *fg, InputFilter *ifilter, int comm
                             return ret;
                         }
                     } else
-                        ofp_from_ofilter(ofilter)->needed = 1;
+                        ofp_from_ofilter(ofilter)->needed = NEEDED_INTERNAL;
                     return 0;
                 }
             }
@@ -1601,13 +1604,21 @@ int fg_finalise_bindings(void)
 {
     int ret;
 
+retry:
+    for (int i = 0; i < nb_filtergraphs; i++) {
+        FilterGraph *fg = filtergraphs[i];
+        for (int j = 0; j < fg->nb_outputs; j++) {
+            OutputFilter *output = fg->outputs[j];
+            ofp_from_ofilter(output)->needed &= ~NEEDED_INTERNAL;
+        }
+    }
     for (int i = 0; i < nb_filtergraphs; i++) {
         ret = bind_inputs(filtergraphs[i], 0);
         if (ret < 0)
             return ret;
     }
 
-    // check that all outputs were bound
+    // check that all outputs were marked as needed to be bound
     for (int i = nb_filtergraphs - 1; i >= 0; i--) {
         FilterGraph *fg = filtergraphs[i];
         FilterGraphPriv *fgp = fgp_from_fg(filtergraphs[i]);
@@ -1634,7 +1645,7 @@ int fg_finalise_bindings(void)
                     memmove(&filtergraphs[i],
                             &filtergraphs[i + 1],
                             (nb_filtergraphs - i) * sizeof(*filtergraphs));
-                break;
+                goto retry;
             }
         }
     }
@@ -2220,10 +2231,13 @@ static int configure_filtergraph(FilterGraph *fg, FilterGraphThread *fgt)
         fgt->graph->nb_threads = filter_complex_nbthreads;
     }
 
-    if (filter_buffered_frames) {
-        ret = av_opt_set_int(fgt->graph, "max_buffered_frames", filter_buffered_frames, 0);
+    for (int type = 0; type < AVMEDIA_TYPE_NB; type++) {
+        const int limit = filter_buffered_frames[type];
+        if (limit <= 0)
+            continue;
+        ret = avfilter_graph_set_max_buffered_frames(fgt->graph, type, limit);
         if (ret < 0)
-            return ret;
+            goto fail;
     }
 
     hw_device = hw_device_for_filter();
@@ -2326,7 +2340,9 @@ static int configure_filtergraph(FilterGraph *fg, FilterGraphThread *fgt)
     /* send the EOFs for the finished inputs */
     for (int i = 0; i < fg->nb_inputs; i++) {
         InputFilter *ifilter = fg->inputs[i];
-        if (fgt->eof_in[i]) {
+        InputFilterPriv *ifp = ifp_from_ifilter(ifilter);
+
+        if (fgt->eof_in[i] || ifp->eof) {
             ret = av_buffersrc_add_frame(ifilter->filter, NULL);
             if (ret < 0)
                 goto fail;
@@ -2486,8 +2502,9 @@ static int choose_input(const FilterGraph *fg, const FilterGraphThread *fgt)
 
     for (int i = 0; i < fg->nb_inputs; i++) {
         InputFilter *ifilter = fg->inputs[i];
+        InputFilterPriv *ifp = ifp_from_ifilter(ifilter);
 
-        if (fgt->eof_in[i])
+        if (fgt->eof_in[i] || ifp->eof)
             continue;
 
         nb_requests = av_buffersrc_get_nb_failed_requests(ifilter->filter);
@@ -3046,6 +3063,14 @@ static int read_frames(FilterGraph *fg, FilterGraphThread *fgt,
 
 
         ret = avfilter_graph_request_oldest(fgt->graph);
+
+        // ensure all inputs no longer accepting data are closed
+        for (int i = 0; i < fg->nb_inputs; i++) {
+            InputFilterPriv *ifp = ifp_from_ifilter(fg->inputs[i]);
+            if (av_buffersrc_get_status(ifp->ifilter.filter))
+                close_input(ifp);
+        }
+
         if (ret == AVERROR(EAGAIN)) {
             fgt->next_in = choose_input(fg, fgt);
             return 0;
@@ -3557,7 +3582,7 @@ static int filter_thread(void *arg)
             av_log(fg, AV_LOG_VERBOSE, "Input %u no longer accepts new data\n",
                    input_idx);
             close_input(ifp);
-            continue;
+            goto read_frames;
         }
         if (ret < 0)
             goto finish;
@@ -3574,13 +3599,6 @@ read_frames:
             av_log(fg, AV_LOG_ERROR, "Error sending frames to consumers: %s\n",
                    av_err2str(ret));
             goto finish;
-        }
-
-        // ensure all inputs no longer accepting data are closed
-        for (int i = 0; fgt.graph && i < fg->nb_inputs; i++) {
-            InputFilterPriv *ifp = ifp_from_ifilter(fg->inputs[i]);
-            if (av_buffersrc_get_status(ifp->ifilter.filter))
-                close_input(ifp);
         }
     }
 

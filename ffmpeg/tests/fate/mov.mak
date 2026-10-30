@@ -151,6 +151,18 @@ fate-mov-stream-shorter-than-movie: CMD = framemd5 -flags +bitexact -i $(TARGET_
 
 fate-mov-aac-2048-priming: CMD = run ffprobe$(PROGSSUF)$(EXESUF) -show_packets -print_format compact $(TARGET_SAMPLES)/mov/aac-2048-priming.mov
 
+# The container's priming and the pre-roll a seek needs are different things.
+FATE_MOV_FFPROBE-$(call DEMDEC, MOV, AAC) += fate-mov-aac-2048-priming-preroll
+fate-mov-aac-2048-priming-preroll: CMD = run ffprobe$(PROGSSUF)$(EXESUF) -show_entries stream=initial_padding,seek_preroll -print_format compact $(TARGET_SAMPLES)/mov/aac-2048-priming.mov
+
+# Where a seek lands.
+FATE_MOV_FFPROBE-$(call DEMDEC, MOV, AAC) += fate-mov-aac-2048-priming-seek-landing
+fate-mov-aac-2048-priming-seek-landing: CMD = run ffprobe$(PROGSSUF)$(EXESUF) -read_intervals 2.3%+\#3 -show_entries packet=pts,dts,duration -print_format compact $(TARGET_SAMPLES)/mov/aac-2048-priming.mov
+
+# Seeking into the stream must not drop samples to the container's priming.
+FATE_MOV-$(call FRAMECRC, MOV, AAC, PCM_S16LE_ENCODER ARESAMPLE_FILTER VOLUME_FILTER) += fate-mov-aac-2048-priming-seek
+fate-mov-aac-2048-priming-seek: CMD = framecrc -ss 2.3 -t 0.15 -i $(TARGET_SAMPLES)/mov/aac-2048-priming.mov -af volume=0,aresample -c:a pcm_s16le
+
 fate-mov-zombie: CMD = run ffprobe$(PROGSSUF)$(EXESUF) -show_streams -show_packets -show_frames -bitexact -print_format compact $(TARGET_SAMPLES)/mov/white_zombie_scrunch-part.mov
 
 fate-mov-init-nonkeyframe: CMD = run ffprobe$(PROGSSUF)$(EXESUF) -show_packets -print_format compact -select_streams v $(TARGET_SAMPLES)/mov/mp4-init-nonkeyframe.mp4
@@ -248,6 +260,12 @@ fate-mov-avif-demux-still-image-1-item: CMD = framecrc -c:v av1 -i $(TARGET_SAMP
 FATE_MOV_FFMPEG_SAMPLES-$(call FRAMECRC, MOV, AV1, AV1_PARSER) \
                            += fate-mov-avif-demux-still-image-multiple-items
 fate-mov-avif-demux-still-image-multiple-items: CMD = framecrc -c:v av1 -i $(TARGET_SAMPLES)/avif/still_image_exif.avif -c:v copy
+
+# avif demuxing - still image with multiple items forming two grids (color + alpha), which themselves are handled as an Alpha derived image
+FATE_MOV_FFMPEG_FFPROBE_SAMPLES-$(call FRAMECRC, MOV, AV1, AV1_PARSER) \
+                           += fate-mov-avif-demux-still-image-alpha-grid
+fate-mov-avif-demux-still-image-alpha-grid: CMD = stream_demux mov $(TARGET_SAMPLES)/avif/gain_map_alpha_grid.avif "-c:v av1" "-c:v copy -map 0:g:0 -map 0:g:1" \
+  "-of compact -show_entries stream_group=index,id,nb_streams,type:stream_group_components:stream_group_disposition:stream_group_tags:stream_group_side_data:stream_group_stream=index,id:stream_group_stream_disposition:stream_group_stream_side_data_list"
 
 # heic demuxing - still image with 1 item.
 FATE_MOV_FFMPEG_SAMPLES-$(call FRAMECRC, MOV, HEVC, HEVC_PARSER) \

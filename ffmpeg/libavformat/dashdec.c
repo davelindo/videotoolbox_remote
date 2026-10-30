@@ -2509,6 +2509,7 @@ set_seq_num:
                (int64_t)pls->cur_seq_no);
     } else if (pls->fragment_duration > 0) {
         pls->cur_seq_no = pls->first_seq_no + ((seek_pos_msec * pls->fragment_timescale) / pls->fragment_duration) / 1000;
+        pls->cur_seq_no = FFMAX(pls->cur_seq_no, pls->first_seq_no);
     } else {
         av_log(pls->parent, AV_LOG_ERROR, "dash_seek missing timeline or fragment_duration\n");
         pls->cur_seq_no = pls->first_seq_no;
@@ -2516,6 +2517,7 @@ set_seq_num:
     pls->cur_timestamp = 0;
     pls->cur_seg_offset = 0;
     pls->init_sec_buf_read_offset = 0;
+    pls->is_restart_needed = 0;
     ret = dry_run ? 0 : reopen_demux_for_component(s, pls);
 
     return ret;
