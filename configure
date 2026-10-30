@@ -2492,6 +2492,7 @@ SYSTEM_FUNCS="
     closesocket
     CommandLineToArgvW
     elf_aux_info
+    eventfd
     fcntl
     getaddrinfo
     getauxval
@@ -2658,6 +2659,7 @@ HAVE_LIST="
     ioctl_posix
     iokit
     libdrm_getfb2
+    libvmaf_picture_convert
     libvmaf_picture_wrap
     makeinfo_html
     opencl_d3d11
@@ -3068,8 +3070,8 @@ aac_encoder_select="audio_frame_queue lpc sinewin"
 aac_latm_decoder_select="aac_decoder aac_latm_parser"
 ac3_decoder_select="ac3_parser ac3dsp bswapdsp"
 ac3_fixed_decoder_select="ac3_parser ac3dsp bswapdsp"
-ac3_encoder_select="ac3dsp audiodsp me_cmp"
-ac3_fixed_encoder_select="ac3dsp audiodsp me_cmp"
+ac3_encoder_select="ac3dsp audio_frame_queue audiodsp me_cmp"
+ac3_fixed_encoder_select="ac3dsp audio_frame_queue audiodsp me_cmp"
 acelp_kelvin_decoder_select="audiodsp celp_math"
 adpcm_circus_decoder_deps="lgpl_gpl"
 adpcm_g722_decoder_select="g722dsp"
@@ -3352,7 +3354,7 @@ vulkan_deps="threads"
 vulkan_deps_any="libdl LoadLibrary"
 spirv_headers_spirv_h_deps="vulkan"
 spirv_unified1_spirv_h_deps="vulkan"
-swscale_vulkan_deps="vulkan"
+swscale_vulkan_deps="vulkan unstable"
 swscale_vulkan_if_any="spirv_headers_spirv_h spirv_unified1_spirv_h"
 
 apv_vulkan_hwaccel_deps="vulkan spirv_compiler"
@@ -3927,6 +3929,7 @@ imf_demuxer_select="mxf_demuxer"
 ipod_muxer_select="mov_muxer"
 ismv_muxer_select="mov_muxer"
 ivf_muxer_select="av1_metadata_bsf vp9_superframe_bsf"
+jpeg_mpf_demuxer_select="mjpeg_parser"
 latm_muxer_select="aac_adtstoasc_bsf mpeg4audio"
 matroska_audio_muxer_select="matroska_muxer"
 matroska_demuxer_select="riffdec"
@@ -4355,7 +4358,7 @@ avutil_extralibs="d3d11va_extralibs d3d12va_extralibs mediacodec_extralibs nanos
 
 # programs
 ffmpeg_deps="avcodec avfilter avformat threads"
-ffmpeg_select="aformat_filter anull_filter atrim_filter crop_filter
+ffmpeg_select="aformat_filter alphamerge_filter anull_filter atrim_filter crop_filter
                format_filter hflip_filter null_filter rotate_filter
                transpose_filter trim_filter vflip_filter"
 ffmpeg_suggest="ole32 psapi shell32"
@@ -6893,6 +6896,7 @@ check_func  mmap
 check_func  mprotect
 # Solaris has nanosleep in -lrt, OpenSolaris no longer needs that
 check_func_headers time.h nanosleep || check_lib nanosleep time.h nanosleep -lrt
+check_func_headers sys/eventfd.h eventfd
 check_func_headers sys/prctl.h prctl
 check_func  sched_getaffinity
 check_func  setrlimit
@@ -7265,7 +7269,7 @@ enabled libklvanc         && require libklvanc libklvanc/vanc.h klvanc_context_c
 enabled libkvazaar        && require_pkg_config libkvazaar "kvazaar >= 2.0.0" kvazaar.h kvz_api_get
 enabled liblc3            && require_pkg_config liblc3 "lc3 >= 1.1.0" lc3.h lc3_hr_setup_encoder
 enabled liblensfun        && require_pkg_config liblensfun lensfun lensfun.h lf_db_create
-enabled liblcevc_dec      && require_pkg_config liblcevc_dec "lcevc_dec >= 4.0.0" "LCEVC/lcevc_dec.h" LCEVC_CreateDecoder
+enabled liblcevc_dec      && require_pkg_config liblcevc_dec "lcevc_dec >= 4.2.0" "LCEVC/lcevc_dec.h" LCEVC_CreateDecoder
 
 if enabled libmfx && enabled libvpl; then
    die "ERROR: can not use libmfx and libvpl together"
@@ -7301,7 +7305,8 @@ if enabled libmfx; then
 fi
 
 enabled libmodplug        && require_pkg_config libmodplug libmodplug libmodplug/modplug.h ModPlug_Load
-enabled libmp3lame        && require "libmp3lame >= 3.98.3" lame/lame.h lame_set_VBR_quality -lmp3lame $libm_extralibs
+enabled libmp3lame        && { check_pkg_config libmp3lame "lame >= 3.98.3" lame/lame.h lame_set_VBR_quality ||
+                               require "libmp3lame >= 3.98.3" lame/lame.h lame_set_VBR_quality -lmp3lame $libm_extralibs; }
 enabled libmpeghdec       && require_pkg_config libmpeghdec "mpeghdec >= 3.0.0" mpeghdec/mpeghdecoder.h mpeghdecoder_init
 enabled libmysofa         && { check_pkg_config libmysofa libmysofa mysofa.h mysofa_neighborhood_init_withstepdefine ||
                                require libmysofa mysofa.h mysofa_neighborhood_init_withstepdefine -lmysofa $zlib_extralibs; }
@@ -7369,6 +7374,7 @@ enabled libv4l2           && require_pkg_config libv4l2 libv4l2 libv4l2.h v4l2_i
 enabled libvidstab        && require_pkg_config libvidstab "vidstab >= 0.98" vid.stab/libvidstab.h vsMotionDetectInit
 enabled libvmaf           && require_pkg_config libvmaf "libvmaf >= 2.0.0" libvmaf.h vmaf_init &&
                              { check_pkg_config libvmaf_cuda "libvmaf >= 2.0.0" libvmaf_cuda.h vmaf_cuda_state_init;
+                               check_pkg_config libvmaf_picture_convert "libvmaf >= 2.0.0" libvmaf.h vmaf_picture_convert;
                                check_pkg_config libvmaf_picture_wrap "libvmaf >= 2.0.0" libvmaf.h vmaf_picture_wrap; }
 enabled libvo_amrwbenc    && { check_pkg_config libvo_amrwbenc vo-amrwbenc vo-amrwbenc/enc_if.h E_IF_init ||
                                require libvo_amrwbenc vo-amrwbenc/enc_if.h E_IF_init -lvo-amrwbenc; }

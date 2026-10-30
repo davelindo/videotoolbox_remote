@@ -209,14 +209,14 @@ void ff_sws_apply_op_q(const SwsOp *op, AVRational64 x[4])
     case SWS_OP_WRITE:
         return;
     case SWS_OP_UNPACK: {
-        ff_sws_pack_op_decode(op, mask, shift);
+        ff_sws_pack_decode(op->pack.pattern, mask, shift);
         unsigned val = x[0].num;
         for (int i = 0; i < 4; i++)
             x[i] = Q((val >> shift[i]) & mask[i]);
         return;
     }
     case SWS_OP_PACK: {
-        ff_sws_pack_op_decode(op, mask, shift);
+        ff_sws_pack_decode(op->pack.pattern, mask, shift);
         unsigned val = 0;
         for (int i = 0; i < 4; i++)
             val |= (x[i].num & mask[i]) << shift[i];
@@ -1042,12 +1042,16 @@ void ff_sws_op_list_print(void *log, int lev, int lev_extra,
                           const SwsOpList *ops)
 {
     AVBPrint bpc, *bp = &bpc;
+    if (av_log_get_level() < lev)
+        return;
+
     if (!ops->num_ops) {
         av_log(log, lev, "  (empty)\n");
         return;
     }
 
     av_bprint_init(bp, 0, AV_BPRINT_SIZE_AUTOMATIC);
+    lev_extra = FFMAX(lev_extra, lev);
 
     for (int n = 0; n < ops->num_ops; n++) {
         const SwsOp *op = &ops->ops[n];

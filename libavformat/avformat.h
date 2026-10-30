@@ -1098,8 +1098,8 @@ typedef struct AVStreamGroupTileGrid {
  * layer video stream and a separate enhancement layer stream that together
  * form a single layered video presentation (for example a video stream and a
  * data stream containing LCEVC enhancement layer NALUs, Dolby Vision
- * Profile 7 dual-layer encoding, or a base rendition accompanied by an
- * ISO 21496-1 gain map).
+ * Profile 7 dual-layer encoding, an Alpha plane being a separate stream, or
+ * a base rendition accompanied by an ISO 21496-1 gain map).
  *
  * The enhancement layer stream is identified by @ref el_index.
  */
@@ -1165,6 +1165,7 @@ enum AVStreamGroupParamsType {
     AV_STREAM_GROUP_PARAMS_TREF,
     AV_STREAM_GROUP_PARAMS_DOLBY_VISION,
     AV_STREAM_GROUP_PARAMS_GAIN_MAP,
+    AV_STREAM_GROUP_PARAMS_ALPHA,
 };
 
 struct AVIAMFAudioElement;
@@ -2562,6 +2563,22 @@ int av_seek_frame(AVFormatContext *s, int stream_index, int64_t timestamp,
  * If flags contain AVSEEK_FLAG_ANY, then non-keyframes are treated as
  * keyframes (this may not be supported by all demuxers).
  * If flags contain AVSEEK_FLAG_BACKWARD, it is ignored.
+ *
+ * A seek by timestamp moves ts back by the largest
+ * AVCodecParameters.seek_preroll of the audio streams that are not discarded,
+ * whatever stream_index is, so that the decoders get their declared pre-roll
+ * before ts. The target stays within min_ts and after the start of the
+ * stream, so less room may be left. max_ts moves back as much, unless it is
+ * INT64_MAX. If that seek fails, the seek is done to ts. This also applies to
+ * av_seek_frame() with a demuxer that only implements this function.
+ *
+ * The first packet read after a seek from an audio stream carries
+ * AV_PKT_DATA_SKIP_SAMPLES side data to discard the larger of the rest of the
+ * priming (AVCodecParameters.initial_padding) and the seek pre-roll. The
+ * discard supplies the stream's declared pre-roll; recovery beyond that
+ * allowance depends on the codec and bitstream. Only the priming is discarded
+ * on the first packet of the stream, and no pre-roll after the priming of a
+ * stream whose start the seek targets.
  *
  * @param s            media file handle
  * @param stream_index index of the stream which is used as time base reference

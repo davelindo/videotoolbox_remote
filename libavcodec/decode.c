@@ -101,6 +101,7 @@ typedef struct DecodeContext {
         FFLCEVCContext *ctx;
         int frame;
         enum AVPixelFormat format;
+        enum AVPixelFormat base_format;
         int base_width;
         int base_height;
         int width;
@@ -324,6 +325,7 @@ static int discard_samples(AVCodecContext *avctx, AVFrame *frame, int64_t *disca
     AVCodecInternal *avci = avctx->internal;
     AVFrameSideData *side;
     uint32_t discard_padding = 0;
+    int nb_samples = frame->nb_samples;
     uint8_t skip_reason = 0;
     uint8_t discard_reason = 0;
 
@@ -399,7 +401,9 @@ static int discard_samples(AVCodecContext *avctx, AVFrame *frame, int64_t *disca
         }
     }
 
-    if (discard_padding > 0 && discard_padding <= frame->nb_samples) {
+    if (discard_padding > 0 && discard_padding <= nb_samples) {
+        // The padding may overlap the samples skipped at the start.
+        discard_padding = FFMIN(discard_padding, frame->nb_samples);
         if (discard_padding == frame->nb_samples) {
             av_log(avctx, AV_LOG_DEBUG, "discard whole frame\n");
             *discarded_samples += frame->nb_samples;
@@ -1662,18 +1666,20 @@ int ff_decode_frame_props(AVCodecContext *avctx, AVFrame *frame)
 
     if (dc->lcevc.frame) {
         ret = ff_lcevc_parse_frame(dc->lcevc.ctx, frame, &dc->lcevc.format,
+                                   &dc->lcevc.base_format,
                                    &dc->lcevc.width, &dc->lcevc.height);
         if (ret < 0 && (avctx->err_recognition & AV_EF_EXPLODE))
             return ret;
 
-        // force get_buffer2() to allocate the base frame using the same dimensions
-        // as the final enhanced frame, in order to prevent reinitializing the buffer
+        // force get_buffer2() to allocate the base frame with at least the dimensions
+        // of the final enhanced frame, in order to prevent reinitializing the buffer
         // pools unnecessarely
-        if (!ret && dc->lcevc.width && dc->lcevc.height) {
+        if (!ret && dc->lcevc.width && dc->lcevc.height &&
+            frame->format == dc->lcevc.base_format) {
             dc->lcevc.base_width  = frame->width;
             dc->lcevc.base_height = frame->height;
-            frame->width  = dc->lcevc.width;
-            frame->height = dc->lcevc.height;
+            frame->width  = FFMAX(frame->width,  dc->lcevc.width);
+            frame->height = FFMAX(frame->height, dc->lcevc.height);
         } else
             dc->lcevc.frame = 0;
     }
@@ -1739,11 +1745,13 @@ int ff_attach_decode_data(AVCodecContext *avctx, AVFrame *frame)
 
         if (dc->lcevc.frame) {
             int ret = ff_lcevc_parse_frame(dc->lcevc.ctx, frame, &dc->lcevc.format,
+                                           &dc->lcevc.base_format,
                                            &dc->lcevc.width, &dc->lcevc.height);
             if (ret < 0 && (avctx->err_recognition & AV_EF_EXPLODE))
                 return ret;
 
-            if (!ret && dc->lcevc.width && dc->lcevc.height) {
+            if (!ret && dc->lcevc.width && dc->lcevc.height &&
+                frame->format == dc->lcevc.base_format) {
                 dc->lcevc.base_width  = frame->width;
                 dc->lcevc.base_height = frame->height;
             } else
@@ -2118,6 +2126,7 @@ av_cold int ff_decode_preinit(AVCodecContext *avctx)
     else {
         for (unsigned i = 0; i < avctx->nb_side_data_prefer_packet; i++) {
             int val = avctx->side_data_prefer_packet[i];
+            int mapped = 0;
 
             if (val < 0 || val >= AV_PKT_DATA_NB) {
                 av_log(avctx, AV_LOG_ERROR, "Invalid side data type: %d\n", val);
@@ -2126,6 +2135,7 @@ av_cold int ff_decode_preinit(AVCodecContext *avctx)
 
             for (unsigned j = 0; ff_sd_global_map[j].packet < AV_PKT_DATA_NB; j++) {
                 if (ff_sd_global_map[j].packet == val) {
+                    mapped = 1;
                     val = ff_sd_global_map[j].frame;
 
                     // this code will need to be changed when we have more than
@@ -2138,6 +2148,12 @@ av_cold int ff_decode_preinit(AVCodecContext *avctx)
                     dc->side_data_pref_mask |= 1ULL << val;
                 }
             }
+
+            if (!mapped)
+                av_log(avctx, AV_LOG_WARNING,
+                       "Side data type %s has no frame side data counterpart, "
+                       "ignoring it in side_data_prefer_packet\n",
+                       av_packet_side_data_name(val));
         }
     }
 
@@ -2360,14 +2376,13 @@ int ff_hwaccel_frame_priv_alloc(AVCodecContext *avctx, void **hwaccel_picture_pr
     av_assert0(!*hwaccel_picture_private);
 
     if (hwaccel->free_frame_priv) {
-        AVHWFramesContext *frames_ctx;
+        AVHWDeviceContext *device_ctx = NULL;
 
-        if (!avctx->hw_frames_ctx)
-            return AVERROR(EINVAL);
+        if (avctx->hw_frames_ctx)
+            device_ctx = ((AVHWFramesContext *)avctx->hw_frames_ctx->data)->device_ctx;
 
-        frames_ctx = (AVHWFramesContext *) avctx->hw_frames_ctx->data;
         *hwaccel_picture_private = av_refstruct_alloc_ext(hwaccel->frame_priv_data_size, 0,
-                                                          frames_ctx->device_ctx,
+                                                          device_ctx,
                                                           hwaccel->free_frame_priv);
     } else {
         *hwaccel_picture_private = av_refstruct_allocz(hwaccel->frame_priv_data_size);
@@ -2417,6 +2432,7 @@ av_cold void ff_decode_internal_sync(AVCodecContext *dst, const AVCodecContext *
     dst_dc->lcevc.width = src_dc->lcevc.width;
     dst_dc->lcevc.height = src_dc->lcevc.height;
     dst_dc->lcevc.format = src_dc->lcevc.format;
+    dst_dc->lcevc.base_format = src_dc->lcevc.base_format;
 #endif
 }
 
