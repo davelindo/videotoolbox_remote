@@ -107,4 +107,6 @@ for content in three four; do
   test "$(cd "${repo}" && bash "${check_script}")" = "$(git -C "${repo}" rev-parse HEAD^2)"
 done
 
+python3 "${script_dir}/test_ffmpeg_sync_merge.py"
+
 echo "ok"

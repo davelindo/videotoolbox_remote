@@ -7201,6 +7201,8 @@ enabled  zlib && { check_pkg_config zlib zlib "zlib.h" zlibVersion ||
                    { zlib_msvc_lib=zlib.lib; check_lib zlib zlib.h zlibVersion -lz; }; }
 enabled bzlib && check_lib bzlib bzlib.h BZ2_bzlibVersion    -lbz2
 enabled  lzma && check_lib lzma   lzma.h lzma_version_number -llzma
+enabled liblz4  && require_pkg_config liblz4 liblz4 lz4.h LZ4_compress_default
+enabled libzstd && require_pkg_config libzstd libzstd zstd.h ZSTD_compress
 
 enabled zlib && test_exec $zlib_extralibs <<EOF && enable zlib_gzip
 #include <zlib.h>
@@ -7295,8 +7297,6 @@ enabled libkvazaar        && require_pkg_config libkvazaar "kvazaar >= 2.0.0" kv
 enabled liblc3            && require_pkg_config liblc3 "lc3 >= 1.1.0" lc3.h lc3_hr_setup_encoder
 enabled liblensfun        && require_pkg_config liblensfun lensfun lensfun.h lf_db_create
 enabled liblcevc_dec      && require_pkg_config liblcevc_dec "lcevc_dec >= 4.0.0" "LCEVC/lcevc_dec.h" LCEVC_CreateDecoder
-enabled liblz4            && require_pkg_config liblz4 liblz4 lz4.h LZ4_compress_default
-enabled libzstd           && require_pkg_config libzstd libzstd zstd.h ZSTD_compress
 
 if enabled libmfx && enabled libvpl; then
    die "ERROR: can not use libmfx and libvpl together"
