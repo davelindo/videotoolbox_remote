@@ -527,7 +527,7 @@ jobs:
             label: windows-x86_64
           - os: macos-15-intel
             label: macos-x86_64
-          - os: macos-14
+          - os: macos-15
             label: macos-arm64
     steps:
       - uses: actions/checkout@v4
