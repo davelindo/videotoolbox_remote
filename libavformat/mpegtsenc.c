@@ -838,7 +838,8 @@ static int mpegts_write_pmt(AVFormatContext *s, MpegTSService *service)
             } else if (stream_type == STREAM_TYPE_VIDEO_CAVS || stream_type == STREAM_TYPE_VIDEO_AVS2 ||
                        stream_type == STREAM_TYPE_VIDEO_AVS3) {
                 put_registration_descriptor(&q, MKTAG('A', 'V', 'S', 'V'));
-            } else if (ts_st->nb_stream_groups) {
+            }
+            if (ts_st->nb_stream_groups) {
                 if (stream_type == STREAM_TYPE_VIDEO_LCEVC) {
                     LCEVCDecoderConfigurationRecord lvcc = { 0 };
                     ff_lcvec_parse_config_record(&lvcc, st->codecpar->extradata,
@@ -2452,6 +2453,7 @@ static int mpegts_check_bitstream(AVFormatContext *s, AVStream *st,
     } list[] = {
         { AV_CODEC_ID_H264, "h264_mp4toannexb", 0xff, 0x01 /* configurationVersion in AVCDecoderConfigurationRecord  */},
         { AV_CODEC_ID_HEVC, "hevc_mp4toannexb", 0xff, 0x01 /* configurationVersion in HEVCDecoderConfigurationRecord */},
+        { AV_CODEC_ID_LCEVC, "lcevc_metadata",  0xff, 0x01 /* configurationVersion in LCEVCDecoderConfigurationRecord */},
         { AV_CODEC_ID_VVC,  "vvc_mp4toannexb",  0xf8, 0xf8 /* reserved '11111'b    in VVCDecoderConfigurationRecord  */},
     };
 
