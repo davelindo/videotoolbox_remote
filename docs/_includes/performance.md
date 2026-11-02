@@ -4,6 +4,8 @@ Give your SBC, mini PC or compact Linux server hardware video processing through
 
 Remote VideoToolbox delivers **186–209 fps** in the 1080p moving-video tests, with **less than one CPU second** of Linux FFmpeg work per 60-second clip.
 
+For capture and local frame processing, see the [raw frame transport results](#raw-frame-transport) and [capture guide](capture-and-encode.html).
+
 {% assign performance = site.data.performance %}
 
 <div class="benchmark" id="benchmark">

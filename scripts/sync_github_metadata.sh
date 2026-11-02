@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo="${1:-${REPO_SLUG:-davelindo/videotoolbox_remote}}"
-description="High-quality, low-power H.264/HEVC transcoding over LAN. Keep Plex on Linux and use a Mac's VideoToolbox hardware for FFmpeg, VA-API and OBS encoding."
+description="Capture video on any PC and use a Mac for H.264/HEVC hardware encoding. NV12/P010 frame offload, FFmpeg transcoding, Plex, VA-API and OBS over the network."
 homepage="${HOMEPAGE_URL:-https://davelindo.github.io/videotoolbox_remote/}"
 topics=(
   videotoolbox

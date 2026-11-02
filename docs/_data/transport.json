@@ -1,0 +1,993 @@
+{
+  "date": "2026-11-02 UTC",
+  "release": "v0.10.4",
+  "hardware": {
+    "client_model": "Intel NUC7i5BNK",
+    "client_cpu": "Intel Core i5-7260U",
+    "encoder_model": "Apple M2",
+    "encoder_os": "macOS 15.7.5",
+    "client_ram_gib": 8,
+    "encoder_ram_gib": 16
+  },
+  "mtu": 9000,
+  "tcp_upload_gbps": 12.6140168758161,
+  "tcp_return_gbps": 8.737323014455178,
+  "source": {
+    "url": "https://download.blender.org/demo/movies/BBB/bbb_sunflower_2160p_60fps_normal.mp4.zip",
+    "archive_sha256": "8f1d53cf56a314be08206ae730546ef26db9fd0114b33ff2528f522bc3714d19",
+    "start_seconds": 60
+  },
+  "rows": [
+    {
+      "size": "3840x2160",
+      "pixel_format": "nv12",
+      "mode": "encode",
+      "variant": "none",
+      "frames_per_repeat": 1680,
+      "warmup_frames": 180,
+      "warmup_correct": true,
+      "measured_repeats": [
+        {
+          "frames": 1680,
+          "seconds": 32.83851330698235,
+          "client_cpu_seconds": 23.88233,
+          "encoder_cpu_seconds": 6.90871,
+          "bytes_to_encoder": 20901983990,
+          "bytes_to_client": 62798381,
+          "repeat": 1,
+          "correct": true,
+          "fps": 51.15944148551898,
+          "output_sha256": "cf6704806cac448fc38d3b135f148fca75104b905d5df9c80600fe1502b250f0"
+        },
+        {
+          "frames": 1680,
+          "seconds": 32.85248502600007,
+          "client_cpu_seconds": 22.700723,
+          "encoder_cpu_seconds": 6.886706,
+          "bytes_to_encoder": 20901983990,
+          "bytes_to_client": 62798381,
+          "repeat": 2,
+          "correct": true,
+          "fps": 51.137684064703684,
+          "output_sha256": "498d54d7764c3b0f7da59575ed8983b02c9035a27d49187faff0efc799988e18"
+        },
+        {
+          "frames": 1680,
+          "seconds": 32.83179964800365,
+          "client_cpu_seconds": 22.796595,
+          "encoder_cpu_seconds": 6.356399,
+          "bytes_to_encoder": 20901983990,
+          "bytes_to_client": 62798381,
+          "repeat": 3,
+          "correct": true,
+          "fps": 51.169902899372524,
+          "output_sha256": "c03fd11ce1a2d766833a4a173ab2fd7165c952bd4c2c6d339f9afe587141d6c7"
+        }
+      ],
+      "median_fps": 51.15944148551898,
+      "min_fps": 51.137684064703684,
+      "max_fps": 51.169902899372524,
+      "client_cpu_cores": 0.6943449717775722,
+      "client_cpu_ms_per_frame": 13.569401785714286,
+      "encoder_cpu_cores": 0.2096251164729162,
+      "upload_gbps": 5.09206584222695,
+      "return_gbps": 0.015298714753118224,
+      "all_correct": true,
+      "decoded_output": {
+        "correct": true,
+        "frames": 1680,
+        "output_sha256": "cf6704806cac448fc38d3b135f148fca75104b905d5df9c80600fe1502b250f0"
+      }
+    },
+    {
+      "size": "3840x2160",
+      "pixel_format": "nv12",
+      "mode": "encode",
+      "variant": "lz4",
+      "frames_per_repeat": 1200,
+      "warmup_frames": 180,
+      "warmup_correct": true,
+      "measured_repeats": [
+        {
+          "frames": 1200,
+          "seconds": 34.72562120799557,
+          "client_cpu_seconds": 38.438872,
+          "encoder_cpu_seconds": 10.768996999999999,
+          "bytes_to_encoder": 4621294731,
+          "bytes_to_client": 43425807,
+          "repeat": 1,
+          "correct": true,
+          "fps": 34.55661722543066,
+          "output_sha256": "caf789d34d513d7846b1576fc9206842380f8f5135a62812f6ba40246aa65241"
+        },
+        {
+          "frames": 1200,
+          "seconds": 35.27221365098376,
+          "client_cpu_seconds": 39.268579,
+          "encoder_cpu_seconds": 13.60432,
+          "bytes_to_encoder": 4621294731,
+          "bytes_to_client": 43425807,
+          "repeat": 2,
+          "correct": true,
+          "fps": 34.02111395315081,
+          "output_sha256": "386ee3567f42b5b64ca5487e039247c523facfa92ac1a418e485203e0255d8da"
+        },
+        {
+          "frames": 1200,
+          "seconds": 35.10446363399387,
+          "client_cpu_seconds": 38.53896,
+          "encoder_cpu_seconds": 14.027525,
+          "bytes_to_encoder": 4621294731,
+          "bytes_to_client": 43425807,
+          "repeat": 3,
+          "correct": true,
+          "fps": 34.183687080692614,
+          "output_sha256": "c73ed0ac43fccf7d3602d43da9345917e2418ee751618ebf843c987dcf66a33a"
+        }
+      ],
+      "median_fps": 34.183687080692614,
+      "min_fps": 34.02111395315081,
+      "max_fps": 34.55661722543066,
+      "client_cpu_cores": 1.106931155234437,
+      "client_cpu_ms_per_frame": 32.11580000000001,
+      "encoder_cpu_cores": 0.38569510081260716,
+      "upload_gbps": 1.053152619947717,
+      "return_gbps": 0.009896361318097005,
+      "all_correct": true,
+      "decoded_output": {
+        "correct": true,
+        "frames": 1200,
+        "output_sha256": "caf789d34d513d7846b1576fc9206842380f8f5135a62812f6ba40246aa65241"
+      }
+    },
+    {
+      "size": "3840x2160",
+      "pixel_format": "nv12",
+      "mode": "decode",
+      "variant": "none",
+      "frames_per_repeat": 2040,
+      "warmup_frames": 180,
+      "warmup_correct": true,
+      "measured_repeats": [
+        {
+          "frames": 2040,
+          "seconds": 30.68271975099924,
+          "client_cpu_seconds": 17.364297999999998,
+          "encoder_cpu_seconds": 17.055804000000002,
+          "bytes_to_encoder": 91291456,
+          "bytes_to_client": 25380980511,
+          "repeat": 1,
+          "correct": true,
+          "fps": 66.48693520506974
+        },
+        {
+          "frames": 2040,
+          "seconds": 30.696563554985914,
+          "client_cpu_seconds": 17.198726999999998,
+          "encoder_cpu_seconds": 16.381736,
+          "bytes_to_encoder": 91291456,
+          "bytes_to_client": 25380980511,
+          "repeat": 2,
+          "correct": true,
+          "fps": 66.45695034709028
+        },
+        {
+          "frames": 2040,
+          "seconds": 29.430057280987967,
+          "client_cpu_seconds": 17.545318,
+          "encoder_cpu_seconds": 16.32567,
+          "bytes_to_encoder": 91291456,
+          "bytes_to_client": 25380980511,
+          "repeat": 3,
+          "correct": true,
+          "fps": 69.31688853075576
+        }
+      ],
+      "median_fps": 66.48693520506974,
+      "min_fps": 66.45695034709028,
+      "max_fps": 69.31688853075576,
+      "client_cpu_cores": 0.5659308607880009,
+      "client_cpu_ms_per_frame": 8.511910784313725,
+      "encoder_cpu_cores": 0.5547277684215213,
+      "upload_gbps": 0.02380270243077833,
+      "return_gbps": 6.61766120265096,
+      "all_correct": true
+    },
+    {
+      "size": "3840x2160",
+      "pixel_format": "nv12",
+      "mode": "decode",
+      "variant": "lz4",
+      "frames_per_repeat": 2520,
+      "warmup_frames": 180,
+      "warmup_correct": true,
+      "measured_repeats": [
+        {
+          "frames": 2520,
+          "seconds": 27.9561700449849,
+          "client_cpu_seconds": 28.162713,
+          "encoder_cpu_seconds": 31.899241,
+          "bytes_to_encoder": 112968247,
+          "bytes_to_client": 9231178069,
+          "repeat": 1,
+          "correct": true,
+          "fps": 90.14110287442848
+        },
+        {
+          "frames": 2520,
+          "seconds": 26.73751010900014,
+          "client_cpu_seconds": 27.029181,
+          "encoder_cpu_seconds": 33.216456,
+          "bytes_to_encoder": 112968247,
+          "bytes_to_client": 9231178069,
+          "repeat": 2,
+          "correct": true,
+          "fps": 94.24961373466635
+        },
+        {
+          "frames": 2520,
+          "seconds": 25.330910092015984,
+          "client_cpu_seconds": 25.099559,
+          "encoder_cpu_seconds": 33.637953,
+          "bytes_to_encoder": 112968247,
+          "bytes_to_client": 9231178069,
+          "repeat": 3,
+          "correct": true,
+          "fps": 99.48320020267552
+        }
+      ],
+      "median_fps": 94.24961373466635,
+      "min_fps": 90.14110287442848,
+      "max_fps": 99.48320020267552,
+      "client_cpu_cores": 1.0073880991095256,
+      "client_cpu_ms_per_frame": 10.725865476190476,
+      "encoder_cpu_cores": 1.2423167252518017,
+      "upload_gbps": 0.03380067823502343,
+      "return_gbps": 2.762015769267216,
+      "all_correct": true
+    },
+    {
+      "size": "3840x2160",
+      "pixel_format": "nv12",
+      "mode": "roundtrip",
+      "variant": "none",
+      "frames_per_repeat": 960,
+      "warmup_frames": 180,
+      "warmup_correct": true,
+      "measured_repeats": [
+        {
+          "frames": 960,
+          "seconds": 31.598569870984647,
+          "client_cpu_seconds": 25.286822,
+          "encoder_cpu_seconds": 11.921734,
+          "bytes_to_encoder": 11987344716,
+          "bytes_to_client": 11980076795,
+          "repeat": 1,
+          "correct": true,
+          "fps": 30.3811218013863,
+          "output_sha256": "04cca82287db809e454f1d6ddb3ea081a6f4f4dceeaba02fe8355ae52d4d839d"
+        },
+        {
+          "frames": 960,
+          "seconds": 31.41098732399405,
+          "client_cpu_seconds": 26.649827000000002,
+          "encoder_cpu_seconds": 11.686089,
+          "bytes_to_encoder": 11987344716,
+          "bytes_to_client": 11980076795,
+          "repeat": 2,
+          "correct": true,
+          "fps": 30.562554118338095,
+          "output_sha256": "15aba6b7de96fdf359e217de152c2efac03d15df54d938dbc45202c247721e64"
+        },
+        {
+          "frames": 960,
+          "seconds": 31.902404497988755,
+          "client_cpu_seconds": 25.612941,
+          "encoder_cpu_seconds": 11.612546,
+          "bytes_to_encoder": 11987344716,
+          "bytes_to_client": 11980076795,
+          "repeat": 3,
+          "correct": true,
+          "fps": 30.09177568607789,
+          "output_sha256": "0a87a599597c751b3d469181704f85bd260a9b303b6edba3d928e58eb4b01b89"
+        }
+      ],
+      "median_fps": 30.3811218013863,
+      "min_fps": 30.09177568607789,
+      "max_fps": 30.562554118338095,
+      "client_cpu_cores": 0.802852995034112,
+      "client_cpu_ms_per_frame": 26.680146875,
+      "encoder_cpu_cores": 0.3720382578064745,
+      "upload_gbps": 3.0349081657666708,
+      "return_gbps": 3.0330681024904718,
+      "all_correct": true,
+      "decoded_output": {
+        "correct": true,
+        "frames": 960,
+        "output_sha256": "04cca82287db809e454f1d6ddb3ea081a6f4f4dceeaba02fe8355ae52d4d839d"
+      }
+    },
+    {
+      "size": "3840x2160",
+      "pixel_format": "nv12",
+      "mode": "roundtrip",
+      "variant": "lz4",
+      "frames_per_repeat": 960,
+      "warmup_frames": 180,
+      "warmup_correct": true,
+      "measured_repeats": [
+        {
+          "frames": 960,
+          "seconds": 32.611719317996176,
+          "client_cpu_seconds": 52.728563,
+          "encoder_cpu_seconds": 18.963372,
+          "bytes_to_encoder": 3550463538,
+          "bytes_to_client": 3543705431,
+          "repeat": 1,
+          "correct": true,
+          "fps": 29.43727040696814,
+          "output_sha256": "b4c1ca283880bc2ea6dd8d82cc222c2942424bffbedbb45c733dcb127924ae7f"
+        },
+        {
+          "frames": 960,
+          "seconds": 32.2432487969927,
+          "client_cpu_seconds": 52.41986,
+          "encoder_cpu_seconds": 18.895165,
+          "bytes_to_encoder": 3550463538,
+          "bytes_to_client": 3543705431,
+          "repeat": 2,
+          "correct": true,
+          "fps": 29.773674670448788,
+          "output_sha256": "dd3abe5b7d3542b23c058e2d5b7ea120fca47f76444f28332cf4d8520ab013e7"
+        },
+        {
+          "frames": 960,
+          "seconds": 32.648585008020746,
+          "client_cpu_seconds": 52.245176,
+          "encoder_cpu_seconds": 19.059878,
+          "bytes_to_encoder": 3550463538,
+          "bytes_to_client": 3543705431,
+          "repeat": 3,
+          "correct": true,
+          "fps": 29.404030825965588,
+          "output_sha256": "c7b6480e06a575e2a0a8678152ed8e91bfc284907674cc34e0f4724b32451780"
+        }
+      ],
+      "median_fps": 29.43727040696814,
+      "min_fps": 29.404030825965588,
+      "max_fps": 29.773674670448788,
+      "client_cpu_cores": 1.6168593408352658,
+      "client_cpu_ms_per_frame": 54.60402083333334,
+      "encoder_cpu_cores": 0.5837887919282744,
+      "upload_gbps": 0.8709662936515566,
+      "return_gbps": 0.8693084584582381,
+      "all_correct": true,
+      "decoded_output": {
+        "correct": true,
+        "frames": 960,
+        "output_sha256": "b4c1ca283880bc2ea6dd8d82cc222c2942424bffbedbb45c733dcb127924ae7f"
+      }
+    },
+    {
+      "size": "3840x2160",
+      "pixel_format": "nv12",
+      "mode": "roundtrip",
+      "variant": "zstd",
+      "frames_per_repeat": 720,
+      "warmup_frames": 180,
+      "warmup_correct": true,
+      "measured_repeats": [
+        {
+          "frames": 720,
+          "seconds": 32.90989254400483,
+          "client_cpu_seconds": 52.733674,
+          "encoder_cpu_seconds": 19.458731,
+          "bytes_to_encoder": 1900544067,
+          "bytes_to_client": 1899105684,
+          "repeat": 1,
+          "correct": true,
+          "fps": 21.877920112843448,
+          "output_sha256": "b519f06a96d2399c469c3a5435fa9e490491101c4346031c56df95e5504107f9"
+        },
+        {
+          "frames": 720,
+          "seconds": 32.75781221600482,
+          "client_cpu_seconds": 52.40105,
+          "encoder_cpu_seconds": 19.765715,
+          "bytes_to_encoder": 1900544067,
+          "bytes_to_client": 1899105684,
+          "repeat": 2,
+          "correct": true,
+          "fps": 21.979489816118495,
+          "output_sha256": "983150b35d67feba4a2f4f91888e6dd3c2839f0d2874f68337d1ea6ceccb5cbb"
+        },
+        {
+          "frames": 720,
+          "seconds": 32.06744797099964,
+          "client_cpu_seconds": 51.596688,
+          "encoder_cpu_seconds": 19.478357,
+          "bytes_to_encoder": 1900544067,
+          "bytes_to_client": 1899105684,
+          "repeat": 3,
+          "correct": true,
+          "fps": 22.452675393786738,
+          "output_sha256": "e6c6a107a43f4c2375372742c8719fcf372087967c35d2e528b47e636b59db29"
+        }
+      ],
+      "median_fps": 21.979489816118495,
+      "min_fps": 21.877920112843448,
+      "max_fps": 22.452675393786738,
+      "client_cpu_cores": 1.6023654264287912,
+      "client_cpu_ms_per_frame": 72.7792361111111,
+      "encoder_cpu_cores": 0.6033893493761119,
+      "upload_gbps": 0.4641443218412325,
+      "return_gbps": 0.4637930449023417,
+      "all_correct": true,
+      "decoded_output": {
+        "correct": true,
+        "frames": 720,
+        "output_sha256": "b519f06a96d2399c469c3a5435fa9e490491101c4346031c56df95e5504107f9"
+      }
+    },
+    {
+      "size": "3840x2160",
+      "pixel_format": "nv12",
+      "mode": "roundtrip",
+      "variant": "mixed",
+      "frames_per_repeat": 1440,
+      "warmup_frames": 180,
+      "warmup_correct": true,
+      "measured_repeats": [
+        {
+          "frames": 1440,
+          "seconds": 28.998003481974592,
+          "client_cpu_seconds": 42.338092,
+          "encoder_cpu_seconds": 23.516273,
+          "bytes_to_encoder": 17981016867,
+          "bytes_to_client": 5317386988,
+          "repeat": 1,
+          "correct": true,
+          "fps": 49.65859118180727,
+          "output_sha256": "b910f698f8e4cb7baacfde74f7923ae8c9c7224e6c129a7a73078903d24f2b10"
+        },
+        {
+          "frames": 1440,
+          "seconds": 29.02219522400992,
+          "client_cpu_seconds": 41.954927,
+          "encoder_cpu_seconds": 23.74027,
+          "bytes_to_encoder": 17981016867,
+          "bytes_to_client": 5317386988,
+          "repeat": 2,
+          "correct": true,
+          "fps": 49.617197764857394,
+          "output_sha256": "85c33e64358677aa0072f868d7a4cebc79d1b9418ae82dce3bcccbae7f5f4500"
+        },
+        {
+          "frames": 1440,
+          "seconds": 28.805872550001368,
+          "client_cpu_seconds": 42.167052,
+          "encoder_cpu_seconds": 23.570706,
+          "bytes_to_encoder": 17981016867,
+          "bytes_to_client": 5317386988,
+          "repeat": 3,
+          "correct": true,
+          "fps": 49.98980667919159,
+          "output_sha256": "706a031cf7a69215e5c6c505f73db4f58b226c7bf47e100d996ed0c1b251fb57"
+        }
+      ],
+      "median_fps": 49.65859118180727,
+      "min_fps": 49.617197764857394,
+      "max_fps": 49.98980667919159,
+      "client_cpu_cores": 1.4600347236428786,
+      "client_cpu_ms_per_frame": 29.282674999999998,
+      "encoder_cpu_cores": 0.8180039385979938,
+      "upload_gbps": 4.9606220312863,
+      "return_gbps": 1.4669663699586306,
+      "all_correct": true,
+      "decoded_output": {
+        "correct": true,
+        "frames": 1440,
+        "output_sha256": "b910f698f8e4cb7baacfde74f7923ae8c9c7224e6c129a7a73078903d24f2b10"
+      }
+    },
+    {
+      "size": "3840x2160",
+      "pixel_format": "nv12",
+      "mode": "encode",
+      "variant": "zstd",
+      "frames_per_repeat": 840,
+      "warmup_frames": 180,
+      "warmup_correct": true,
+      "measured_repeats": [
+        {
+          "frames": 840,
+          "seconds": 33.541434787999606,
+          "client_cpu_seconds": 36.234394,
+          "encoder_cpu_seconds": 12.18182,
+          "bytes_to_encoder": 2377650421,
+          "bytes_to_client": 28904140,
+          "repeat": 1,
+          "correct": true,
+          "fps": 25.043651391458475,
+          "output_sha256": "c3a6e0ffabac59d10dcd7b26662c9c7e18dddac8942d250a07883ed5ecf3063d"
+        },
+        {
+          "frames": 840,
+          "seconds": 33.460064990009414,
+          "client_cpu_seconds": 36.014479,
+          "encoder_cpu_seconds": 12.162844,
+          "bytes_to_encoder": 2377650421,
+          "bytes_to_client": 28904140,
+          "repeat": 2,
+          "correct": true,
+          "fps": 25.104553749396757,
+          "output_sha256": "c070e8a5462a0f85bfb1c6f8c8e907c2436fb78bde8a85bc22095694450e9d50"
+        },
+        {
+          "frames": 840,
+          "seconds": 33.70458451699233,
+          "client_cpu_seconds": 36.603085,
+          "encoder_cpu_seconds": 12.15246,
+          "bytes_to_encoder": 2377650421,
+          "bytes_to_client": 28904140,
+          "repeat": 3,
+          "correct": true,
+          "fps": 24.92242559989161,
+          "output_sha256": "36f0b1357f54b1e11bafd610aac7fc10560bc44b65a9911d942392363699860f"
+        }
+      ],
+      "median_fps": 25.043651391458475,
+      "min_fps": 24.92242559989161,
+      "max_fps": 25.104553749396757,
+      "client_cpu_cores": 1.0802875377580412,
+      "client_cpu_ms_per_frame": 43.136183333333335,
+      "encoder_cpu_cores": 0.36318720642082936,
+      "upload_gbps": 0.5670956978502713,
+      "return_gbps": 0.006893954342189624,
+      "all_correct": true,
+      "decoded_output": {
+        "correct": true,
+        "frames": 840,
+        "output_sha256": "c3a6e0ffabac59d10dcd7b26662c9c7e18dddac8942d250a07883ed5ecf3063d"
+      }
+    },
+    {
+      "size": "3840x2160",
+      "pixel_format": "nv12",
+      "mode": "decode",
+      "variant": "zstd",
+      "frames_per_repeat": 1680,
+      "warmup_frames": 180,
+      "warmup_correct": true,
+      "measured_repeats": [
+        {
+          "frames": 1680,
+          "seconds": 29.015943710983265,
+          "client_cpu_seconds": 28.956734,
+          "encoder_cpu_seconds": 25.144059,
+          "bytes_to_encoder": 75868918,
+          "bytes_to_client": 4369596000,
+          "repeat": 1,
+          "correct": true,
+          "fps": 57.899202477570206
+        },
+        {
+          "frames": 1680,
+          "seconds": 30.486376286979066,
+          "client_cpu_seconds": 30.572293000000002,
+          "encoder_cpu_seconds": 25.220085,
+          "bytes_to_encoder": 75868918,
+          "bytes_to_client": 4369596000,
+          "repeat": 2,
+          "correct": true,
+          "fps": 55.10658217249451
+        },
+        {
+          "frames": 1680,
+          "seconds": 30.14657378499396,
+          "client_cpu_seconds": 30.142926000000003,
+          "encoder_cpu_seconds": 25.346151,
+          "bytes_to_encoder": 75868918,
+          "bytes_to_client": 4369596000,
+          "repeat": 3,
+          "correct": true,
+          "fps": 55.72772587630679
+        }
+      ],
+      "median_fps": 55.72772587630679,
+      "min_fps": 55.10658217249451,
+      "max_fps": 57.899202477570206,
+      "client_cpu_cores": 0.9998789983558339,
+      "client_cpu_ms_per_frame": 17.942217857142857,
+      "encoder_cpu_cores": 0.8407639017544519,
+      "upload_gbps": 0.020133344118266658,
+      "return_gbps": 1.1595602289438411,
+      "all_correct": true
+    },
+    {
+      "size": "1920x1080",
+      "pixel_format": "nv12",
+      "mode": "encode",
+      "variant": "none",
+      "frames_per_repeat": 5760,
+      "warmup_frames": 180,
+      "warmup_correct": true,
+      "measured_repeats": [
+        {
+          "frames": 5760,
+          "seconds": 30.63113912701374,
+          "client_cpu_seconds": 29.018921,
+          "encoder_cpu_seconds": 6.715714,
+          "bytes_to_encoder": 17916232549,
+          "bytes_to_client": 94576944,
+          "repeat": 1,
+          "correct": true,
+          "fps": 188.04393712280293,
+          "output_sha256": "4de239ad5369682bd0523c402a2c5d8cc2b8fcd07e9a9abec9bf8a3de7053fa0"
+        },
+        {
+          "frames": 5760,
+          "seconds": 30.619677006005077,
+          "client_cpu_seconds": 29.927352000000003,
+          "encoder_cpu_seconds": 6.653257999999999,
+          "bytes_to_encoder": 17916232549,
+          "bytes_to_client": 94576944,
+          "repeat": 2,
+          "correct": true,
+          "fps": 188.11432919002897,
+          "output_sha256": "207840892435c0726f24dc031e59e92828d81b22e5bbe22669dc2ff3994fba5b"
+        },
+        {
+          "frames": 5760,
+          "seconds": 30.60162422101712,
+          "client_cpu_seconds": 28.001152,
+          "encoder_cpu_seconds": 6.621471,
+          "bytes_to_encoder": 17916232549,
+          "bytes_to_client": 94576944,
+          "repeat": 3,
+          "correct": true,
+          "fps": 188.22530328452456,
+          "output_sha256": "394cce69536c6663a03d14af4e3066f8d1b75c1749e743a080f7021caab07dc6"
+        }
+      ],
+      "median_fps": 188.11432919002897,
+      "min_fps": 188.04393712280293,
+      "max_fps": 188.22530328452456,
+      "client_cpu_cores": 0.9473666937318724,
+      "client_cpu_ms_per_frame": 5.038007118055555,
+      "encoder_cpu_cores": 0.21728700791635308,
+      "upload_gbps": 4.680972316066247,
+      "return_gbps": 0.024710108857504076,
+      "all_correct": true,
+      "decoded_output": {
+        "correct": true,
+        "frames": 5760,
+        "output_sha256": "4de239ad5369682bd0523c402a2c5d8cc2b8fcd07e9a9abec9bf8a3de7053fa0"
+      }
+    },
+    {
+      "size": "1920x1080",
+      "pixel_format": "nv12",
+      "mode": "decode",
+      "variant": "none",
+      "frames_per_repeat": 6600,
+      "warmup_frames": 180,
+      "warmup_correct": true,
+      "measured_repeats": [
+        {
+          "frames": 6600,
+          "seconds": 24.427664932009066,
+          "client_cpu_seconds": 14.586056,
+          "encoder_cpu_seconds": 11.914452,
+          "bytes_to_encoder": 146303938,
+          "bytes_to_client": 20529016431,
+          "repeat": 1,
+          "correct": true,
+          "fps": 270.1854646512535
+        },
+        {
+          "frames": 6600,
+          "seconds": 23.35049396098475,
+          "client_cpu_seconds": 14.841801,
+          "encoder_cpu_seconds": 12.719636999999999,
+          "bytes_to_encoder": 146303938,
+          "bytes_to_client": 20529016431,
+          "repeat": 2,
+          "correct": true,
+          "fps": 282.6492669074852
+        },
+        {
+          "frames": 6600,
+          "seconds": 22.954484429996228,
+          "client_cpu_seconds": 14.681659,
+          "encoder_cpu_seconds": 13.375385000000001,
+          "bytes_to_encoder": 146303938,
+          "bytes_to_client": 20529016431,
+          "repeat": 3,
+          "correct": true,
+          "fps": 287.52551686045797
+        }
+      ],
+      "median_fps": 282.6492669074852,
+      "min_fps": 270.1854646512535,
+      "max_fps": 287.52551686045797,
+      "client_cpu_cores": 0.6356097230661789,
+      "client_cpu_ms_per_frame": 2.224493787878788,
+      "encoder_cpu_cores": 0.544726677784746,
+      "upload_gbps": 0.05012448584409475,
+      "return_gbps": 7.03334720551984,
+      "all_correct": true
+    },
+    {
+      "size": "1920x1080",
+      "pixel_format": "nv12",
+      "mode": "roundtrip",
+      "variant": "none",
+      "frames_per_repeat": 3960,
+      "warmup_frames": 180,
+      "warmup_correct": true,
+      "measured_repeats": [
+        {
+          "frames": 3960,
+          "seconds": 26.46485472601489,
+          "client_cpu_seconds": 28.101619,
+          "encoder_cpu_seconds": 9.002192,
+          "bytes_to_encoder": 12404991346,
+          "bytes_to_client": 12382440569,
+          "repeat": 1,
+          "correct": true,
+          "fps": 149.63241026625886,
+          "output_sha256": "b0cb7d32f91b22ece38922b663c60fccc55cf0a3227f35c256c331b713fd14b4"
+        },
+        {
+          "frames": 3960,
+          "seconds": 28.677777586010052,
+          "client_cpu_seconds": 29.999494,
+          "encoder_cpu_seconds": 11.930974,
+          "bytes_to_encoder": 12404991346,
+          "bytes_to_client": 12382440569,
+          "repeat": 2,
+          "correct": true,
+          "fps": 138.0860140965671,
+          "output_sha256": "0e7f296d51aa4688e99ffa634873cbd65346b883f54e7c761e8b7d58065d4da6"
+        },
+        {
+          "frames": 3960,
+          "seconds": 26.830730749003123,
+          "client_cpu_seconds": 28.228485,
+          "encoder_cpu_seconds": 11.476499,
+          "bytes_to_encoder": 12404991346,
+          "bytes_to_client": 12382440569,
+          "repeat": 3,
+          "correct": true,
+          "fps": 147.59195480157138,
+          "output_sha256": "4ccaed15ac8cc5e4b8c70beeebd0aad87dec7b4f053934a81c87ed3026163633"
+        }
+      ],
+      "median_fps": 147.59195480157138,
+      "min_fps": 138.0860140965671,
+      "max_fps": 149.63241026625886,
+      "client_cpu_cores": 1.05209527329213,
+      "client_cpu_ms_per_frame": 7.128405303030303,
+      "encoder_cpu_cores": 0.41603551614893325,
+      "upload_gbps": 3.6987412566721534,
+      "return_gbps": 3.6920173915009933,
+      "all_correct": true,
+      "decoded_output": {
+        "correct": true,
+        "frames": 3960,
+        "output_sha256": "b0cb7d32f91b22ece38922b663c60fccc55cf0a3227f35c256c331b713fd14b4"
+      }
+    },
+    {
+      "size": "3840x2160",
+      "pixel_format": "nv12",
+      "mode": "transcode",
+      "variant": "packet-only",
+      "frames_per_repeat": 1560,
+      "warmup_frames": 180,
+      "warmup_correct": true,
+      "measured_repeats": [
+        {
+          "frames": 1560,
+          "seconds": 31.01336806701147,
+          "client_cpu_seconds": 1.6337769999999998,
+          "encoder_cpu_seconds": 2.062918,
+          "bytes_to_encoder": 69614781,
+          "bytes_to_client": 60165770,
+          "repeat": 1,
+          "correct": true,
+          "fps": 50.300889494790226,
+          "output_sha256": "5e148ae1dc4aaacb860a3556ce6fa6e41929994c0c760fb002dc400a4268250b"
+        },
+        {
+          "frames": 1560,
+          "seconds": 31.018611353007145,
+          "client_cpu_seconds": 1.5597469999999998,
+          "encoder_cpu_seconds": 1.7828309999999998,
+          "bytes_to_encoder": 69614781,
+          "bytes_to_client": 60165770,
+          "repeat": 2,
+          "correct": true,
+          "fps": 50.29238679470296,
+          "output_sha256": "b4608b31179225259a3fc3fa52cdfe14be9d9f731fa04e1e64afeef2fcfcb378"
+        },
+        {
+          "frames": 1560,
+          "seconds": 30.980488847009838,
+          "client_cpu_seconds": 1.6106919999999998,
+          "encoder_cpu_seconds": 2.783801,
+          "bytes_to_encoder": 69614781,
+          "bytes_to_client": 60165770,
+          "repeat": 3,
+          "correct": true,
+          "fps": 50.35427322350233,
+          "output_sha256": "68058736b3f301b557ef60c2002891d0848adc7c3641b1d51e558437216bb014"
+        }
+      ],
+      "median_fps": 50.300889494790226,
+      "min_fps": 50.29238679470296,
+      "max_fps": 50.35427322350233,
+      "client_cpu_cores": 0.051990528876223976,
+      "client_cpu_ms_per_frame": 1.0324948717948716,
+      "encoder_cpu_cores": 0.06651705791975235,
+      "upload_gbps": 0.01795736105787191,
+      "return_gbps": 0.015519957682763923,
+      "all_correct": true,
+      "decoded_output": {
+        "correct": true,
+        "frames": 1560,
+        "output_sha256": "5e148ae1dc4aaacb860a3556ce6fa6e41929994c0c760fb002dc400a4268250b"
+      }
+    },
+    {
+      "size": "3840x2160",
+      "pixel_format": "p010le",
+      "mode": "encode",
+      "variant": "none",
+      "frames_per_repeat": 1680,
+      "warmup_frames": 180,
+      "warmup_correct": true,
+      "measured_repeats": [
+        {
+          "frames": 1680,
+          "seconds": 34.83572328099399,
+          "client_cpu_seconds": 50.476952,
+          "encoder_cpu_seconds": 6.402302,
+          "bytes_to_encoder": 41803871990,
+          "bytes_to_client": 66810906,
+          "repeat": 1,
+          "correct": true,
+          "fps": 48.22635621625203,
+          "output_sha256": "e4b605993c9591c958a9b5bb7b8fd9a38ef9f8268db3bb24f3f338e74c50d59c"
+        },
+        {
+          "frames": 1680,
+          "seconds": 33.64927282498684,
+          "client_cpu_seconds": 49.885694,
+          "encoder_cpu_seconds": 6.4768930000000005,
+          "bytes_to_encoder": 41803871990,
+          "bytes_to_client": 66810906,
+          "repeat": 2,
+          "correct": true,
+          "fps": 49.92678471055955,
+          "output_sha256": "98753371064122db4f678e67c0507127bc47f64d1c4eae58d0a37a6068f43572"
+        },
+        {
+          "frames": 1680,
+          "seconds": 33.599878955981694,
+          "client_cpu_seconds": 49.555571,
+          "encoder_cpu_seconds": 6.490394,
+          "bytes_to_encoder": 41803871990,
+          "bytes_to_client": 66810906,
+          "repeat": 3,
+          "correct": true,
+          "fps": 50.000180125676145,
+          "output_sha256": "9c72693cc2cb160015a77349e51d62f410e9e28175e4cba9a32f9d04ad7f0a27"
+        }
+      ],
+      "median_fps": 49.92678471055955,
+      "min_fps": 48.22635621625203,
+      "max_fps": 50.000180125676145,
+      "client_cpu_cores": 1.4748734977563887,
+      "client_cpu_ms_per_frame": 29.693865476190478,
+      "encoder_cpu_cores": 0.1924824061930537,
+      "upload_gbps": 9.938728175773909,
+      "return_gbps": 0.01588406533418777,
+      "all_correct": true,
+      "decoded_output": {
+        "correct": true,
+        "frames": 1680,
+        "output_sha256": "e4b605993c9591c958a9b5bb7b8fd9a38ef9f8268db3bb24f3f338e74c50d59c"
+      }
+    },
+    {
+      "size": "3840x2160",
+      "pixel_format": "p010le",
+      "mode": "decode",
+      "variant": "none",
+      "frames_per_repeat": 1200,
+      "warmup_frames": 180,
+      "warmup_correct": true,
+      "measured_repeats": [
+        {
+          "frames": 1200,
+          "seconds": 35.43313840497285,
+          "client_cpu_seconds": 19.168256,
+          "encoder_cpu_seconds": 18.245494,
+          "bytes_to_encoder": 50596864,
+          "bytes_to_client": 29859908631,
+          "repeat": 1,
+          "correct": true,
+          "fps": 33.866602113675214
+        },
+        {
+          "frames": 1200,
+          "seconds": 32.8262426769943,
+          "client_cpu_seconds": 19.386364,
+          "encoder_cpu_seconds": 18.773462000000002,
+          "bytes_to_encoder": 50596864,
+          "bytes_to_client": 29859908631,
+          "repeat": 2,
+          "correct": true,
+          "fps": 36.556117975725535
+        },
+        {
+          "frames": 1200,
+          "seconds": 35.158462242019596,
+          "client_cpu_seconds": 19.368744,
+          "encoder_cpu_seconds": 20.000206,
+          "bytes_to_encoder": 50596864,
+          "bytes_to_client": 29859908631,
+          "repeat": 3,
+          "correct": true,
+          "fps": 34.13118559451162
+        }
+      ],
+      "median_fps": 34.13118559451162,
+      "min_fps": 33.866602113675214,
+      "max_fps": 36.556117975725535,
+      "client_cpu_cores": 0.5508984968304862,
+      "client_cpu_ms_per_frame": 16.14062,
+      "encoder_cpu_cores": 0.5688589524287208,
+      "upload_gbps": 0.011512873037895091,
+      "return_gbps": 6.794360555465469,
+      "all_correct": true
+    }
+  ],
+  "streams": [
+    {
+      "id": "nv12-4k60-return",
+      "frames": 3600,
+      "fps": 60,
+      "seconds": 60.298690229974454,
+      "correct": true
+    },
+    {
+      "id": "nv12-4k30-filter",
+      "frames": 900,
+      "fps": 30,
+      "seconds": 30.223383494012523,
+      "correct": true
+    },
+    {
+      "id": "p010-4k30-upload",
+      "frames": 900,
+      "fps": 30,
+      "seconds": 29.618504268000834,
+      "correct": true
+    },
+    {
+      "id": "p010-4k30-return",
+      "frames": 900,
+      "fps": 30,
+      "seconds": 29.7668735460029,
+      "correct": true
+    }
+  ],
+  "frame_validation": {
+    "frames": 240,
+    "wire_modes_identical": true,
+    "sha256": "02ea0b2fcb32c549c4b3b9ca249663d88602c16bb7aa3a29e430c3d3eef7af67"
+  }
+}

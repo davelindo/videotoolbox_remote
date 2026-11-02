@@ -6,10 +6,12 @@ permalink: /llms.txt
 
 **Version**: v0.10.5
 **License**: LGPL v2.1+ by default; optional GPL components depend on FFmpeg configuration.
-**Goal**: High-quality, low-power remote hardware video processing: keep Plex and automation on Linux while a macOS 13+ Mac (including macOS 27) supplies VideoToolbox over LAN.
+**Goal**: Produce video on any PC and use a Mac's dedicated media hardware for encoding. Capture, applications, Plex and automation stay on the source machine while a macOS 13+ Mac supplies VideoToolbox over the network.
 
 ## What It Does
 VideoToolbox Remote turns an Apple Silicon or supported T2 Mac on a LAN into a hardware H.264/HEVC transcoding engine. FFmpeg clients on Linux, Windows, or macOS select remote codecs (`h264_videotoolbox_remote`, `hevc_videotoolbox_remote`). Supported Plex packet transcodes can run on GPU-less Linux hosts while the Mac performs video decode, optional resize and encode. Batch jobs, stock Linux VA-API encoding and experimental OBS live encoding use the same daemon. Published benchmarks include speed, quality, CPU time, M2 Mac-system energy and NVENC GPU-board energy.
+
+Raw NV12/P010 frame producers can hand encoding to the Mac without an intermediate video encode on the source PC. This covers cameras, desktop capture, recording systems, kiosks, mini PCs, SBCs and video applications. The client receives encoded packets and handles audio, muxing and recording or broadcast. Thunderbolt networking and fast Ethernet can carry uncompressed frame uploads with wire compression set to `none`.
 
 ## Core Architecture
 - **Server (`vtremoted`)**: Swift daemon wrapping VideoToolbox. Defaults to loopback TCP 5555; explicit private/VPN bind or a tunnel is needed for other hosts.
@@ -66,6 +68,9 @@ make -j$(nproc)
 - **Wire compression**: LZ4, Zstd, or none. FFmpeg/OBS default to LZ4; the VA-API driver defaults to automatic selection. The macOS server loads LZ4/Zstd at runtime only when requested.
 
 ## Performance
+- The Thunderbolt transport comparison measures 16 pipelines with three repeats. A two-core Intel NUC and M2 achieved 51.2 fps for 4K NV12 upload to HEVC and 49.9 fps for 4K P010 upload to HEVC Main 10.
+- A full 4K decode → Linux hflip → encode round trip reached 49.7 fps with LZ4 on decoder return and no wire compression on encoder upload, versus 50.3 fps for packet-only transcoding. Raw NV12 upload used 58% less client CPU work per frame than LZ4.
+- Paced checks delivered all frames for 4K60 raw NV12 return, 4K30 filtering, and 4K30 P010 upload/return. The transport figures are FFmpeg measurements; OBS has its own integration tests.
 - VideoToolbox Remote gives SBCs, mini PCs and compact Linux servers hardware video processing through a Mac on the LAN, without adding a discrete GPU to the Linux host.
 - Remote VideoToolbox delivers 186–209 fps in the 1080p moving-video tests, using less than one CPU second of Linux FFmpeg work per 60-second clip. Local and remote VideoToolbox use the same M2 Mac.
 - Interactive graphs compare speed, VMAF, CPU time and energy across Intel VA-API, CPU fast/medium, local/remote VideoToolbox and NVIDIA NVENC P4/P7 on an RTX 3070 Ti.
@@ -75,7 +80,7 @@ make -j$(nproc)
 
 ## Key Constraints
 - Server **must** run on macOS with hardware encoding support.
-- Network: wired LAN strongly recommended (1GbE minimum, 2.5GbE+ for 4K).
+- Network: wired LAN or Thunderbolt networking. Raw-frame bandwidth depends on format and frame rate; the capture guide includes NV12/P010 payload rates. Packet transcoding sends compressed video both ways.
 - No encryption by default — use SSH tunnel or VPN for untrusted networks.
 - Token-based authentication is optional (for LAN environments).
 - Plex tone mapping, deinterlace, subtitle burn-in and unsupported constraints are not offloaded; native paths may consume Linux CPU. Direct Play needs no remote video transcode.
@@ -91,6 +96,7 @@ make -j$(nproc)
 - Latest release: https://github.com/davelindo/videotoolbox_remote/releases/latest
 - Documentation: https://davelindo.github.io/videotoolbox_remote/
 - Performance: https://davelindo.github.io/videotoolbox_remote/performance.html
+- Capture and live video: https://davelindo.github.io/videotoolbox_remote/capture-and-encode.html
 - Plex setup and verification: https://davelindo.github.io/videotoolbox_remote/plex.html
 - Stock VA-API setup: https://davelindo.github.io/videotoolbox_remote/vaapi-driver.html
 - OBS setup and validation scope: https://davelindo.github.io/videotoolbox_remote/obs-plugin.html

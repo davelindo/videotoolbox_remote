@@ -48,6 +48,12 @@ After building, `cmake --install build` uses the platform-specific user OBS plug
 
 The plugin provides an encoder; it does not add codec support to a streaming service. Choose H.264 or HEVC according to your destination. Raw-frame transport benefits from wired networking; resolution, frame rate, format and content affect bandwidth. See [security](security.html) before sharing the daemon.
 
+## Capture over a fast link
+
+For Thunderbolt networking or fast Ethernet, select **Wire Compression → None** to send NV12 or P010 frames directly. This keeps wire-compression work off the OBS machine while the Mac performs the video encode. OBS continues to handle capture, scene composition, audio and output delivery.
+
+NV12 at 1080p60 carries about 1.49 Gb/s of frame payload; 4K30 carries about 2.99 Gb/s. P010 doubles those rates. The [capture guide](capture-and-encode.html) includes the bandwidth table and the FFmpeg transport measurements.
+
 ## Test
 
 Run the protocol smoke test from repo root:

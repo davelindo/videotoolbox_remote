@@ -79,6 +79,7 @@ class PublicationTests(unittest.TestCase):
                 self.assertFalse(private_strings.search(value), "personal identifier in published data")
 
         inspect(self.existing)
+        inspect(json.loads((ROOT / "docs/_data/transport.json").read_text()))
 
     def test_append_retains_original_measurements(self):
         old_rows = [row for row in self.existing["rows"] if row["backend"] in performance.BACKENDS]
@@ -209,6 +210,110 @@ class PublicationTests(unittest.TestCase):
                 self.summary["metadata"]["reference_gpu_activity_validation"] = audit
                 with self.assertRaises(ValueError):
                     self.export()
+
+
+class TransportPublicationTests(unittest.TestCase):
+    def setUp(self):
+        data = json.loads((ROOT / "docs/_data/transport.json").read_text())
+        self.summary = {
+            "metadata": {"created_at": data["date"].removesuffix(" UTC"), "release": data["release"],
+                         "hardware": data["hardware"], "mtu": data["mtu"],
+                         "source_sha256": data["source"]["archive_sha256"]},
+            "rows": data["rows"], "streams": data["streams"],
+            "link": {"upload_gbps": data["tcp_upload_gbps"], "return_gbps": data["tcp_return_gbps"]},
+            "frame_hashes": {wire: ["a" * 32] * 240 for wire in ("none", "lz4", "zstd")},
+        }
+
+    def export(self):
+        return performance.public_transport_results(self.summary)
+
+    def test_complete_measured_matrix_is_retained(self):
+        result = self.export()
+        self.assertEqual(len(result["rows"]), 16)
+        self.assertEqual(sum(len(row["measured_repeats"]) for row in result["rows"]), 48)
+        self.assertEqual(result["rows"][0]["median_fps"], self.summary["rows"][0]["median_fps"])
+        self.assertEqual(len(result["streams"]), 4)
+
+    def test_unknown_private_fields_cannot_escape(self):
+        marker = "PRIVATE_INFRASTRUCTURE"
+        self.summary["metadata"]["hardware"]["hostname"] = marker
+        self.summary["metadata"]["command"] = marker
+        self.summary["link"]["address"] = marker
+        for row in self.summary["rows"]:
+            row["private_path"] = marker
+            if "decoded_output" in row:
+                row["decoded_output"]["private_path"] = marker
+            for repeat in row["measured_repeats"]:
+                repeat["private_capture"] = {"command": marker, "path": marker}
+        for stream in self.summary["streams"]:
+            stream["private_capture"] = marker
+        self.assertNotIn(marker, json.dumps(self.export()))
+
+    def test_missing_duplicate_and_unknown_cases_are_rejected(self):
+        for mutation in ("missing", "duplicate", "unknown"):
+            with self.subTest(mutation=mutation):
+                self.setUp()
+                if mutation == "missing":
+                    self.summary["rows"].pop()
+                elif mutation == "duplicate":
+                    self.summary["rows"][-1] = copy.deepcopy(self.summary["rows"][0])
+                else:
+                    self.summary["rows"][0]["variant"] = "PRIVATE_INFRASTRUCTURE"
+                with self.assertRaises(ValueError):
+                    self.export()
+
+    def test_repeat_validation_rejects_bad_values_and_incomplete_runs(self):
+        for key, value in (("seconds", float("nan")), ("seconds", 1), ("frames", True),
+                           ("client_cpu_seconds", float("inf")), ("bytes_to_encoder", -1),
+                           ("repeat", 1), ("correct", False), ("frames", 1)):
+            with self.subTest(key=key, value=value):
+                self.setUp()
+                self.summary["rows"][0]["measured_repeats"][1][key] = value
+                with self.assertRaises(ValueError):
+                    self.export()
+        self.setUp()
+        self.summary["rows"][0]["measured_repeats"].pop()
+        with self.assertRaises(ValueError):
+            self.export()
+        self.setUp()
+        self.summary["rows"][0]["warmup_correct"] = False
+        with self.assertRaises(ValueError):
+            self.export()
+
+    def test_independent_decode_is_bound_to_the_measured_file(self):
+        self.summary["rows"][0]["decoded_output"]["output_sha256"] = "f" * 64
+        with self.assertRaises(ValueError):
+            self.export()
+
+    def test_frame_hashes_must_match_for_all_wire_modes(self):
+        for value in ("b" * 32, "PRIVATE_INFRASTRUCTURE"):
+            with self.subTest(value=value):
+                self.setUp()
+                self.summary["frame_hashes"]["lz4"][0] = value
+                with self.assertRaises(ValueError):
+                    self.export()
+
+    def test_streams_require_complete_frame_counts_and_real_time_delivery(self):
+        for key, value in (("frames", 1), ("correct", False), ("seconds", 1000)):
+            with self.subTest(key=key, value=value):
+                self.setUp()
+                self.summary["streams"][0][key] = value
+                with self.assertRaises(ValueError):
+                    self.export()
+        self.setUp()
+        self.summary["streams"].pop()
+        with self.assertRaises(ValueError):
+            self.export()
+
+    def test_hardware_fields_cannot_publish_arbitrary_strings(self):
+        self.summary["metadata"]["hardware"]["client_model"] = "PRIVATE_INFRASTRUCTURE"
+        with self.assertRaises(ValueError):
+            self.export()
+
+    def test_summary_statistics_are_computed_from_repeats(self):
+        expected = self.export()["rows"][0]["median_fps"]
+        self.summary["rows"][0]["median_fps"] = 999999
+        self.assertEqual(self.export()["rows"][0]["median_fps"], expected)
 
 
 if __name__ == "__main__":

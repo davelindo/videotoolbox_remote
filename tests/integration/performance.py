@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproducible Intel/software/VideoToolbox/NVENC performance comparisons.
+"""Reproducible video encoding, energy and transport comparisons.
 
 Prepare and measure on the designated hosts. The coordinating computer only
 dispatches jobs and collects results; it never encodes benchmark video.
@@ -173,6 +173,127 @@ def public_results(summary):
         result["mac_power"] = {"sampler": {"version": version[1], "sha256": sampler["sha256"]},
                                "sensor": "SMC PSTR", "power_scope": "Mac system, including idle consumption"}
     return result
+
+
+TRANSPORT_CASES = {
+    *(("3840x2160", "nv12", mode, wire)
+      for mode in ("encode", "decode", "roundtrip") for wire in ("none", "lz4", "zstd")),
+    ("3840x2160", "nv12", "roundtrip", "mixed"),
+    ("3840x2160", "nv12", "transcode", "packet-only"),
+    *(("1920x1080", "nv12", mode, "none") for mode in ("encode", "decode", "roundtrip")),
+    *(("3840x2160", "p010le", mode, "none") for mode in ("encode", "decode")),
+}
+
+
+def public_transport_results(summary):
+    """Publish a complete transport matrix through scalar and enum allowlists."""
+    def number(value, positive=False, integer=False):
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or value < 0 or (positive and value == 0)
+                or (integer and value != int(value))):
+            raise ValueError("transport measurements must be finite nonnegative numbers")
+        return int(value) if integer else value
+
+    def digest(value):
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+            raise ValueError("invalid transport output identity")
+        return value
+
+    metadata = summary["metadata"]
+    release = metadata["release"]
+    if not re.fullmatch(r"v\d+\.\d+\.\d+", release):
+        raise ValueError("invalid transport release")
+    hardware = {}
+    for key, pattern in {
+        "client_model": r"Intel NUC\d{1,2}i[3579][A-Z]{2,3}",
+        "client_cpu": r"Intel Core i[3579]-\d{4,5}[A-Z]{1,2}",
+        "encoder_model": r"Apple M\d{1,2}(?: Pro| Max| Ultra)?",
+        "encoder_os": r"macOS \d{1,2}\.\d{1,2}(?:\.\d{1,2})?",
+    }.items():
+        value = metadata["hardware"][key]
+        if not isinstance(value, str) or not re.fullmatch(pattern, value):
+            raise ValueError("invalid public transport hardware identity")
+        hardware[key] = value
+    for key in ("client_ram_gib", "encoder_ram_gib"):
+        hardware[key] = number(metadata["hardware"][key], positive=True, integer=True)
+    rows, identities = [], []
+    repeat_fields = ("frames", "seconds", "client_cpu_seconds", "encoder_cpu_seconds",
+                     "bytes_to_encoder", "bytes_to_client")
+    for row in summary["rows"]:
+        identity = tuple(row[key] for key in ("size", "pixel_format", "mode", "variant"))
+        if identity not in TRANSPORT_CASES:
+            raise ValueError("unknown transport comparison")
+        identities.append(identity)
+        if row["warmup_frames"] != 180 or row["warmup_correct"] is not True:
+            raise ValueError("transport comparisons require a validated warm-up")
+        frames = number(row["frames_per_repeat"], positive=True, integer=True)
+        repeats = []
+        for index, measured in enumerate(row["measured_repeats"], 1):
+            if measured["repeat"] != index or type(measured["repeat"]) is not int or measured["correct"] is not True:
+                raise ValueError("transport repeats must be ordered and validated")
+            repeat = {key: number(measured[key], positive=key in ("frames", "seconds"),
+                                  integer=key in ("frames", "bytes_to_encoder", "bytes_to_client"))
+                      for key in repeat_fields}
+            if repeat["frames"] != frames or repeat["seconds"] < 20:
+                raise ValueError("transport repeats need matching counts and sustained timing")
+            repeat.update(repeat=index, correct=True, fps=frames / repeat["seconds"])
+            if row["mode"] != "decode":
+                repeat["output_sha256"] = digest(measured["output_sha256"])
+            repeats.append(repeat)
+        if len(repeats) != 3:
+            raise ValueError("transport comparisons require three measured repeats")
+        exported = dict(zip(("size", "pixel_format", "mode", "variant"), identity))
+        exported.update(frames_per_repeat=frames, warmup_frames=180, warmup_correct=True,
+                        measured_repeats=repeats, median_fps=statistics.median(r["fps"] for r in repeats),
+                        min_fps=min(r["fps"] for r in repeats), max_fps=max(r["fps"] for r in repeats),
+                        client_cpu_cores=statistics.median(r["client_cpu_seconds"] / r["seconds"] for r in repeats),
+                        client_cpu_ms_per_frame=statistics.median(r["client_cpu_seconds"] * 1000 / frames for r in repeats),
+                        encoder_cpu_cores=statistics.median(r["encoder_cpu_seconds"] / r["seconds"] for r in repeats),
+                        upload_gbps=statistics.median(r["bytes_to_encoder"] * 8 / r["seconds"] / 1e9 for r in repeats),
+                        return_gbps=statistics.median(r["bytes_to_client"] * 8 / r["seconds"] / 1e9 for r in repeats),
+                        all_correct=True)
+        if row["mode"] != "decode":
+            decoded = row["decoded_output"]
+            if (decoded["correct"] is not True or decoded["frames"] != frames
+                    or digest(decoded["output_sha256"]) != repeats[0]["output_sha256"]):
+                raise ValueError("independent decoding must identify the first measured output")
+            exported["decoded_output"] = {"correct": True, "frames": frames,
+                                           "output_sha256": repeats[0]["output_sha256"]}
+        rows.append(exported)
+    if len(identities) != len(TRANSPORT_CASES) or set(identities) != TRANSPORT_CASES:
+        raise ValueError("transport comparison is incomplete or duplicated")
+    hashes = summary["frame_hashes"]
+    if set(hashes) != {"none", "lz4", "zstd"}:
+        raise ValueError("frame validation requires all three wire modes")
+    reference = hashes["none"]
+    if (len(reference) != 240 or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{32}", value) for value in reference)
+            or any(values != reference for values in hashes.values())):
+        raise ValueError("wire modes must deliver identical decoded frames")
+    streams = []
+    expected_streams = {"nv12-4k60-return": (3600, 60), "nv12-4k30-filter": (900, 30),
+                        "p010-4k30-upload": (900, 30), "p010-4k30-return": (900, 30)}
+    for stream in summary["streams"]:
+        if stream["id"] not in expected_streams:
+            raise ValueError("unknown paced transport check")
+        frames, fps = expected_streams[stream["id"]]
+        seconds = number(stream["seconds"], positive=True)
+        if (type(stream["frames"]) is not int or stream["frames"] != frames
+                or stream["correct"] is not True or abs(seconds - frames / fps) > 2):
+            raise ValueError("paced transport checks must deliver every frame on time")
+        streams.append({"id": stream["id"], "frames": frames, "fps": fps,
+                        "seconds": seconds, "correct": True})
+    if len(streams) != 4 or {stream["id"] for stream in streams} != set(expected_streams):
+        raise ValueError("paced transport validation is incomplete")
+    link = summary["link"]
+    return {"date": datetime.fromisoformat(metadata["created_at"]).date().isoformat() + " UTC",
+            "release": release, "hardware": hardware, "mtu": number(metadata["mtu"], positive=True, integer=True),
+            "tcp_upload_gbps": number(link["upload_gbps"], positive=True),
+            "tcp_return_gbps": number(link["return_gbps"], positive=True),
+            "source": {"url": "https://download.blender.org/demo/movies/BBB/bbb_sunflower_2160p_60fps_normal.mp4.zip",
+                       "archive_sha256": digest(metadata["source_sha256"]), "start_seconds": 60},
+            "rows": rows, "streams": streams,
+            "frame_validation": {"frames": 240, "wire_modes_identical": True,
+                                 "sha256": hashlib.sha256("\n".join(reference).encode()).hexdigest()}}
 
 
 def append_nvenc_results(existing, addition):
@@ -870,12 +991,16 @@ def main():
     public.add_argument("--input", type=Path, required=True)
     public.add_argument("--append-to", type=Path)
     public.add_argument("--output", type=Path)
+    transport = commands.add_parser("public-transport-results")
+    transport.add_argument("--input", type=Path, required=True)
+    transport.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if getattr(args, "frames", 1) <= 0 or getattr(args, "repeats", 1) <= 0:
         parser.error("frames and repeats must be positive")
-    if args.command == "public-results":
-        result = public_results(json.loads(args.input.read_text()))
-        if args.append_to:
+    if args.command in ("public-results", "public-transport-results"):
+        export = public_transport_results if args.command == "public-transport-results" else public_results
+        result = export(json.loads(args.input.read_text()))
+        if getattr(args, "append_to", None):
             existing = json.loads(args.append_to.read_text())
             result = append_mac_energy(existing, result) if "mac_power" in result else append_nvenc_results(existing, result)
         serialized = json.dumps(result, indent=2) + "\n"

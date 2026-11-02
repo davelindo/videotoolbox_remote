@@ -63,6 +63,11 @@ a, button, summary { -webkit-tap-highlight-color: transparent; }
 .performance-preview { display: grid; grid-template-columns: .8fr 1.2fr; gap: 64px; align-items: center; }
 .performance-preview p { font-size: 15px; }
 .performance-preview .measurement-note { margin: 26px 0 0; color: var(--muted); font-size: 12px; }
+.capture-metrics { display: grid; gap: 20px; min-width: 0; }
+.capture-metrics > div { padding: 26px 30px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.capture-metrics strong { color: var(--accent); font-size: clamp(38px, 5vw, 58px); font-weight: 600; letter-spacing: -2px; line-height: 1.1; }
+.capture-metrics strong span { color: var(--muted); font-size: 18px; font-weight: 400; letter-spacing: 0; }
+.capture-metrics p { margin: 14px 0 0; color: var(--body); }
 .performance-shot { min-width: 0; margin: 0; }
 .performance-shot img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 14px; }
 .performance-shot figcaption { font: 10px/1.9 var(--mono); color: var(--muted); margin-top: 15px; }

@@ -7,11 +7,13 @@ description: "Install remote VideoToolbox binaries for macOS, Linux and Windows.
 
 Use a Mac's media hardware from your Linux, Windows or macOS FFmpeg client. For a Plex server, go directly to the [Plex guide](plex.html); stock libva applications use the [VA-API guide](vaapi-driver.html).
 
+For cameras, desktop capture and applications producing raw NV12/P010 frames, use the [capture and remote encoding guide](capture-and-encode.html).
+
 ## Requirements
 
 - A Mac with Apple Silicon or supported T2 hardware, running macOS 13 or newer, including macOS 27.
 - A Linux, Windows or macOS client with a matching release or source build.
-- A reachable private endpoint. Wired LAN is recommended; raw 4K/10-bit frames benefit from 2.5GbE or faster. Packet transcoding uses much less bandwidth.
+- A reachable private endpoint over wired LAN or Thunderbolt networking. Use the [raw frame bandwidth table](capture-and-encode.html#choose-wire-compression-for-the-link) for capture workflows. Packet transcoding sends compressed video both ways.
 
 ## Install the release binaries
 
@@ -149,6 +151,7 @@ The built client is `ffmpeg/ffmpeg`. If a Linux x86 assembly build fails, instal
 
 ## Next steps
 
+- [Capture and live video](capture-and-encode.html): produce frames on any PC and encode them on the Mac.
 - [Plex](plex.html): keep Plex on Linux and use a Mac as the external video engine.
 - [VA-API](vaapi-driver.html): use stock Linux applications through the encode-only driver.
 - [OBS](obs-plugin.html): build the experimental remote live encoder.

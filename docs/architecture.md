@@ -11,6 +11,8 @@ description: "System design of VideoToolbox Remote: lightweight TCP protocol con
 
 VideoToolbox Remote connects FFmpeg, stock Linux VA-API applications, a Plex packet integration and an experimental OBS plugin to a macOS VideoToolbox daemon. Client-side files, audio, subtitles and delivery stay local; supported video work runs on the Mac.
 
+Frame producers can use the encoder directly: capture NV12/P010 on a PC, send the frames to the Mac and receive encoded H.264/HEVC packets. This separates where video originates from where it is encoded. See [capture and live video](capture-and-encode.html) for cameras, desktop capture, recording systems and application inputs.
+
 ```mermaid
 flowchart LR
     Client["Patched FFmpeg"] -->|"Frames or packets / TCP"| Server["vtremoted on macOS"]

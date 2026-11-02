@@ -1,13 +1,13 @@
 ---
-title: Remote Plex & FFmpeg transcoding
-description: "High-quality, low-power video transcoding with a Mac's VideoToolbox hardware. Keep Plex on Linux, convert files with FFmpeg and offload OBS or VA-API encoding over LAN."
+title: Remote video encoding and transcoding
+description: "Capture video on any PC and let your Mac encode it. NV12/P010 capture, Plex, FFmpeg, OBS and VA-API use the Mac's dedicated media hardware over the network."
 home: true
 ---
 
 <section class="hero" aria-labelledby="hero-title">
   <div>
-    <h1 id="hero-title">Let your Mac<br>handle the<br><span>transcodes.</span></h1>
-    <p class="lead">High-quality, low-power transcoding over LAN. Keep Plex, your files and your workflows where they are.</p>
+    <h1 id="hero-title">Let your Mac<br>handle the<br><span>encoding.</span></h1>
+    <p class="lead">Produce video on any PC. Keep capture, applications and files where they are, and use the Mac's dedicated media hardware for encoding.</p>
     <div class="actions">
       <a class="button primary" href="getting-started.html">Get started</a>
       <a class="button" href="{{ site.latest_release_url }}">Download {{ site.current_release }} ↗</a>
@@ -31,9 +31,9 @@ home: true
     </div>
     <div class="workflow-card">
       <div class="workflow-brand"><img class="product-icon ffmpeg-icon" src="assets/brands/ffmpeg.svg" width="32" height="32" alt=""><span>FFmpeg</span><span class="workflow-tag">Linux · Windows · macOS</span></div>
-      <h3>Work through your batch queue.</h3>
-      <p>Convert H.264 or HEVC files using the Mac's efficient media engine. Packet transcoding sends compressed video both ways, keeping network traffic low.</p>
-      <a class="text-link" href="getting-started.html#packet-transcoding-for-batch-jobs">Run a batch transcode →</a>
+      <h3>Capture here. Encode on your Mac.</h3>
+      <p>Send frames from cameras, desktop capture, recording systems or your application to the Mac. NV12 and P010 keep the source PC free from an intermediate video encode.</p>
+      <a class="text-link" href="capture-and-encode.html">Encode from any PC →</a>
       <p class="workflow-scope">Use the matching FFmpeg client release.</p>
     </div>
     <div class="workflow-card">
@@ -50,6 +50,23 @@ home: true
       <a class="text-link" href="vaapi-driver.html">Install the VA-API driver →</a>
       <p class="workflow-scope">Encode-only. Libva requires a DRM render node.</p>
     </div>
+  </div>
+</section>
+
+{% assign transport = site.data.transport %}
+{% assign capture = transport.rows | where: "size", "3840x2160" | where: "variant", "mixed" | first %}
+{% assign packet_control = transport.rows | where: "variant", "packet-only" | first %}
+{% assign p010 = transport.rows | where: "pixel_format", "p010le" | where: "mode", "encode" | first %}
+<section class="landing-section performance-preview" aria-labelledby="capture-title">
+  <div>
+    <h2 id="capture-title">Raw frames.<br>Remote hardware.</h2>
+    <p>Thunderbolt networking and fast Ethernet make raw video offload practical. Capture on a mini PC, SBC or workstation, and hand encoding to the Mac.</p>
+    <a class="text-link" href="capture-and-encode.html">Explore capture and frame workflows →</a>
+    <p class="measurement-note">Two-core Intel NUC → Apple M2 · {{ transport.release }} · Median of three FFmpeg runs</p>
+  </div>
+  <div class="capture-metrics">
+    <div><strong>{{ capture.median_fps | round: 1 }} <span>fps</span></strong><p>4K decode → Linux filter → encode<br>{{ packet_control.median_fps | round: 1 }} fps for packet-only transcoding</p></div>
+    <div><strong>{{ p010.median_fps | round: 1 }} <span>fps</span></strong><p>4K P010 → HEVC Main 10<br>{{ p010.upload_gbps | round: 2 }} Gb/s of raw frame traffic</p></div>
   </div>
 </section>
 
