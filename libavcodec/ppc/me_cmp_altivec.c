@@ -23,15 +23,13 @@
 #include "config.h"
 
 #include "libavutil/attributes.h"
-#include "libavutil/cpu.h"
-#include "libavutil/ppc/cpu.h"
 #include "libavutil/ppc/util_altivec.h"
 
 #include "libavcodec/avcodec.h"
 #include "libavcodec/mpegvideo.h"
 #include "libavcodec/me_cmp.h"
 
-#if HAVE_ALTIVEC
+#include "me_cmp_altivec.h"
 
 #if HAVE_BIGENDIAN
 #define GET_PERM(per1, per2, pix) {\
@@ -721,14 +719,9 @@ static int hadamard8_diff16_altivec(MPVEncContext *s, const uint8_t *dst,
     }
     return score;
 }
-#endif /* HAVE_ALTIVEC */
 
-av_cold void ff_me_cmp_init_ppc(MECmpContext *c, AVCodecContext *avctx)
+av_cold void ff_me_cmp_init_altivec(MECmpContext *c, AVCodecContext *avctx)
 {
-#if HAVE_ALTIVEC
-    if (!PPC_ALTIVEC(av_get_cpu_flags()))
-        return;
-
     c->pix_abs[0][1] = sad16_x2_altivec;
     c->pix_abs[0][2] = sad16_y2_altivec;
     c->pix_abs[0][3] = sad16_xy2_altivec;
@@ -742,5 +735,4 @@ av_cold void ff_me_cmp_init_ppc(MECmpContext *c, AVCodecContext *avctx)
 
     c->hadamard8_diff[0] = hadamard8_diff16_altivec;
     c->hadamard8_diff[1] = hadamard8_diff8x8_altivec;
-#endif /* HAVE_ALTIVEC */
 }
