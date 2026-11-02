@@ -21,17 +21,14 @@
 #include "config.h"
 
 #include "libavutil/attributes.h"
-#include "libavutil/cpu.h"
 #include "libavutil/intreadwrite.h"
 #include "libavutil/mem_internal.h"
-#include "libavutil/ppc/cpu.h"
 #include "libavutil/ppc/util_altivec.h"
 
 #include "libavcodec/h264qpel.h"
 
+#include "h264qpel_altivec.h"
 #include "hpeldsp_altivec.h"
-
-#if HAVE_ALTIVEC
 
 #define PUT_OP_U8_ALTIVEC(d, s, dst) d = s
 #define AVG_OP_U8_ALTIVEC(d, s, dst) d = vec_avg(dst, s)
@@ -278,15 +275,10 @@ static inline void avg_pixels16_l2_altivec( uint8_t * dst, const uint8_t * src1,
 
 H264_MC(put_, 16, altivec)
 H264_MC(avg_, 16, altivec)
-#endif /* HAVE_ALTIVEC */
 
-av_cold void ff_h264qpel_init_ppc(H264QpelContext *c, int bit_depth)
+av_cold void ff_h264qpel_init_altivec(H264QpelContext *c, int bit_depth)
 {
-#if HAVE_ALTIVEC
     const int high_bit_depth = bit_depth > 8;
-
-    if (!PPC_ALTIVEC(av_get_cpu_flags()))
-        return;
 
     if (!high_bit_depth) {
 #define dspfunc(PFX, IDX, NUM) \
@@ -311,5 +303,4 @@ av_cold void ff_h264qpel_init_ppc(H264QpelContext *c, int bit_depth)
         dspfunc(avg_h264_qpel, 0, 16);
 #undef dspfunc
     }
-#endif /* HAVE_ALTIVEC */
 }
