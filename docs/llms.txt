@@ -69,7 +69,7 @@ make -j$(nproc)
 
 ## Performance
 - The Thunderbolt transport comparison measures 16 pipelines with three repeats. A two-core Intel NUC and M2 achieved 51.2 fps for 4K NV12 upload to HEVC and 49.9 fps for 4K P010 upload to HEVC Main 10.
-- A full 4K decode → Linux hflip → encode round trip reached 49.7 fps with LZ4 on decoder return and no wire compression on encoder upload, versus 50.3 fps for packet-only transcoding. Raw NV12 upload used 58% less client CPU work per frame than LZ4.
+- A full 4K decode → Linux hflip → encode round trip reached 49.7 fps with LZ4 on decoder return and no wire compression on encoder upload, versus 50.3 fps for packet-only transcoding. Raw NV12 upload used 58% less client FFmpeg CPU time per frame than LZ4.
 - Paced checks delivered all frames for 4K60 raw NV12 return, 4K30 filtering, and 4K30 P010 upload/return. The transport figures are FFmpeg measurements; OBS has its own integration tests.
 - VideoToolbox Remote gives SBCs, mini PCs and compact Linux servers hardware video processing through a Mac on the LAN, without adding a discrete GPU to the Linux host.
 - Remote VideoToolbox delivers 186–209 fps in the 1080p moving-video tests, using less than one CPU second of Linux FFmpeg work per 60-second clip. Local and remote VideoToolbox use the same M2 Mac.

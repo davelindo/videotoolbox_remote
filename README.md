@@ -33,7 +33,7 @@ Use it for cameras, desktop capture, recording systems, high-quality Plex transc
 
 ### Raw frames over a fast link
 
-A two-core Intel NUC feeding an M2 over Thunderbolt reached **51.2 fps for 4K NV12 → HEVC** and **49.9 fps for 4K P010 → HEVC Main 10**. The full decode → Linux filter → encode round trip reached **49.7 fps**, alongside **50.3 fps** for packet-only transcoding. Uncompressed NV12 upload used **58% less client CPU work per frame** than LZ4.
+A two-core Intel NUC feeding an M2 over Thunderbolt reached **51.2 fps for 4K NV12 → HEVC** and **49.9 fps for 4K P010 → HEVC Main 10**. The full decode → Linux filter → encode round trip reached **49.7 fps**, alongside **50.3 fps** for packet-only transcoding. Uncompressed NV12 upload used **58% less client FFmpeg CPU time per frame** than LZ4.
 
 The [capture guide](docs/capture-and-encode.md#raw-frame-transport) includes the measured matrix, bandwidth requirements and compression settings. The source application receives the encoded packets and handles recording or broadcast, audio and muxing.
 

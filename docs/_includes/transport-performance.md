@@ -19,7 +19,7 @@ All figures below are medians of three FFmpeg runs. Encode uploads NV12 and rece
 {% assign variants = "none,lz4,zstd" | split: "," %}{% for variant in variants %}{% assign encode = nv12 | where: "mode", "encode" | where: "variant", variant | first %}{% assign decode = nv12 | where: "mode", "decode" | where: "variant", variant | first %}{% assign roundtrip = nv12 | where: "mode", "roundtrip" | where: "variant", variant | first %}| {% if variant == "none" %}None{% elsif variant == "lz4" %}LZ4{% else %}Zstd{% endif %} | {{ encode.median_fps | round: 1 }} | {{ decode.median_fps | round: 1 }} | {{ roundtrip.median_fps | round: 1 }} |
 {% endfor %}| LZ4 return, uncompressed upload | — | — | **{{ mixed.median_fps | round: 1 }}** |
 
-Uncompressed NV12 upload used **{{ cpu_saving | round: 0 }}% less client CPU work per frame** than LZ4. It carried {{ raw_encode.upload_gbps | round: 2 }} Gb/s toward the Mac. The mixed filter round trip carried {{ mixed.upload_gbps | round: 2 }} Gb/s toward the Mac and {{ mixed.return_gbps | round: 2 }} Gb/s returning.
+Uncompressed NV12 upload used **{{ cpu_saving | round: 0 }}% less client FFmpeg CPU time per frame** than LZ4. It carried {{ raw_encode.upload_gbps | round: 2 }} Gb/s toward the Mac. The mixed filter round trip carried {{ mixed.upload_gbps | round: 2 }} Gb/s toward the Mac and {{ mixed.return_gbps | round: 2 }} Gb/s returning.
 
 | Other pipeline | Median fps | Run range, fps |
 | --- | ---: | ---: |
