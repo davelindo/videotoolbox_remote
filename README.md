@@ -1,22 +1,22 @@
-# VideoToolbox Remote — low-power H.264 / HEVC transcoding over LAN
+# VideoToolbox Remote — hardware video encoding and transcoding over the network
 
 [![CI](https://github.com/davelindo/videotoolbox_remote/actions/workflows/ci.yml/badge.svg)](https://github.com/davelindo/videotoolbox_remote/actions/workflows/ci.yml)
 [![Docs](https://github.com/davelindo/videotoolbox_remote/actions/workflows/pages.yml/badge.svg)](https://davelindo.github.io/videotoolbox_remote/)
 [![Latest release](https://img.shields.io/github/v/release/davelindo/videotoolbox_remote?label=release)](https://github.com/davelindo/videotoolbox_remote/releases/latest)
 [![License](https://img.shields.io/badge/license-LGPLv2.1%2B%20%2F%20optional%20GPL-blue)](LICENSE.md)
 
-**Let your Mac handle the transcodes. Keep Plex on your Linux server.**
+**Produce video on any PC. Let your Mac handle the encoding.**
 
-Turn a Mac mini or another supported Mac into an external video engine for your Linux homelab. VideoToolbox Remote sends video over your LAN to Apple's dedicated media hardware for high-quality H.264 (AVC), H.265 (HEVC) and HEVC Main 10 transcoding. Low-powered, GPU-less Linux servers and NAS devices keep hosting Plex and serving media while the Mac handles supported video decode, resize and encode.
+Turn a Mac mini or another supported Mac into a shared video engine for PCs, SBCs, mini PCs and NAS devices. Capture video, run applications and keep files on the source machine while Apple's dedicated media hardware handles H.264 (AVC), H.265 (HEVC) and HEVC Main 10 encoding. Send raw NV12/P010 frames for remote encoding, or compressed video for supported decode, resize and encode on the Mac.
 
-Use it for high-quality Plex transcodes, low-power batch video conversion with FFmpeg, stock Linux VA-API encoding, or an experimental remote OBS Studio encoder. FFmpeg clients run on Linux, Windows and macOS; the VideoToolbox daemon runs on macOS 13+.
+Use it for cameras, desktop capture, recording systems, high-quality Plex transcodes, FFmpeg batch conversion, stock Linux VA-API encoding, or an experimental remote OBS Studio encoder. FFmpeg clients run on Linux, Windows and macOS; the VideoToolbox daemon runs on macOS 13+.
 
-**[Documentation](https://davelindo.github.io/videotoolbox_remote/) · [Plex setup](docs/plex.md) · [Download binaries](https://github.com/davelindo/videotoolbox_remote/releases/latest) · [Performance](https://davelindo.github.io/videotoolbox_remote/performance.html)**
+**[Documentation](https://davelindo.github.io/videotoolbox_remote/) · [Capture and encode](docs/capture-and-encode.md) · [Plex setup](docs/plex.md) · [Download binaries](https://github.com/davelindo/videotoolbox_remote/releases/latest) · [Performance](https://davelindo.github.io/videotoolbox_remote/performance.html)**
 
 ## Why use a Mac as a remote encoder?
 
 - Keep Plex, storage and media delivery on Linux. The supported Plex video path runs on the Mac and needs no Linux GPU or DRM render node.
-- Use dedicated VideoToolbox media hardware for low-power playback transcodes and batch queues. Published results measure quality and CPU offload; whole-system watt measurements are still needed.
+- Use dedicated VideoToolbox media hardware for capture, recording, playback transcodes and batch queues. Keep encoding work off the machine running your main application.
 - Control output quality with H.264, HEVC and 10-bit HEVC, including bitrate, profile and color settings. [Performance benchmarks](https://davelindo.github.io/videotoolbox_remote/performance.html) compare Intel VA-API, CPU fast/medium, local VideoToolbox and remote VideoToolbox using Big Buck Bunny and FFmpeg signals, with graphs of throughput, video quality and CPU time alongside actual file sizes and bitrates.
 - Keep LAN traffic low with packet transcoding, which sends compressed video in both directions. Choose raw-frame remote encoding when you need local filters or live sources.
 
@@ -25,10 +25,17 @@ Use it for high-quality Plex transcodes, low-power batch video conversion with F
 | Workflow | What runs on the Mac | Setup and scope |
 | --- | --- | --- |
 | **Plex on Linux / a GPU-less NAS** | H.264/HEVC decode, resize and encode | [Plex Docker guide](docs/plex.md). Linux x86_64 container; supported Plex library builds and filter graphs only. Plex Pass required for normal hardware-accelerated playback. |
+| **Capture and live video on any PC** | NV12/P010 → H.264/HEVC encode | [Capture guide](docs/capture-and-encode.md). Cameras, desktop capture, recording and frame producers; use Thunderbolt networking or fast Ethernet for raw frames. |
 | **FFmpeg batch transcodes** | Encode, decode, or packet-to-packet transcode | [Getting started](docs/getting-started.md). Patched FFmpeg clients for Linux, Windows and macOS. |
 | **Stock Linux VA-API applications** | H.264/HEVC encode | [VA-API driver](docs/vaapi-driver.md). Linux x86_64; software decode/filter/upload and a render node remain local. |
 | **OBS Studio live encoding** | H.264/HEVC encode | [OBS plugin](docs/obs-plugin.md). Experimental; build from source and validate your recording/streaming workflow. |
 | **Custom C applications** | Encode through the shared protocol client | [Static C SDK](vaapi-driver/README.md#experimental-c-sdk). Experimental API; rebuild with the matching release. |
+
+### Raw frames over a fast link
+
+A two-core Intel NUC feeding an M2 over Thunderbolt reached **51.2 fps for 4K NV12 → HEVC** and **49.9 fps for 4K P010 → HEVC Main 10**. The full decode → Linux filter → encode round trip reached **49.7 fps**, alongside **50.3 fps** for packet-only transcoding. Uncompressed NV12 upload used **58% less client FFmpeg CPU time per frame** than LZ4.
+
+The [capture guide](docs/capture-and-encode.md#raw-frame-transport) includes the measured matrix, bandwidth requirements and compression settings. The source application receives the encoded packets and handles recording or broadcast, audio and muxing.
 
 ## Quick start: remote FFmpeg encoding
 
@@ -93,7 +100,7 @@ The Linux arm64 FFmpeg archive is dynamically linked and requires glibc 2.39+ an
 - **Remote decode:** H.264/HEVC packets → Mac → raw frames.
 - **Remote transcode:** H.264/HEVC packets → Mac decode/resize/encode → packets.
 
-Wired LAN is recommended. Raw frames can require substantial bandwidth, especially at 4K/10-bit; LZ4/Zstd compression depends on content. Packet mode is usually the better fit for a low-powered Plex host or batch conversion without local video filters.
+Capture and local-filter workflows can send uncompressed NV12/P010 over Thunderbolt networking or fast Ethernet. Choose the frame rate and wire compression using the [bandwidth table](docs/capture-and-encode.md#choose-wire-compression-for-the-link). Packet transcoding sends compressed video both ways for Plex and batch jobs whose video processing runs entirely on the Mac.
 
 The general VA-API driver is encode-only and does not provide decode, VPP, tone mapping, B-frames or external DMA-BUF surfaces. The Plex container uses a separate packet path, checks the bundled codec library and supported graph, and leaves unsupported commands on Plex's native path. Native processing may still use Linux CPU. See the guides for exact constraints.
 

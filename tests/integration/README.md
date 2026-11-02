@@ -232,6 +232,32 @@ The exporter requires a complete twelve-case matrix and adds it under
 `videotoolbox_energy`, retaining the seven-pipeline measurements. Mac-system
 and NVIDIA GPU-board energy are labelled with their respective scopes.
 
+### Raw frame transport publication
+
+The Thunderbolt reference comparison covers 16 cases: 4K NV12 encode, decode and
+filter round trips with no compression, LZ4 and Zstd; a mixed LZ4-return/raw-upload
+round trip; packet transcoding; 1080p raw encode/decode/filtering; and 4K P010 raw
+encode/decode. Use a 180-frame warm-up and three sustained measurements per case.
+Keep input preparation outside the timed FFmpeg process. The source, hardware,
+settings and individual measurements are in `docs/_data/transport.json`.
+
+Publish a private capture summary through the transport allowlist:
+
+```bash
+python3 tests/integration/performance.py --workdir /tmp/vtremote-transport \
+  public-transport-results --input /tmp/vtremote-transport/capture-summary.json \
+  --output docs/_data/transport.json
+python3 tests/test_performance.py
+```
+
+The exporter requires the complete matrix, three ordered repeats lasting at
+least 20 seconds each, validated warm-ups, output identities bound to independent
+decodes, identical decoded-frame hashes across wire modes, and complete paced
+4K60 NV12 / 4K30 P010 and filter checks. It recomputes throughput and CPU metrics
+from repeat-level measurements and exports only defined scalars and enums.
+Raw captures, commands, process information and host addresses stay outside Git.
+Jekyll serves the exported data at `assets/data/transport.json`.
+
 ## Integration script options
 
 These options apply to the integration and `bench_vtremote.sh` scripts above, rather than the five-pipeline performance runner.

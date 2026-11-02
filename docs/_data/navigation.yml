@@ -2,6 +2,8 @@
   pages:
     - title: Getting started
       url: /getting-started.html
+    - title: Capture and live video
+      url: /capture-and-encode.html
     - title: Plex on a GPU-less host
       url: /plex.html
     - title: Linux VA-API
