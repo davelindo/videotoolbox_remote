@@ -31,7 +31,26 @@ public struct SessionConfiguration: Sendable {
     public var frameRate: (num: Int, den: Int)
     public var options: SessionOptions
     public var configExtradata: Data?
+    public var presentationStartPTS: Int64?
+    public var presentationEndPTS: Int64?
     let maxFrameBytes: Int
+
+    private static func presentationBound(_ value: String?) throws -> Int64? {
+        guard let value else { return nil }
+        guard let bound = Int64(value), bound != Int64.min else {
+            throw VTRemotedError.unsupported("presentation bounds must be valid PTS values")
+        }
+        return bound
+    }
+
+    func includesPresentationTime(_ pts: Int64) throws -> Bool {
+        guard presentationStartPTS != nil || presentationEndPTS != nil else { return true }
+        guard pts != Int64.min else {
+            throw VTRemotedError.protocolViolation("presentation window requires decoded frame PTS")
+        }
+        return (presentationStartPTS.map { pts >= $0 } ?? true) &&
+            (presentationEndPTS.map { pts < $0 } ?? true)
+    }
 
     private static func checkedProduct(_ lhs: Int, _ rhs: Int, field: String) throws -> Int {
         let (value, overflow) = lhs.multipliedReportingOverflow(by: rhs)
@@ -121,6 +140,16 @@ public struct SessionConfiguration: Sendable {
             throw VTRemotedError.unsupported("mode=\(modeRaw)")
         }
         mode = parsedMode
+        presentationStartPTS = try Self.presentationBound(request.options["presentation_start_pts"])
+        presentationEndPTS = try Self.presentationBound(request.options["presentation_end_pts"])
+        if presentationStartPTS != nil || presentationEndPTS != nil {
+            guard mode == .transcode else {
+                throw VTRemotedError.unsupported("presentation window requires transcode mode")
+            }
+            if let start = presentationStartPTS, let end = presentationEndPTS, start >= end {
+                throw VTRemotedError.unsupported("presentation start must precede presentation end")
+            }
+        }
         guard request.frameRate.den > 0,
               mode != .encode || request.frameRate.num > 0
         else {

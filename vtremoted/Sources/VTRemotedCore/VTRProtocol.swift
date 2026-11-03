@@ -40,6 +40,7 @@ public enum VTRCapability {
     public static let hwFramesVideoToolboxOutput = "hwframes.videotoolbox.output"
     public static let sideDataV2 = "side_data.v2"
     public static let packetAckV1 = "packet_ack.v1"
+    public static let transcodePresentationWindowV1 = "transcode.presentation_window.v1"
 
     public static let baseline: [String] = [
         h264,
@@ -55,7 +56,8 @@ public enum VTRCapability {
         hwFramesVideoToolboxInput,
         hwFramesVideoToolboxOutput,
         sideDataV2,
-        packetAckV1
+        packetAckV1,
+        transcodePresentationWindowV1
     ]
 
     public static var runtimeServer: [String] {

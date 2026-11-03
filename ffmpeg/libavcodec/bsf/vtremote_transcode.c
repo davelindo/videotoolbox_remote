@@ -36,6 +36,7 @@
 #include "libavutil/ffversion.h"
 #include "libavutil/intreadwrite.h"
 #include "libavutil/log.h"
+#include "libavutil/mathematics.h"
 #include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
@@ -119,6 +120,8 @@ typedef struct VTRemoteTranscodeContext {
     int sar_den;
     int a53_cc;
     int64_t flags;
+    int64_t start_time;
+    int64_t end_time;
     int global_quality;
     uint64_t server_caps;
     int warned_packet_side_data_no_cap;
@@ -1074,6 +1077,35 @@ static int vtremote_append_transcode_opts(AVBSFContext *ctx, VTRemoteKV **opts,
     if (ret < 0)
         return ret;
 
+    if (s->start_time != AV_NOPTS_VALUE || s->end_time != AV_NOPTS_VALUE) {
+        AVRational tb = ctx->time_base_in.num > 0 && ctx->time_base_in.den > 0 ?
+                        ctx->time_base_in : (AVRational){1, 90000};
+        if (s->start_time != AV_NOPTS_VALUE && s->end_time != AV_NOPTS_VALUE &&
+            s->start_time >= s->end_time)
+            return AVERROR(EINVAL);
+        ret = vtremote_require_server_cap(ctx, VTREMOTE_CAP_TRANSCODE_PRESENTATION_WINDOW_V1,
+                                         "transcode presentation window");
+        if (ret < 0)
+            return ret;
+        // Preroll may produce no output for longer than the in-flight budget.
+        ret = vtremote_require_server_cap(ctx, VTREMOTE_CAP_PACKET_ACK_V1,
+                                         "presentation-window input credits");
+        if (ret < 0)
+            return ret;
+        if (s->start_time != AV_NOPTS_VALUE) {
+            ret = vtremote_add_opt_int64(opts, opt_count, opt_cap, "presentation_start_pts",
+                                        av_rescale_q_rnd(s->start_time, AV_TIME_BASE_Q, tb, AV_ROUND_UP));
+            if (ret < 0)
+                return ret;
+        }
+        if (s->end_time != AV_NOPTS_VALUE) {
+            ret = vtremote_add_opt_int64(opts, opt_count, opt_cap, "presentation_end_pts",
+                                        av_rescale_q_rnd(s->end_time, AV_TIME_BASE_Q, tb, AV_ROUND_UP));
+            if (ret < 0)
+                return ret;
+        }
+    }
+
     if (s->server_caps & VTREMOTE_CAP_PACKET_ACK_V1) {
         ret = vtremote_add_opt_string(opts, opt_count, opt_cap, "packet_ack.v1", "1");
         if (ret < 0)
@@ -1927,6 +1959,8 @@ static const AVOption vtremote_transcode_options[] = {
     { "vt_remote_pix_fmt", "pixel format (1=nv12,2=p010,3=bgra,4=ayuv,5=p210)", OFFSET(pixel_format), AV_OPT_TYPE_INT, { .i64 = VTREMOTE_PIX_FMT_NV12 }, VTREMOTE_PIX_FMT_NV12, VTREMOTE_PIX_FMT_P210, FLAGS },
     { "vt_remote_decode_async", "allow async decode on server", OFFSET(decode_async), AV_OPT_TYPE_BOOL, { .i64 = 1 }, 0, 1, FLAGS },
     { "vt_remote_decode_reorder_depth", "decode reorder depth", OFFSET(decode_reorder_depth), AV_OPT_TYPE_INT, { .i64 = 2 }, -1, 64, FLAGS },
+    { "vt_remote_start_time", "first retained decoded presentation time", OFFSET(start_time), AV_OPT_TYPE_DURATION, { .i64 = AV_NOPTS_VALUE }, INT64_MIN, INT64_MAX, FLAGS },
+    { "vt_remote_end_time", "exclusive decoded presentation end time", OFFSET(end_time), AV_OPT_TYPE_DURATION, { .i64 = AV_NOPTS_VALUE }, INT64_MIN, INT64_MAX, FLAGS },
     { "vt_remote_bitrate", "target bitrate", OFFSET(bitrate), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },
     { "vt_remote_maxrate", "max bitrate", OFFSET(maxrate), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },
     { "vt_remote_bufsize", "VBV buffer size in bits", OFFSET(bufsize), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },

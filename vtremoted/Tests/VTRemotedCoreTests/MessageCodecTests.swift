@@ -41,7 +41,8 @@ final class MessageCodecTests: XCTestCase {
                 VTRCapability.hwFramesVideoToolboxInput,
                 VTRCapability.hwFramesVideoToolboxOutput,
                 VTRCapability.sideDataV2,
-                VTRCapability.packetAckV1
+                VTRCapability.packetAckV1,
+                VTRCapability.transcodePresentationWindowV1
             ]
         )
     }

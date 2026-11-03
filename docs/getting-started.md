@@ -77,6 +77,27 @@ For H.264/HEVC input, keep decoded frames on the Mac and send compressed packets
 
 The first video stream is transcoded; other mapped streams are copied. The Mac performs video decode, optional configured resize/pixel-format conversion and encode. Client-side audio, subtitles, files and muxing stay local. Arbitrary video filters are not part of this server path; use the remote encoder after local filtering for those jobs.
 
+Applications request an accurate presentation window with the BSF options
+`vt_remote_start_time` (inclusive) and `vt_remote_end_time` (exclusive). Values
+are durations in the input packet clock. The caller supplies the window and
+keeps compressed preroll available to the decoder; the Mac trims decoded frames
+before encoding. A daemon advertising `transcode.presentation_window.v1` is
+required. FFmpeg's own seek handling remains unchanged.
+
+For example, set `MAC_HOST` to the Mac endpoint. With input-side `-ss 2`, FFmpeg
+normalizes timestamps around the seek, so the retained video window starts at
+zero. This produces the next three seconds:
+
+```bash
+./ffmpeg-client/ffmpeg -ss 2 -i input.mkv -map 0:v:0 -c:v copy \
+  -copypriorss 1 -t 3 \
+  -bsf:v "vtremote_transcode=vt_remote_host=${MAC_HOST}:vt_remote_port=5555:vt_remote_start_time=0:vt_remote_end_time=3" \
+  -an output.mkv
+```
+
+With `-copyts`, supply bounds on the preserved source clock instead. Applications
+handle audio trimming and timestamp normalization on the same clock.
+
 For a directory of MKV files, run jobs sequentially to begin:
 
 ```bash

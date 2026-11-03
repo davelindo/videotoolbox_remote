@@ -2,6 +2,54 @@
 import XCTest
 
 final class SessionConfigurationTests: XCTestCase {
+    func testTranscodePresentationWindowUsesInclusiveStartAndExclusiveEnd() throws {
+        var request = makeRequest()
+        request.options = ["mode": "transcode", "presentation_start_pts": "-12", "presentation_end_pts": "24"]
+        let config = try SessionConfiguration(codec: .hevc, request: request)
+        for pts in [Int64(-100), -13, 24, 100] {
+            XCTAssertFalse(try config.includesPresentationTime(pts))
+        }
+        for pts in [Int64(-12), 0, 23] {
+            XCTAssertTrue(try config.includesPresentationTime(pts))
+        }
+        XCTAssertThrowsError(try config.includesPresentationTime(Int64.min))
+    }
+
+    func testTranscodePresentationWindowAllowsSingleBounds() throws {
+        var request = makeRequest()
+        request.options = ["mode": "transcode", "presentation_start_pts": "0"]
+        var config = try SessionConfiguration(codec: .h264, request: request)
+        XCTAssertFalse(try config.includesPresentationTime(-1))
+        XCTAssertTrue(try config.includesPresentationTime(Int64.max))
+        request.options = ["mode": "transcode", "presentation_end_pts": "0"]
+        config = try SessionConfiguration(codec: .h264, request: request)
+        XCTAssertTrue(try config.includesPresentationTime(-1))
+        XCTAssertFalse(try config.includesPresentationTime(0))
+        request.options = ["mode": "transcode"]
+        config = try SessionConfiguration(codec: .h264, request: request)
+        XCTAssertTrue(try config.includesPresentationTime(Int64.min))
+    }
+
+    func testRejectsInvalidTranscodePresentationWindows() {
+        for value in ["invalid", "", "2.5", String(Int64.min), String(UInt64.max)] {
+            for key in ["presentation_start_pts", "presentation_end_pts"] {
+                var request = makeRequest()
+                request.options = ["mode": "transcode", key: value]
+                XCTAssertThrowsError(try SessionConfiguration(codec: .hevc, request: request))
+            }
+        }
+        for (start, end) in [("0", "0"), ("1", "0")] {
+            var request = makeRequest()
+            request.options = ["mode": "transcode", "presentation_start_pts": start, "presentation_end_pts": end]
+            XCTAssertThrowsError(try SessionConfiguration(codec: .hevc, request: request))
+        }
+        for mode in ["encode", "decode"] {
+            var request = makeRequest()
+            request.options = ["mode": mode, "presentation_start_pts": "0"]
+            XCTAssertThrowsError(try SessionConfiguration(codec: .hevc, request: request))
+        }
+    }
+
     func testRejectsUnknownMode() {
         var request = makeRequest()
         request.options["mode"] = "mystery"

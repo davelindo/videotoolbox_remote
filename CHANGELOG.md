@@ -9,6 +9,9 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [v0.10.6] - 2026-11-03
 
+### Fixed
+- Apply caller-supplied packet-transcode presentation windows to decoded frames before encoding, preserving decoder preroll and a clean first keyframe. Applications supply the bounds through the updated BSF and daemon.
+
 ### Changed
 - Rebased the vendored `ffmpeg/` subtree to upstream `master` snapshot `c6a68b6e4535` (from `5986d3031439`).
 

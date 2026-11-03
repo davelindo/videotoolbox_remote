@@ -2154,6 +2154,15 @@
         private func encodeTranscodeFrames(_ frames: [ReorderedDecodedFrame<TranscodeFramePayload>]) {
             guard let config else { return }
             for frame in frames {
+                do {
+                    // Decode all references, then trim in presentation order before
+                    // creating encoder references. A late-frame clamp must not
+                    // move preroll into the retained window.
+                    guard try config.includesPresentationTime(frame.originalPtsTicks) else { continue }
+                } catch {
+                    fail(error)
+                    return
+                }
                 let pts = cmTimeOrInvalid(fromTicks: frame.ptsTicks, timebase: config.timebase)
                 let duration: CMTime
                 if frame.durTicks > 0 {

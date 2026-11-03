@@ -78,6 +78,20 @@ The command owns fresh loopback daemons. It repeats compressed input packets int
 
 Warm-up throughput estimates each session's frame count for the requested minimum duration. Check `all_sustained`; increase `--frames` if any run is shorter. Correctness failures stop the run independently of speed. Raw decode timing runs validate counts; use the API/plane tests and a separate pixel comparison when changing decode memory paths. No hardware regression threshold is chosen before measuring variance. This runner currently measures loopback; the existing `bench_vtremote.sh` supports an explicitly designated remote server, without the new aggregate resource capture.
 
+## Accurate packet-transcode seeking
+
+`python3 tests/integration/run_mock_transcode_seek.py` checks caller-supplied
+presentation windows, capability negotiation, exact bound conversion, preserved
+timestamps, BSF chains and missing-capability errors. It runs in all FFmpeg CI builds.
+
+`python3 tests/integration/run_vtremoted_transcode_seek.py` uses a local daemon and
+generated nine-second H.264/HEVC clips with explicit BSF windows. It checks exact retained frame counts,
+audio alignment, the first encoded keyframe and independent strict decoding.
+Use `--ffmpeg`, `--daemon` and `--ffprobe` to select test binaries;
+`--fixture-ffmpeg` selects the build used to generate and independently decode
+fixtures. It must provide libx264, libx265 and AAC encoding. Samples and logs are
+written to a temporary directory outside the repository.
+
 ## Performance comparison
 
 The [Performance page](https://davelindo.github.io/videotoolbox_remote/performance.html) uses `performance.py`. It compares Intel iGPU VA-API, CPU `fast` and `medium` presets, native VideoToolbox and packet transcoding through remote VideoToolbox. Both VideoToolbox paths run on the same designated Mac; the remote client runs on the designated Linux host. The coordinator only dispatches SSH jobs and collects results.

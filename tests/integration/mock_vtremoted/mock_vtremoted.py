@@ -522,6 +522,8 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                         ("expect_colorspace", "colorspace"),
                         ("expect_color_primaries", "color_primaries"),
                         ("expect_color_trc", "color_trc"),
+                        ("expect_presentation_start_pts", "presentation_start_pts"),
+                        ("expect_presentation_end_pts", "presentation_end_pts"),
                     ):
                         expected_value = getattr(args, arg_name)
                         if expected_value is None:
@@ -829,6 +831,8 @@ def main() -> int:
         default=",".join(DEFAULT_CAPABILITIES),
         help="Comma-separated HELLO_ACK capabilities advertised by the mock",
     )
+    parser.add_argument("--expect-presentation-start-pts", type=int)
+    parser.add_argument("--expect-presentation-end-pts", type=int)
     parser.add_argument("--once", action="store_true", help="handle a single connection then exit")
     args = parser.parse_args()
     try:

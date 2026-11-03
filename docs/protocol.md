@@ -110,7 +110,8 @@ sequenceDiagram
 - `caps` (string[]): Capability strings (may be empty).
   - Common values: `h264`, `hevc`, `pixfmt.nv12`, `pixfmt.p010`, `pixfmt.bgra`,
     `pixfmt.ayuv`, `pixfmt.p210`, `hwframes.videotoolbox.input`,
-    `hwframes.videotoolbox.output`, `side_data.v2`, `packet_ack.v1`.
+    `hwframes.videotoolbox.output`, `side_data.v2`, `packet_ack.v1`,
+    `transcode.presentation_window.v1`.
 - `max_sessions` (uint16): Concurrency limit.
 - `active_sessions` (uint16): Current active sessions.
 
@@ -125,6 +126,16 @@ sequenceDiagram
 > [!NOTE]
 > `options` is a map of codec settings. Unknown keys are ignored.
 > For `mode=transcode`, `out_codec`, `out_width`, `out_height`, `scale_mode`, and optional client feature requests such as `packet_ack.v1=1` are passed here.
+
+For accurate transcode seeking, `transcode.presentation_window.v1` adds optional
+`presentation_start_pts` (inclusive) and `presentation_end_pts` (exclusive).
+Both are signed 64-bit timestamps in the configured timebase. The window applies
+to original decoded presentation timestamps after reordering and before encoding.
+Packets outside the window still reach the decoder to supply reference pictures;
+discarded frames never enter the encoder. The first retained frame starts the
+encoded stream with a keyframe. Invalid bounds and missing decoded PTS are errors.
+Windowed clients must also negotiate `packet_ack.v1` so preroll can consume input
+credits without producing encoded packets.
 
 ### Streaming
 

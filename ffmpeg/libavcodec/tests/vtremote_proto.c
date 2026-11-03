@@ -324,6 +324,9 @@ static int test_pix_fmt_and_cap_helpers(void)
     av_assert0(flag == VTREMOTE_CAP_SIDE_DATA_V2);
     av_assert0(vtremote_cap_flag_from_name((const uint8_t *)"packet_ack.v1", 13, &flag) == 0);
     av_assert0(flag == VTREMOTE_CAP_PACKET_ACK_V1);
+    av_assert0(vtremote_cap_flag_from_name((const uint8_t *)"transcode.presentation_window.v1",
+                                         sizeof("transcode.presentation_window.v1") - 1, &flag) == 0);
+    av_assert0(flag == VTREMOTE_CAP_TRANSCODE_PRESENTATION_WINDOW_V1);
     av_assert0(vtremote_cap_flag_from_name((const uint8_t *)"unknown", 7, &flag) == 0);
     av_assert0(flag == 0);
 

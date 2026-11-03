@@ -370,6 +370,7 @@ jobs:
           bash tests/integration/run_mock_pts_dts_semantics.sh
           bash tests/integration/run_mock_transcode_pts_dts_semantics.sh
           python3 tests/integration/run_mock_transcode_cli_options.py
+          python3 tests/integration/run_mock_transcode_seek.py
           bash tests/integration/run_mock_transcode_hvc1_hdr_signaling.sh
           bash tests/integration/run_mock_protocol_capabilities.sh
           bash tests/integration/run_mock_side_data_roundtrip.sh
@@ -487,6 +488,7 @@ jobs:
           bash tests/integration/run_mock_pts_dts_semantics.sh
           bash tests/integration/run_mock_transcode_pts_dts_semantics.sh
           python3 tests/integration/run_mock_transcode_cli_options.py
+          python3 tests/integration/run_mock_transcode_seek.py
           bash tests/integration/run_mock_transcode_hvc1_hdr_signaling.sh
           bash tests/integration/run_mock_protocol_capabilities.sh
           bash tests/integration/run_mock_side_data_roundtrip.sh
@@ -617,6 +619,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           python3 tests/integration/run_transport_regressions.py --skip-daemon
+          python3 tests/integration/run_mock_transcode_seek.py
           python3 tests/integration/run_decode_duplex.py
           python3 tests/integration/run_encode_negative_stride.py
           python3 tests/integration/run_configure_ack.py
@@ -664,6 +667,7 @@ jobs:
           gcc -O2 -Wall -Itests/integration/socket-stubs -Iffmpeg tests/integration/socket_timeouts.c -lws2_32 -o socket_timeouts.exe
           ./socket_timeouts.exe
           python tests/integration/run_transport_regressions.py --ffmpeg ./ffmpeg/ffmpeg.exe --skip-daemon
+          python tests/integration/run_mock_transcode_seek.py --ffmpeg ./ffmpeg/ffmpeg.exe
           python tests/integration/bench_inflight.py --ffmpeg ./ffmpeg/ffmpeg.exe --frames 600 --repeats 1 --depths 0 --changing-capacity --output vtremote-inflight.json
       - name: Package ffmpeg (Windows/MSYS2)
         if: runner.os == 'Windows'
