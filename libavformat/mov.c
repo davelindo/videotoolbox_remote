@@ -6404,9 +6404,11 @@ static int mov_read_trun(MOVContext *c, AVIOContext *pb, MOVAtom atom)
         memmove(sc->tts_data + index_entry_pos + entries,
                 sc->tts_data + index_entry_pos,
                 sizeof(*sc->tts_data) * (sti->nb_index_entries - index_entry_pos));
-        if (index_entry_pos < sc->current_sample) {
+        if (index_entry_pos <= sc->current_sample) {
             sc->current_sample += entries;
         }
+        if (index_entry_pos <= sc->tts_index)
+            sc->tts_index += entries;
     }
 
     sti->nb_index_entries += entries;
@@ -6524,6 +6526,8 @@ static int mov_read_trun(MOVContext *c, AVIOContext *pb, MOVAtom atom)
         if (index_entry_pos < sc->current_sample) {
             sc->current_sample -= gap;
         }
+        if (index_entry_pos < sc->tts_index)
+            sc->tts_index -= gap;
         entries = i;
     }
 
@@ -13196,21 +13200,31 @@ static int mov_read_seek(AVFormatContext *s, int stream_index, int64_t sample_ti
     if (mc->seek_individually) {
         /* adjust seek timestamp to found sample timestamp */
         int64_t seek_timestamp = sti->index_entries[sample].timestamp;
+        int64_t next_root_atom = mc->next_root_atom;
         sti->skip_samples = mov_get_skip_samples(st, sample);
 
         for (i = 0; i < s->nb_streams; i++) {
             AVStream *const st  = s->streams[i];
             FFStream *const sti = ffstream(st);
+            const MOVStreamContext *sc = st->priv_data;
             int64_t timestamp;
 
             if (stream_index == i)
                 continue;
 
+            mc->next_root_atom = 0;
             timestamp = av_rescale_q(seek_timestamp, s->streams[stream_index]->time_base, st->time_base);
             sample = mov_seek_stream(s, st, timestamp, flags);
             if (sample >= 0)
                 sti->skip_samples = mov_get_skip_samples(st, sample);
+
+            /* Reading resumes from the earliest fragment a read stream landed
+             * in; a discarded chapter track would send it back to the start. */
+            if ((st->discard != AVDISCARD_ALL || sc->iamf) && mc->next_root_atom &&
+                (!next_root_atom || mc->next_root_atom < next_root_atom))
+                next_root_atom = mc->next_root_atom;
         }
+        mc->next_root_atom = next_root_atom;
     } else {
         for (i = 0; i < s->nb_streams; i++) {
             MOVStreamContext *sc;
