@@ -85,6 +85,7 @@ struct segment {
     char *key;
     enum KeyType key_type;
     uint8_t iv[16];
+    uint64_t discontinuity_seq;
     /* associated Media Initialization Section, treated as a segment */
     struct segment *init_section;
 };
@@ -117,6 +118,14 @@ struct playlist {
     int index;
     AVFormatContext *ctx;
     AVPacket *pkt;
+    int64_t last_cue_pts; /* reference for the cues read without media */
+    AVPacket **prev_cues;
+    int n_prev_cues;
+    int prev_cue_pos;
+    int cues_unanchored; /* cues kept before the media position was known */
+    uint64_t cues_discontinuity_seq; /* of the segment the kept cues are from */
+    AVPacket **cur_cues;
+    int n_cur_cues;
     int has_noheader_flag;
 
     /* main demuxer streams associated with this playlist
@@ -314,6 +323,23 @@ static void free_init_section_list(struct playlist *pls)
     pls->n_init_sections = 0;
 }
 
+static void free_cue_list(AVPacket ***cues, int *n_cues)
+{
+    for (int i = 0; i < *n_cues; i++)
+        av_packet_free(&(*cues)[i]);
+    av_freep(cues);
+    *n_cues = 0;
+}
+
+static void free_subtitle_cues(struct playlist *pls)
+{
+    free_cue_list(&pls->prev_cues, &pls->n_prev_cues);
+    free_cue_list(&pls->cur_cues, &pls->n_cur_cues);
+    pls->prev_cue_pos = 0;
+    pls->cues_unanchored = 0;
+    pls->last_cue_pts = AV_NOPTS_VALUE;
+}
+
 static void free_playlist_list(HLSContext *c)
 {
     int i;
@@ -321,6 +347,7 @@ static void free_playlist_list(HLSContext *c)
         struct playlist *pls = c->playlists[i];
         free_segment_list(pls);
         free_init_section_list(pls);
+        free_subtitle_cues(pls);
         av_freep(&pls->main_streams);
         av_freep(&pls->renditions);
         av_freep(&pls->id3_buf);
@@ -416,6 +443,7 @@ static struct playlist *new_playlist(HLSContext *c, const char *url,
 
     av_strlcpy(pls->url, abs_url, sizeof(pls->url));
     pls->ts_offset = AV_NOPTS_VALUE;
+    pls->last_cue_pts = AV_NOPTS_VALUE;
     pls->seek_timestamp = AV_NOPTS_VALUE;
     pls->first_read_seq_no = -1;
 
@@ -976,6 +1004,7 @@ static int parse_playlist(HLSContext *c, const char *url,
 {
     int ret = 0, is_segment = 0, is_variant = 0;
     int64_t duration = 0;
+    uint64_t discontinuity_seq = 0;
     enum KeyType key_type = KEY_NONE;
     uint8_t iv[16] = "";
     int has_iv = 0;
@@ -1174,6 +1203,10 @@ static int parse_playlist(HLSContext *c, const char *url,
             }
         } else if (av_strstart(line, "#EXT-X-ENDLIST", &ptr)) {
             finished = 1;
+        } else if (av_strstart(line, "#EXT-X-DISCONTINUITY-SEQUENCE:", &ptr)) {
+            discontinuity_seq = strtoull(ptr, NULL, 10);
+        } else if (!strcmp(line, "#EXT-X-DISCONTINUITY")) {
+            discontinuity_seq++;
         } else if (av_strstart(line, "#EXTINF:", &ptr)) {
             double d = atof(ptr) * AV_TIME_BASE;
             if (d < 0 || d > INT64_MAX || isnan(d)) {
@@ -1268,6 +1301,7 @@ static int parse_playlist(HLSContext *c, const char *url,
                 }
                 seg->duration = duration;
                 seg->key_type = key_type;
+                seg->discontinuity_seq = discontinuity_seq;
                 dynarray_add(&pls->segments, &pls->n_segments, seg);
                 is_segment = 0;
 
@@ -2122,9 +2156,117 @@ static int init_subtitle_context(struct playlist *pls)
     return ret;
 }
 
+static int cue_repeated(struct playlist *v, const AVPacket *pkt)
+{
+    /* both segments are in pts order, so the candidates start where the
+     * previous lookup stopped */
+    while (v->prev_cue_pos < v->n_prev_cues &&
+           v->prev_cues[v->prev_cue_pos]->pts < pkt->pts)
+        v->prev_cue_pos++;
+
+    for (int i = v->prev_cue_pos; i < v->n_prev_cues; i++) {
+        const AVPacket *prev = v->prev_cues[i];
+        const uint8_t *settings, *prev_settings;
+        size_t size, prev_size;
+
+        if (prev->pts != pkt->pts)
+            break;
+        if (prev->duration != pkt->duration || prev->size != pkt->size ||
+            memcmp(prev->data, pkt->data, pkt->size))
+            continue;
+        settings = av_packet_get_side_data(pkt, AV_PKT_DATA_WEBVTT_SETTINGS, &size);
+        prev_settings = av_packet_get_side_data(prev, AV_PKT_DATA_WEBVTT_SETTINGS,
+                                                &prev_size);
+        if (size == prev_size && (!size || !memcmp(settings, prev_settings, size)))
+            return 1;
+    }
+    return 0;
+}
+
+static int remember_cue(struct playlist *v, const AVPacket *pkt)
+{
+    AVPacket *cue = av_packet_clone(pkt);
+
+    if (!cue)
+        return AVERROR(ENOMEM);
+    if (av_dynarray_add_nofree(&v->cur_cues, &v->n_cur_cues, cue) < 0) {
+        av_packet_free(&cue);
+        return AVERROR(ENOMEM);
+    }
+    return 0;
+}
+
+static AVRational get_timebase(struct playlist *pls);
+
+/* The position of the media, the reference for the cue times: the last
+ * returned packet, or a packet buffered from a media playlist before
+ * anything was returned. AV_NOPTS_VALUE without media. */
+static int64_t media_position(HLSContext *c)
+{
+    if (c->cur_timestamp != AV_NOPTS_VALUE)
+        return c->cur_timestamp;
+    for (int i = 0; i < c->n_playlists; i++) {
+        struct playlist *pls = c->playlists[i];
+
+        if (!pls->is_subtitle && pls->needed && pls->pkt->data &&
+            pls->pkt->dts != AV_NOPTS_VALUE)
+            return av_rescale_q(pls->pkt->dts, get_timebase(pls), AV_TIME_BASE_Q);
+    }
+    return AV_NOPTS_VALUE;
+}
+
+/* The MPEG-TS time of a cue is on the 33 bit PES clock, this is the period
+ * of that clock nearest to ref, both in MPEG_TIME_BASE_Q. */
+static int64_t nearest_period(int64_t pts, int64_t ref)
+{
+    const int64_t period = 1LL << 33, half = 1LL << 32;
+    int64_t d = pts - ref;
+
+    return pts - (d >= 0 ? d + half : d - half) / period * period;
+}
+
+static void unwrap_pkt(AVPacket *pkt, AVRational tb, int64_t ref)
+{
+    int64_t pts;
+
+    if (pkt->pts == AV_NOPTS_VALUE)
+        return;
+    pts = nearest_period(av_rescale_q(pkt->pts, tb, MPEG_TIME_BASE_Q), ref);
+    pkt->pts = pkt->dts = av_rescale_q(pts, MPEG_TIME_BASE_Q, tb);
+}
+
+/* Put a cue on the period nearest to the media position, where the
+ * timestamps of the other renditions continue after a wrap. Without media
+ * a cue follows the previous cue of its playlist, and the cues kept from
+ * that time move to the media position once it is known. */
+static void unwrap_cue_pts(HLSContext *c, struct playlist *v, AVPacket *pkt)
+{
+    AVRational tb = v->ctx->streams[pkt->stream_index]->time_base;
+    int64_t ref = media_position(c);
+
+    if (ref != AV_NOPTS_VALUE) {
+        ref = av_rescale_q(ref, AV_TIME_BASE_Q, MPEG_TIME_BASE_Q);
+        if (v->cues_unanchored) {
+            for (int i = 0; i < v->n_prev_cues; i++)
+                unwrap_pkt(v->prev_cues[i], tb, ref);
+            for (int i = 0; i < v->n_cur_cues; i++)
+                unwrap_pkt(v->cur_cues[i], tb, ref);
+            v->prev_cue_pos    = 0;
+            v->cues_unanchored = 0;
+        }
+        unwrap_pkt(pkt, tb, ref);
+    } else {
+        v->cues_unanchored = 1;
+        if (v->last_cue_pts != AV_NOPTS_VALUE)
+            unwrap_pkt(pkt, tb, av_rescale_q(v->last_cue_pts, tb, MPEG_TIME_BASE_Q));
+    }
+    v->last_cue_pts = pkt->pts;
+}
+
 static int read_subtitle_packet(struct playlist *v, AVPacket *pkt)
 {
     HLSContext *c = v->parent->priv_data;
+    struct segment *seg;
     int ret;
 
 restart:
@@ -2136,20 +2278,42 @@ restart:
         ff_format_io_close(v->parent, &v->input);
 
     if (!v->input && !v->ctx) {
+        /* nothing is repeated across a discontinuity */
+        seg = current_segment(v);
+        if (seg && seg->discontinuity_seq != v->cues_discontinuity_seq) {
+            free_subtitle_cues(v);
+            v->cues_discontinuity_seq = seg->discontinuity_seq;
+        }
         ret = init_subtitle_context(v);
         if (ret < 0)
             return ret;
     }
 
-    ret = av_read_frame(v->ctx, v->pkt);
-    if (!ret) {
-        return ret;
+    while (!(ret = av_read_frame(v->ctx, v->pkt))) {
+        int repeated;
+
+        unwrap_cue_pts(c, v, v->pkt);
+        repeated = cue_repeated(v, v->pkt);
+
+        ret = remember_cue(v, v->pkt);
+        if (ret < 0) {
+            av_packet_unref(v->pkt);
+            return ret;
+        }
+        if (!repeated)
+            return 0;
+        av_packet_unref(v->pkt);
     }
     ff_format_io_close(v->parent, &v->input);
     v->cur_seq_no++;
     c->cur_seq_no = v->cur_seq_no;
 
     avformat_close_input(&v->ctx);
+
+    free_cue_list(&v->prev_cues, &v->n_prev_cues);
+    FFSWAP(AVPacket **, v->prev_cues, v->cur_cues);
+    FFSWAP(int, v->n_prev_cues, v->n_cur_cues);
+    v->prev_cue_pos = 0;
 
     goto restart;
 }
@@ -2603,7 +2767,7 @@ static int hls_read_header(AVFormatContext *s)
         highest_cur_seq_no = FFMAX(highest_cur_seq_no, pls->cur_seq_no);
     }
 
-    av_dict_set(&c->seg_format_opts, "prefer_hls_mpegts_pts", "1", 0);
+    av_dict_set(&c->seg_format_opts, "timestamp_map", "1", 0);
 
     /* Open the demuxer for each playlist */
     for (i = 0; i < c->n_playlists; i++) {
@@ -2849,8 +3013,10 @@ static int recheck_discard_flags(AVFormatContext *s, int first)
             pls->input_read_done = 0;
             ff_format_io_close(pls->parent, &pls->input_next);
             pls->input_next_requested = 0;
-            if (pls->is_subtitle)
+            if (pls->is_subtitle) {
                 avformat_close_input(&pls->ctx);
+                free_subtitle_cues(pls);
+            }
             pls->needed = 0;
             changed = 1;
             av_log(s, AV_LOG_INFO, "No longer receiving playlist %d\n", i);
@@ -2927,16 +3093,24 @@ static int metadata_has_changed(const AVDictionary *current,
 static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
     HLSContext *c = s->priv_data;
-    int ret, i, minplaylist = -1;
+    int ret, i, minplaylist = -1, deferred = 0, unanchored = 0;
 
     recheck_discard_flags(s, c->first_packet);
     c->first_packet = 0;
 
+retry:
     for (i = 0; i < c->n_playlists; i++) {
         struct playlist *pls = c->playlists[i];
         /* Make sure we've got one buffered packet from each open playlist
          * stream */
         if (pls->needed && !pls->pkt->data) {
+            /* a cue is placed relative to the media, so the media playlists
+             * buffer their packets first */
+            if (pls->is_subtitle && !unanchored &&
+                media_position(c) == AV_NOPTS_VALUE) {
+                deferred = 1;
+                continue;
+            }
             while (1) {
                 int64_t ts_diff;
                 AVRational tb;
@@ -2957,7 +3131,11 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                     fill_timing_for_id3_timestamped_stream(pls);
                 }
 
-                if (pls->pkt->dts != AV_NOPTS_VALUE &&
+                if (pls->is_subtitle) {
+                    /* the cues are on the shared timeline */
+                    if (pls->ts_offset == AV_NOPTS_VALUE)
+                        pls->ts_offset = 0;
+                } else if (pls->pkt->dts != AV_NOPTS_VALUE &&
                     (pls->ts_offset == AV_NOPTS_VALUE ||
                      (!c->first_timestamp_locked &&
                       c->first_timestamp_pls == pls &&
@@ -2986,7 +3164,8 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                         if (delta > 0 && delta <= pls->target_duration) {
                             c->first_timestamp = ts;
                             for (int k = 0; k < c->n_playlists; k++)
-                                if (c->playlists[k]->ts_offset != AV_NOPTS_VALUE)
+                                if (c->playlists[k]->ts_offset != AV_NOPTS_VALUE &&
+                                    !c->playlists[k]->is_subtitle)
                                     c->playlists[k]->ts_offset = av_sat_add64(c->playlists[k]->ts_offset, delta);
                             adjusted = 1;
                         }
@@ -3034,10 +3213,25 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                         pls->seek_timestamp = AV_NOPTS_VALUE;
                         break;
                     }
+                    /* a cue still shown at the target is delivered, the cues
+                     * after it may still have ended before the target */
+                    if (pls->is_subtitle && pls->pkt->duration > 0 &&
+                        av_rescale_q_rnd(pls->pkt->dts + pls->pkt->duration, tb,
+                                         AV_TIME_BASE_Q, AV_ROUND_DOWN) >
+                        pls->seek_timestamp)
+                        break;
                 }
                 av_packet_unref(pls->pkt);
             }
         }
+    }
+
+    for (i = 0; i < c->n_playlists; i++) {
+        struct playlist *pls = c->playlists[i];
+
+        /* a cue buffered without media is placed once the media is */
+        if (pls->is_subtitle && pls->pkt->data)
+            unwrap_cue_pts(c, pls, pls->pkt);
         /* Check if this stream has the packet with the lowest dts */
         if (pls->pkt->data) {
             struct playlist *minpls = minplaylist < 0 ?
@@ -3053,6 +3247,13 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                     minplaylist = i;
             }
         }
+    }
+
+    /* without media the cues are read as they are */
+    if (minplaylist < 0 && deferred) {
+        deferred   = 0;
+        unanchored = 1;
+        goto retry;
     }
 
     /* If we got a packet, return it */
@@ -3115,7 +3316,9 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
         av_packet_move_ref(pkt, pls->pkt);
         pkt->stream_index = st->index;
 
-        if (pkt->dts != AV_NOPTS_VALUE)
+        /* a cue read without media does not set the media position */
+        if (pkt->dts != AV_NOPTS_VALUE &&
+            (!pls->is_subtitle || c->first_timestamp != AV_NOPTS_VALUE))
             c->cur_timestamp = av_rescale_q(pkt->dts,
                                             ist->time_base,
                                             AV_TIME_BASE_Q);
@@ -3247,8 +3450,10 @@ static int hls_read_seek(AVFormatContext *s, int stream_index,
             for (j = 0; j < (int)pls->ctx->nb_streams; j++)
                 ffstream(pls->ctx->streams[j])->pts_wrap_reference = AV_NOPTS_VALUE;
         }
-        if (pls->is_subtitle)
+        if (pls->is_subtitle) {
             avformat_close_input(&pls->ctx);
+            free_subtitle_cues(pls);
+        }
 
         /* Reset the init segment so it's re-fetched and served appropriately */
         pls->cur_init_section = NULL;

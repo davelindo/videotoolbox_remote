@@ -574,6 +574,9 @@ available in a metadata key named "variant_bitrate". It is unset when
 the stream is shared by variants with different bitrates. The value is
 always available in the corresponding program's metadata.
 
+The X-TIMESTAMP-MAP header of WebVTT subtitle segments is applied, so the
+cue times are on the timeline of the other renditions.
+
 It accepts the following options:
 
 @table @option
@@ -1277,6 +1280,24 @@ WebP specification says that viewer applications are not required to
 use it. If @option{usebgcolor} is set to true, then the background
 color hint will be used, otherwise transparent black will be used for
 the background. Default value is false.
+@end table
+
+@section webvtt
+
+WebVTT subtitle demuxer.
+
+It accepts the following options:
+
+@table @option
+@item kind
+Set the kind of the track: @samp{subtitles} (default), @samp{captions},
+@samp{descriptions} or @samp{metadata}.
+
+@item timestamp_map
+Apply the @code{X-TIMESTAMP-MAP} header of HLS WebVTT segments to the cue
+timestamps, which moves them onto the MPEG-TS timeline of the other
+renditions, and use the 90 kHz MPEG-TS time base for the stream. Default
+value is false.
 @end table
 
 @c man end DEMUXERS
