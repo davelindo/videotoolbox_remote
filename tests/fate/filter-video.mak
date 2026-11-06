@@ -467,6 +467,10 @@ FATE_FILTER_SAMPLES-$(call FILTERDEMDEC, FORMAT PERMS GRADFUN SCALE, VMD, VMDVID
 fate-filter-gradfun-sample: tests/data/filtergraphs/gradfun
 fate-filter-gradfun-sample: CMD = framecrc -auto_conversion_filters -i $(TARGET_SAMPLES)/vmd/12.vmd -/filter $(TARGET_PATH)/tests/data/filtergraphs/gradfun -an -frames:v 20
 
+FATE_FILTER-$(call FILTERFRAMECRC, TESTSRC2 CONCAT SENDCMD, FILE_PROTOCOL) += fate-filter-concat-next-last
+fate-filter-concat-next-last: tests/data/filtergraphs/concat-next-last
+fate-filter-concat-next-last: CMD = framecrc -/filter_complex $(TARGET_PATH)/tests/data/filtergraphs/concat-next-last
+
 FATE_FILTER-$(call FILTERFRAMECRC, TESTSRC SINE CONCAT, FILE_PROTOCOL) += fate-filter-concat fate-filter-concat-vfr
 fate-filter-concat: tests/data/filtergraphs/concat
 fate-filter-concat: CMD = framecrc -/filter_complex $(TARGET_PATH)/tests/data/filtergraphs/concat
@@ -968,6 +972,10 @@ fate-filter-refcmp-psnr-rgb: CMD = refcmp_metadata psnr rgb24 0.002
 
 FATE_FILTER_REFCMP_METADATA-$(CONFIG_PSNR_FILTER) += fate-filter-refcmp-psnr-yuv
 fate-filter-refcmp-psnr-yuv: CMD = refcmp_metadata psnr yuv422p 0.0015
+
+FATE_FILTER_REFCMP_METADATA-$(call ALLYES, PSNR_FILTER VIGNETTE_FILTER) += fate-filter-vignette-wavelet fate-filter-vignette-wavelet-decimated
+fate-filter-vignette-wavelet:           CMD = refcmp_metadata psnr yuv420p 0.005 "vignette=angle=PI/2*0.8,vignette=angle=PI/2*0.8:mode=wavelet"
+fate-filter-vignette-wavelet-decimated: CMD = refcmp_metadata psnr yuv420p 0.005 "vignette=angle=PI/2*0.8,vignette=angle=PI/2*0.8:mode=wavelet:decimated=1"
 
 FATE_FILTER_REFCMP_METADATA-$(call ALLYES, SSIM_FILTER SCALE_FILTER) += fate-filter-refcmp-ssim-rgb
 fate-filter-refcmp-ssim-rgb: CMD = refcmp_metadata ssim rgb24 0.015

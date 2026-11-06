@@ -182,12 +182,9 @@ static av_cold int dovi_configure_ext(DOVIContext *s, enum AVCodecID codec_id,
         }
     }
 
-    pps = width * height;
-    if (framerate.num) {
-        pps = pps * framerate.num / framerate.den;
-    } else {
-        pps *= 25; /* sanity fallback */
-    }
+    if (framerate.num <= 0 || framerate.den <= 0)
+        framerate = (AVRational){ 25, 1 }; /* sanity fallback */
+    pps = av_rescale_rnd((int64_t)width * height, framerate.num, framerate.den, AV_ROUND_DOWN);
 
     dv_level = 0;
     for (int i = 1; i < FF_ARRAY_ELEMS(dv_levels); i++) {
@@ -651,7 +648,7 @@ int ff_dovi_rpu_generate(DOVIContext *s, const AVDOVIMetadata *metadata,
     const AVDOVIColorMetadata *color;
     int vdr_dm_metadata_present, vdr_rpu_id, use_prev_vdr_rpu, profile,
         buffer_size, rpu_size, pad, zero_run, dm_compression;
-    int num_ext_blocks_v1, num_ext_blocks_v2;
+    int num_ext_blocks_v1, num_ext_blocks_v2, num_static, num_dynamic;
     int dv_md_compression = s->cfg.dv_md_compression;
     uint32_t crc;
     uint8_t *dst;
@@ -744,10 +741,15 @@ int ff_dovi_rpu_generate(DOVIContext *s, const AVDOVIMetadata *metadata,
     }
 
     num_ext_blocks_v1 = num_ext_blocks_v2 = 0;
+    num_static = num_dynamic = 0;
     for (int i = 0; i < metadata->num_ext_blocks; i++) {
         const AVDOVIDmData *dm = av_dovi_get_ext(metadata, i);
-        if (dm_compression && ff_dovi_rpu_extension_is_static(dm->level))
-            continue;
+        if (ff_dovi_rpu_extension_is_static(dm->level)) {
+            num_static++;
+            if (dm_compression)
+                continue;
+        } else
+            num_dynamic++;
 
         switch (dm->level) {
         case 1:
@@ -771,6 +773,12 @@ int ff_dovi_rpu_generate(DOVIContext *s, const AVDOVIMetadata *metadata,
                    dm->level);
             return AVERROR_INVALIDDATA;
         }
+    }
+    if (num_static  > FF_ARRAY_ELEMS(s->ext_blocks->dm_static) ||
+        num_dynamic > FF_ARRAY_ELEMS(s->ext_blocks->dm_dynamic)) {
+        av_log(s->logctx, AV_LOG_ERROR, "Too many ext blocks: %d static, %d dynamic\n",
+               num_static, num_dynamic);
+        return AVERROR_INVALIDDATA;
     }
 
     buffer_size = 12 /* vdr seq info */ + 5 /* CRC32 + terminator */;
