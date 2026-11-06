@@ -172,6 +172,29 @@ FATE_SUBTITLES_PROBE-$(call DEMDEC, MPEGTS, LIBARIBCAPTION) += fate-sub-aribcapt
 fate-sub-aribcaption-clear: CMD = probeframes -sub_type bitmap $(TARGET_SAMPLES)/sub/aribcaption_clear.ts
 fate-sub-aribcaption-clear: CMP = diff
 
+# same sample in text and ass mode: only CS must emit a clear event, which
+# the ass dialogue shows as an empty text
+FATE_SUBTITLES_PROBE-$(call DEMDEC, MPEGTS, LIBARIBCAPTION) += fate-sub-aribcaption-clear-text
+fate-sub-aribcaption-clear-text: CMD = probeframes -sub_type text $(TARGET_SAMPLES)/sub/aribcaption_clear.ts
+FATE_SUBTITLES_ASS-$(call DEMDEC, MPEGTS, LIBARIBCAPTION) += fate-sub-aribcaption-clear-ass
+fate-sub-aribcaption-clear-ass: CMD = fmtstdout ass -sub_type ass -font sans-serif -i $(TARGET_SAMPLES)/sub/aribcaption_clear.ts
+fate-sub-aribcaption-clear-text fate-sub-aribcaption-clear-ass: CMP = diff
+
+# caption, CS + ruby only, CS + ruby above a caption, ruby only without CS;
+# with ignore_ruby only CS must clear, and skipped ruby must not be drawn
+FATE_SUBTITLES_PROBE-$(call DEMDEC, MPEGTS, LIBARIBCAPTION) += fate-sub-aribcaption-ruby-bitmap
+fate-sub-aribcaption-ruby-bitmap: CMD = probeframes -sub_type bitmap -ignore_ruby 1 $(TARGET_SAMPLES)/sub/aribcaption_ruby.ts
+FATE_SUBTITLES_ASS-$(call DEMDEC, MPEGTS, LIBARIBCAPTION) += fate-sub-aribcaption-ruby-ass
+fate-sub-aribcaption-ruby-ass: CMD = fmtstdout ass -sub_type ass -font sans-serif -ass_single_rect 0 -ignore_ruby 1 -i $(TARGET_SAMPLES)/sub/aribcaption_ruby.ts
+FATE_SUBTITLES_ASS-$(call DEMDEC, MPEGTS, LIBARIBCAPTION) += fate-sub-aribcaption-ruby-ass-single
+fate-sub-aribcaption-ruby-ass-single: CMD = fmtstdout ass -sub_type ass -font sans-serif -ass_single_rect 1 -ignore_ruby 1 -i $(TARGET_SAMPLES)/sub/aribcaption_ruby.ts
+fate-sub-aribcaption-ruby-bitmap fate-sub-aribcaption-ruby-ass fate-sub-aribcaption-ruby-ass-single: CMP = diff
+
+# text mode never holds ruby: only CS may turn a ruby only caption into a clear
+FATE_SUBTITLES_PROBE-$(call DEMDEC, MPEGTS, LIBARIBCAPTION) += fate-sub-aribcaption-ruby-text
+fate-sub-aribcaption-ruby-text: CMD = probeframes -sub_type text $(TARGET_SAMPLES)/sub/aribcaption_ruby.ts
+fate-sub-aribcaption-ruby-text: CMP = diff
+
 FATE_SUBTITLES-$(call ENCMUX, ASS, ASS) += $(FATE_SUBTITLES_ASS-yes)
 FATE_SUBTITLES += $(FATE_SUBTITLES-yes)
 FATE_SUBTITLES := $(if $(CONFIG_PIPE_PROTOCOL), $(FATE_SUBTITLES))
