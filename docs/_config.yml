@@ -1,6 +1,6 @@
 title: VideoToolbox Remote
 description: "Produce video on any PC and use a Mac for hardware encoding. NV12/P010 capture, H.264/HEVC transcoding, Plex, FFmpeg, VA-API and OBS over the network."
-current_release: "v0.10.9"
+current_release: "v0.10.10"
 latest_release_url: "https://github.com/davelindo/videotoolbox_remote/releases/latest"
 repository_url: "https://github.com/davelindo/videotoolbox_remote"
 markdown: kramdown

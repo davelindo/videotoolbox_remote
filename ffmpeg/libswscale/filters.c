@@ -26,6 +26,7 @@
 #include <libavutil/mem.h>
 
 #include "filters.h"
+#include "swscale_internal.h"
 
 #ifdef _WIN32
 #  define j1 _j1
@@ -82,13 +83,11 @@ static void compute_row(SwsFilterWeights *f, const SwsFilterFunction *fun,
         return;
     }
 
-    /* First pixel that is actually within the filter envelope */
-    const double start_pos = src_pos - radius;
-    int64_t start_idx = ceil(start_pos);
-    start_idx = FFMAX(start_idx, 0); /* edge clamping */
-    start_idx = FFMIN(start_idx, f->src_size - f->filter_size);
-    const double offset = start_idx - src_pos;
-    *pos = start_idx;
+    /* First and last pixels that are actually within the filter envelope */
+    const int start   = ceil (src_pos - radius);
+    const int stop    = floor(src_pos + radius);
+    const int clamped = av_clip(start, 0, f->src_size - f->filter_size);
+    *pos = clamped;
 
     /**
      * Generate raw filter weights with maximum precision. Sum the positive
@@ -96,14 +95,26 @@ static void compute_row(SwsFilterWeights *f, const SwsFilterFunction *fun,
      * summation order should already give the best precision because abs(w)
      * is monotonically decreasing
      */
-    const double base = stretch_inv * offset;
+    const double base = stretch_inv * (clamped - src_pos);
     double wsum_pos = 0.0, wsum_neg = 0.0;
     for (int i = 0; i < f->filter_size; i++) {
-        tmp[i] = scaler_sample(fun, base + stretch_inv * i);
-        if (tmp[i] >= 0)
-            wsum_pos += tmp[i];
+        /* Fold extra edge weights into the first/last weight in case the
+         * filter got truncated; loop over all needed samples  */
+        int i0 = i, i1 = i;
+        if (i == 0)
+            i0 = start - clamped;
+        if (i == f->filter_size - 1)
+            i1 = stop - clamped;
+
+        double w = 0.0;
+        for (int k = i0; k <= i1; k++)
+            w += scaler_sample(fun, base + stretch_inv * k);
+
+        if (w >= 0)
+            wsum_pos += w;
         else
-            wsum_neg += tmp[i];
+            wsum_neg += w;
+        tmp[i] = w;
     }
 
     const double wsum = wsum_pos + wsum_neg;
@@ -148,7 +159,8 @@ static bool validate_params(const SwsFilterFunction *fun, SwsScaler scaler)
     case SWS_SCALE_LANCZOS:
         return fun->params[0] >= 1.0 && fun->params[0] <= RADIUS_MAX; /* radius */
     case SWS_SCALE_BICUBIC:
-        return fun->params[0] < 3.0; /* B param (division by zero) */
+        return fun->params[0] >= 0.0 && fun->params[0] <= 1.0 /* B */ &&
+               fun->params[1] >= 0.0 && fun->params[1] <= 1.0 /* C */;
     default:
         return true;
     }
@@ -271,13 +283,15 @@ int ff_sws_filter_generate(void *log, const SwsFilterParams *params,
            filter->name, filter->filter_size, radius);
 
     filter->num_weights = (size_t) params->dst_size * filter->filter_size;
-    filter->weights = av_refstruct_allocz(filter->num_weights * sizeof(*filter->weights));
+    const size_t padded = filter->num_weights +
+                          (size_t) filter->filter_size * SWS_FILTER_PAD_ROWS;
+    filter->weights = ff_refstruct_calloc(padded, sizeof(*filter->weights));
     if (!filter->weights) {
         av_refstruct_unref(&filter);
         return AVERROR(ENOMEM);
     }
 
-    filter->offsets = av_refstruct_allocz(params->dst_size * sizeof(*filter->offsets));
+    filter->offsets = ff_refstruct_calloc(params->dst_size, sizeof(*filter->offsets));
     if (!filter->offsets) {
         av_refstruct_unref(&filter);
         return AVERROR(ENOMEM);

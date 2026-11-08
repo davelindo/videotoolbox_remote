@@ -58,6 +58,7 @@
 #define FFMIN(a,b) ((a) > (b) ? (b) : (a))
 #define FF_ARRAY_ELEMS(a) (sizeof(a) / sizeof((a)[0]))
 #define MKTAG(a,b,c,d) ((a) | ((b) << 8) | ((c) << 16) | ((unsigned)(d) << 24))
+#define FFALIGN(x, a) (((x)+(a)-1)&~((a)-1))
 
 static void av_freep(void *ptr)
 {
@@ -303,7 +304,7 @@ static void asmgen_setup_linear(SwsAArch64Context *s, const SwsAArch64OpImplPara
     case 3: coeff_veclist = vv_3(vc[0], vc[1], vc[2]);        break;
     case 4: coeff_veclist = vv_4(vc[0], vc[1], vc[2], vc[3]); break;
     }
-    i_ldr(r, ptr, IMPL_PRIV(s));                            CMT("v128 *vcoeff_ptr = impl->priv.ptr;");
+    i_add(r, ptr, s->impl, IMM(offsetof_impl_priv));        CMT("v128 *vcoeff_ptr = &impl->priv;");
     asmgen_set_load_cont_node(s);
     i_ld1(r, coeff_veclist, a64op_base(ptr));               CMT("coeff_veclist = *vcoeff_ptr;");
 
@@ -451,7 +452,7 @@ static void asmgen_process_frame(SwsAArch64Context *s, SwsCompMask imask, SwsCom
 
     /* CPS-related variables. */
     s->op0_func  = a64op_gpx(7);
-    s->op1_impl  = a64op_gpx(8);
+    s->op0_impl  = a64op_gpx(8);
 
     /* Read/Write data pointer padding. */
     LOOP(imask, i) { s->in_bump [i] = a64op_gpx(rw_gprs[(i * 4) + 2]); }
@@ -519,13 +520,13 @@ static void asmgen_process_cps(SwsAArch64Context *s, SwsCompMask mask)
 
     /* Load values from impl. */
     rasm_set_current_node(r, s->setup);
-    RasmOp impl_cont = a64op_off(s->impl, offsetof_impl_cont);
-    i_ldr(r, s->op0_func, impl_cont);                   CMT("SwsFuncPtr op0_func = impl->cont;");
-    i_add(r, s->op1_impl, s->impl, IMM(sizeof_impl));   CMT("SwsOpImpl *op1_impl = impl + 1;");
+    RasmOp impl_func = a64op_off(s->impl, offsetof_impl_func);
+    i_ldr(r, s->op0_func, impl_func);                   CMT("SwsFuncPtr op0_func = impl->func;");
+    i_mov(r, s->op0_impl, s->impl);                     CMT("SwsOpImpl *op0_impl = impl;");
 
     /* Reset impl and call first kernel. */
     rasm_set_current_node(r, s->loop);
-    i_mov(r, s->impl, s->op1_impl);                     CMT("impl = op1_impl;");
+    i_mov(r, s->impl, s->op0_impl);                     CMT("impl = op0_impl;");
     i_blr(r, s->op0_func);                              CMT("op0_func();");
 }
 
@@ -634,9 +635,10 @@ static void asmgen_op_cps(SwsAArch64Context *s, const SwsAArch64OpEntry *entry)
         i_ret(r);
     } else {
         /* Load continuation address and increment impl pointer. */
+        const size_t priv_size = FFALIGN(aarch64_priv_size(p), alignof_impl);
         RasmNode *node = rasm_set_current_node(r, s->load_cont_node);
-        RasmOp impl_post = a64op_post(s->impl, sizeof_impl);
-        i_ldr(r, s->cont, impl_post);                   CMT("SwsFuncPtr cont = (impl++)->cont;");
+        RasmOp impl_pre = a64op_pre(s->impl, offsetof_impl_priv + priv_size);
+        i_ldr(r, s->cont, impl_pre);                    CMT("SwsFuncPtr cont = (++impl)->func;");
         rasm_set_current_node(r, node);
         /* Common end for remaining CPS functions. */
         i_br (r, s->cont);                              CMT("jump to cont");
