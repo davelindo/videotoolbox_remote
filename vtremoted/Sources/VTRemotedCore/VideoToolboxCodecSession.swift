@@ -84,7 +84,7 @@
         private var nominalFrameDurTicks: Int64 = 0
         private var encodeDtsOffsetTicks: Int64 = 0
 
-        private struct WireSideData {
+        struct WireSideData {
             let type: UInt32
             let data: Data
         }
@@ -114,7 +114,7 @@
             callbackLock.unlock()
         }
 
-        private func storePendingDecodeSideData(ptsTicks: Int64, sideData: [WireSideData]) {
+        func storePendingDecodeSideData(ptsTicks: Int64, sideData: [WireSideData]) {
             guard !sideData.isEmpty else { return }
             guard ptsTicks != Self.noPtsTicks else {
                 logger.debug("dropping decode side data without PTS")
@@ -136,7 +136,7 @@
             callbackLock.unlock()
         }
 
-        private func takePendingDecodeSideData(ptsTicks: Int64) -> [WireSideData] {
+        func takePendingDecodeSideData(ptsTicks: Int64) -> [WireSideData] {
             guard ptsTicks != Self.noPtsTicks else { return [] }
 
             callbackLock.lock()
@@ -2095,6 +2095,12 @@
                 )
             }
 
+            // Buffered encoders need a drain before delivering the warmup
+            // frame. This session is discarded after obtaining its headers.
+            try checkStatus(
+                VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid),
+                "complete warmup encode"
+            )
             if warmupSemaphore.wait(timeout: .now() + 5.0) == .timedOut {
                 logger.error("warmup timed out waiting for encoder output")
                 throw VTRemotedError.ioError(code: -1, message: "warmup timed out")
@@ -2433,14 +2439,8 @@
                 decompressionOutputCallback: { refCon, _, status, flags, imageBuffer, pts, duration in
                     let unmanaged = Unmanaged<VideoToolboxCodecSession>.fromOpaque(refCon!)
                     let session = unmanaged.takeUnretainedValue()
-                    guard status == noErr, let img = imageBuffer else {
-                        let detail = "decoder callback produced no frame " +
-                            "(flags=\(flags.rawValue) image=\(imageBuffer != nil) " +
-                            "pts=\(pts.value)/\(pts.timescale) duration=\(duration.value)/\(duration.timescale))"
-                        session.fail(VTRemotedError.ioError(code: Int32(status), message: detail))
-                        return
-                    }
-                    session.handleDecodedFrame(pixelBuffer: img, pts: pts, duration: duration)
+                    session.handleDecoderOutput(status: status, flags: flags, imageBuffer: imageBuffer,
+                                                pts: pts, duration: duration)
                 },
                 decompressionOutputRefCon: UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
             )
@@ -2485,6 +2485,32 @@
             _ = VTSessionSetProperty(session, key: kVTDecompressionPropertyKey_RealTime, value: isRealtime)
             
             decompressionSession = session
+        }
+
+        func handleDecoderOutput(status: OSStatus, flags: VTDecodeInfoFlags, imageBuffer: CVImageBuffer?,
+                                 pts: CMTime, duration: CMTime) {
+            let leadingDrop: VTDecodeInfoFlags = [.frameDropped, .skippedLeadingFrameDropped]
+            // A seek to a sync picture can omit leading pictures with unavailable
+            // references. Only this documented omission is nonfatal; an image or
+            // conflicting flags/status still indicates a broken callback.
+            if imageBuffer == nil,
+               status == noErr || status == kVTVideoDecoderReferenceMissingErr,
+               flags == leadingDrop || flags == leadingDrop.union(.asynchronous) {
+                if let config {
+                    let ptsTicks = ticksOrNoPts(from: pts, timebase: config.timebase)
+                    _ = takePendingDecodeSideData(ptsTicks: ptsTicks)
+                }
+                logger.debug("DECODE skipped leading frame status=\(status) flags=\(flags.rawValue) pts=\(pts.value)/\(pts.timescale)")
+                return
+            }
+            guard status == noErr, !flags.contains(.skippedLeadingFrameDropped), let img = imageBuffer else {
+                let detail = "decoder callback produced no frame " +
+                    "(flags=\(flags.rawValue) image=\(imageBuffer != nil) " +
+                    "pts=\(pts.value)/\(pts.timescale) duration=\(duration.value)/\(duration.timescale))"
+                fail(VTRemotedError.ioError(code: Int32(status), message: detail))
+                return
+            }
+            handleDecodedFrame(pixelBuffer: img, pts: pts, duration: duration)
         }
 
         private func handleDecodedFrame(pixelBuffer: CVPixelBuffer, pts: CMTime, duration: CMTime) {

@@ -84,6 +84,12 @@ Warm-up throughput estimates each session's frame count for the requested minimu
 presentation windows, capability negotiation, exact bound conversion, preserved
 timestamps, BSF chains and missing-capability errors. It runs in all FFmpeg CI builds.
 
+`python3 tests/integration/run_vtremoted_hevc_leading_frames.py` generates an open-GOP
+HEVC stream and seeks to a CRA picture. It verifies that expected leading-frame
+drops are exercised and that all 24 retained pictures decode in both decode and
+transcode modes, with synchronous and asynchronous decoding. It requires a local
+daemon, a remote-enabled FFmpeg client, and a fixture FFmpeg with `libx265`.
+
 `python3 tests/integration/run_vtremoted_transcode_seek.py` uses a local daemon and
 generated nine-second H.264/HEVC clips with explicit BSF windows. It checks exact retained frame counts,
 audio alignment, the first encoded keyframe and independent strict decoding.

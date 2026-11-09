@@ -67,6 +67,8 @@ run_step "vtremoted_roundtrip" bash "${ROOT}/tests/integration/run_vtremoted_rou
 run_step "vtremoted_padded_encode" python3 "${ROOT}/tests/integration/run_vtremoted_padded_encode.py"
 run_step "vtremoted_decode"    bash "${ROOT}/tests/integration/run_vtremoted_decode.sh"
 run_step "vtremoted_transcode_seek" python3 "${ROOT}/tests/integration/run_vtremoted_transcode_seek.py"
+run_step "vtremoted_hevc_leading_frames" python3 "${ROOT}/tests/integration/run_vtremoted_hevc_leading_frames.py" \
+  --fixture-ffmpeg "${FFMPEG_LOCAL_BIN:-${FFMPEG_BIN}}"
 run_step "vtremoted_hardware_ingest" bash "${ROOT}/tests/integration/run_vtremoted_hardware_ingest.sh"
 run_step "vtremoted_decode_hardware_output" bash "${ROOT}/tests/integration/run_vtremoted_decode_hardware_output.sh"
 run_step "vtremoted_transcode_hardware_ingest" bash "${ROOT}/tests/integration/run_vtremoted_transcode_hardware_ingest.sh"

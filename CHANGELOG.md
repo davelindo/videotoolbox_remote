@@ -7,6 +7,12 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
+## [v0.10.12] - 2026-11-09
+
+### Fixed
+- Continue HEVC decode and transcode sessions when VideoToolbox omits leading pictures after random access. Discard side data for those pictures while preserving fatal handling of other decoder errors.
+- Drain disposable encoder warm-up sessions so buffered encoders provide codec headers before configuration completes.
+
 ## [v0.10.11] - 2026-11-09
 
 ### Changed
