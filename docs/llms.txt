@@ -4,7 +4,7 @@ permalink: /llms.txt
 ---
 # VideoToolbox Remote (`videotoolbox_remote`) Briefing
 
-**Version**: v0.10.10
+**Version**: v0.10.11
 **License**: LGPL v2.1+ by default; optional GPL components depend on FFmpeg configuration.
 **Goal**: Produce video on any PC and use a Mac's dedicated media hardware for encoding. Capture, applications, Plex and automation stay on the source machine while a macOS 13+ Mac supplies VideoToolbox over the network.
 
