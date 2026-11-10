@@ -41,6 +41,7 @@ public enum VTRCapability {
     public static let sideDataV2 = "side_data.v2"
     public static let packetAckV1 = "packet_ack.v1"
     public static let transcodePresentationWindowV1 = "transcode.presentation_window.v1"
+    public static let transcodeHDRToSDRV1 = "transcode.hdr_to_sdr.v1"
 
     public static let baseline: [String] = [
         h264,
@@ -57,12 +58,14 @@ public enum VTRCapability {
         hwFramesVideoToolboxOutput,
         sideDataV2,
         packetAckV1,
-        transcodePresentationWindowV1
+        transcodePresentationWindowV1,
+        transcodeHDRToSDRV1
     ]
 
     public static var runtimeServer: [String] {
         #if canImport(VideoToolbox)
-            return defaultServer
+            if #available(macOS 15.0, *) { return defaultServer }
+            return defaultServer.filter { $0 != transcodeHDRToSDRV1 }
         #else
             return baseline
         #endif

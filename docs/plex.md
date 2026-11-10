@@ -30,7 +30,7 @@ An unrecognized library build or command stays on Plex's native path. Upgrading 
 
 ## Build the Plex image
 
-From the repository root:
+The image and its build stage use the same pinned official Plex base on Ubuntu 24.04. From the repository root:
 
 ```bash
 docker build -f vaapi-driver/docker/Dockerfile.plex \

@@ -305,6 +305,9 @@ public final class VTRClientHandler: @unchecked Sendable {
         )
 
         try validateWireCompression(config.options.wireCompression)
+        if config.hdrToSDR != nil, !serverCapabilities.contains(VTRCapability.transcodeHDRToSDRV1) {
+            throw VTRemotedError.unsupported("HDR-to-SDR tone mapping is unavailable on this server")
+        }
 
         logger.info(
             "CONFIGURE req mode=\(config.mode.rawValue) codec=\(config.codec.rawValue) " +

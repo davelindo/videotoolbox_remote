@@ -1,19 +1,21 @@
 # syntax=docker/dockerfile:1
-ARG PLEX_BASE=plexinc/pms-docker:beta@sha256:8aeb4a982ea564ad309861dd251cd9e218aac3f4e4d3da21375568341be1b16f
+ARG PLEX_BASE=plexinc/pms-docker:beta@sha256:f00d6009c4becccfba7c1ef6670f442149c639fe124859c94b5af53503f5eb80
 ARG VTREMOTE_BUILD_PLATFORM=linux/amd64
 
-FROM --platform=${VTREMOTE_BUILD_PLATFORM} ubuntu:20.04 AS vtremote-builder
+FROM --platform=${VTREMOTE_BUILD_PLATFORM} ${PLEX_BASE} AS vtremote-builder
 ARG VTREMOTE_VERSION=dev
 ARG LIBVA_VERSION=2.22.0
 ARG LIBVA_SHA256=467c418c2640a178c6baad5be2e00d569842123763b80507721ab87eb7af8735
 ARG PLEX_FFMPEG_VERSION=6.1.1
 ARG PLEX_FFMPEG_SHA256=8684f4b00f94b85461884c3719382f1261f0d9eb3d59640a1f4ac0873616f968
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive \
-    apt-get install -y --no-install-recommends \
+COPY scripts/ci_apt_install.sh /tmp/vtremote-apt/
+COPY scripts/ci-apt/noble-amd64.list /tmp/vtremote-apt/ci-apt/
+RUN DEBIAN_FRONTEND=noninteractive \
+    bash /tmp/vtremote-apt/ci_apt_install.sh --no-install-recommends \
         build-essential cmake pkg-config python3 curl ca-certificates \
         meson ninja-build libdrm-dev libx11-dev libxext-dev libxfixes-dev \
         libx11-xcb-dev libxcb1-dev libxcb-dri3-dev liblz4-dev libzstd-dev \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /tmp/vtremote-apt /var/lib/apt/lists/*
 RUN curl -fL --retry 3 -o /tmp/libva.tar.gz \
         "https://github.com/intel/libva/archive/refs/tags/${LIBVA_VERSION}.tar.gz" \
     && echo "${LIBVA_SHA256}  /tmp/libva.tar.gz" | sha256sum -c - \
@@ -44,10 +46,13 @@ RUN PKG_CONFIG_PATH=/usr/local/lib/pkgconfig cmake -S vaapi-driver -B build \
     && cmake --build build --parallel \
     && cmake --install build
 
-FROM ${PLEX_BASE}
-RUN apt-get update && apt-get install -y --no-install-recommends \
+FROM --platform=${VTREMOTE_BUILD_PLATFORM} ${PLEX_BASE}
+COPY scripts/ci_apt_install.sh /tmp/vtremote-apt/
+COPY scripts/ci-apt/noble-amd64.list /tmp/vtremote-apt/ci-apt/
+RUN DEBIAN_FRONTEND=noninteractive \
+    bash /tmp/vtremote-apt/ci_apt_install.sh --no-install-recommends \
         liblz4-1 libzstd1 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /tmp/vtremote-apt /var/lib/apt/lists/*
 COPY --from=vtremote-builder /opt/vtremote-vaapi /opt/vtremote-vaapi
 COPY vaapi-driver/docker/55-vtremote-plex-transcoder /etc/cont-init.d/55-vtremote-plex-transcoder
 RUN chmod 0755 /etc/cont-init.d/55-vtremote-plex-transcoder

@@ -26,7 +26,7 @@ The target Mac must support the requested codec and format. Driver profile suppo
 
 Start the [Mac daemon](getting-started.html#install-the-release-binaries), then download `vtremote-vaapi-linux-x86_64.tar.gz` and its checksum from the [latest release]({{ site.latest_release_url }}).
 
-Install your distribution's LZ4 and Zstd runtime packages. The artifact has a GLIBC 2.17 baseline; stock FFmpeg also needs a compatible libva runtime. Unpack and install:
+The binary artifact targets Ubuntu 24.04 (glibc 2.39) or a compatible newer distribution. Install your distribution's LZ4 and Zstd runtime packages; stock FFmpeg also needs a compatible libva runtime. Unpack and install:
 
 ```bash
 tar -xzf vtremote-vaapi-linux-x86_64.tar.gz

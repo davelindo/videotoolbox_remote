@@ -42,14 +42,20 @@ final class MessageCodecTests: XCTestCase {
                 VTRCapability.hwFramesVideoToolboxOutput,
                 VTRCapability.sideDataV2,
                 VTRCapability.packetAckV1,
-                VTRCapability.transcodePresentationWindowV1
+                VTRCapability.transcodePresentationWindowV1,
+                VTRCapability.transcodeHDRToSDRV1
             ]
         )
     }
 
     func testRuntimeServerCapabilitiesMatchBackend() {
         #if canImport(VideoToolbox)
-            XCTAssertEqual(VTRCapability.runtimeServer, VTRCapability.defaultServer)
+            if #available(macOS 15.0, *) {
+                XCTAssertEqual(VTRCapability.runtimeServer, VTRCapability.defaultServer)
+            } else {
+                XCTAssertEqual(VTRCapability.runtimeServer,
+                               VTRCapability.defaultServer.filter { $0 != VTRCapability.transcodeHDRToSDRV1 })
+            }
         #else
             XCTAssertEqual(VTRCapability.runtimeServer, VTRCapability.baseline)
         #endif

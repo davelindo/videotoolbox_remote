@@ -214,7 +214,9 @@ ifeq ($(IS_DARWIN),Darwin)
 	export MACOSX_DEPLOYMENT_TARGET="$(MACOSX_DEPLOYMENT_TARGET)"; \
 	if [ -n "$(PKG_CONFIG)" ]; then export PKG_CONFIG="$(PKG_CONFIG)"; fi; \
 	if [ -n "$(PKG_CONFIG_PATH)" ]; then export PKG_CONFIG_PATH="$(PKG_CONFIG_PATH)"; fi; \
-	PATH="$$path" swift build -c release $(SWIFT_BUILD_SANDBOX_FLAGS)
+	PATH="$$path" swift build -c release $(SWIFT_BUILD_SANDBOX_FLAGS) \
+		-Xlinker -platform_version -Xlinker macos \
+		-Xlinker "$(MACOSX_DEPLOYMENT_TARGET)" -Xlinker "$(MACOSX_SDK_VERSION)"
 else
 	@echo "Skipping vtremoted build (not macOS)"
 endif

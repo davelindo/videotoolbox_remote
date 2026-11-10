@@ -111,7 +111,7 @@ sequenceDiagram
   - Common values: `h264`, `hevc`, `pixfmt.nv12`, `pixfmt.p010`, `pixfmt.bgra`,
     `pixfmt.ayuv`, `pixfmt.p210`, `hwframes.videotoolbox.input`,
     `hwframes.videotoolbox.output`, `side_data.v2`, `packet_ack.v1`,
-    `transcode.presentation_window.v1`.
+    `transcode.presentation_window.v1`, `transcode.hdr_to_sdr.v1`.
 - `max_sessions` (uint16): Concurrency limit.
 - `active_sessions` (uint16): Current active sessions.
 
@@ -136,6 +136,21 @@ discarded frames never enter the encoder. The first retained frame starts the
 encoded stream with a keyframe. Invalid bounds and missing decoded PTS are errors.
 Windowed clients must also negotiate `packet_ack.v1` so preroll can consume input
 credits without producing encoded packets.
+
+`transcode.hdr_to_sdr.v1` enables explicit `hdr_to_sdr=1` in transcode mode,
+with HEVC input and NV12/P010 output. `hdr_source_transfer` is `16` (PQ) or `18`
+(HLG); the client validates 10-bit 4:2:0 BT.2020 input before configuring.
+Optional `hdr_source_peak` supplies the static peak luminance in nits, greater
+than zero and at most 10,000. Frame content-light metadata takes precedence;
+otherwise the static peak is used, defaulting to 10,000 nits for PQ and 1,000
+for HLG. This capability is advertised on macOS 15+.
+
+The daemon preserves P010 precision through decode and 32-bit floating-point precision
+through native headroom mapping and gamut conversion. Output uses limited-range
+BT.709 (`color_range=1`, `colorspace=1`, `color_primaries=1`, `color_trc=1`).
+Conflicting explicit output tags are rejected. HDR/ICC packet side-data types
+20, 22, 28, 29, 31 and 41 are removed; unrelated records such as captions remain.
+The client also removes these records from output codec parameters and packets.
 
 ### Streaming
 

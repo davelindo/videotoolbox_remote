@@ -71,6 +71,7 @@
         private var transcodeOutputPool: CVPixelBufferPool?
         private var transcodeTransferSession: VTPixelTransferSession?
         private let transcodePixelTransfer = TranscodePixelTransfer()
+        private var hdrToneMapper: HDRToneMapper?
         private var transcodeOutputWidth: Int = 0
         private var transcodeOutputHeight: Int = 0
         private var transcodeNeedsTransfer = false
@@ -386,6 +387,7 @@
             transcodeOutputPool = nil
             transcodeTransferSession = nil
             transcodePixelTransfer.reset()
+            hdrToneMapper = nil
             transcodeOutputWidth = 0
             transcodeOutputHeight = 0
             transcodeNeedsTransfer = false
@@ -412,6 +414,9 @@
                 try setupDecoder(configuration)
                 return Data()
             case .transcode:
+                if configuration.hdrToSDR != nil {
+                    hdrToneMapper = try HDRToneMapper(maxFrameBytes: configuration.maxFrameBytes)
+                }
                 encoderCodec = configuration.outputCodec
                 encodeReorderBySeq = configuration.options.maxBFrames <= 0
                 let enforceMonotonicPts = encodeReorderBySeq
@@ -422,7 +427,7 @@
                 transcodeReorderBuffer = DecodeReorderBuffer(depth: decodeReorderDepth)
                 try setupDecoder(configuration)
                 try setupEncoder(configuration, codec: encoderCodec)
-                setupTranscodeTransfer(configuration)
+                try setupTranscodeTransfer(configuration)
                 let extra = encoderExtradata ?? Data()
                 logger.info("CONFIGURE returning extradata size=\(extra.count)")
                 return extra
@@ -1044,6 +1049,7 @@
             }
             transcodeTransferSession = nil
             transcodePixelTransfer.reset()
+            hdrToneMapper = nil
             transcodeOutputPool = nil
             transcodeNeedsTransfer = false
             callbackLock.lock()
@@ -2184,7 +2190,8 @@
                     outputBuffer,
                     pts: pts,
                     duration: duration,
-                    sideData: frame.payload.sideData
+                    sideData: config.hdrToSDR == nil ? frame.payload.sideData :
+                        frame.payload.sideData.filter { !HDRToSDRSettings.isHDRSideData($0.type) }
                 )
             }
         }
@@ -2226,15 +2233,18 @@
             sendDecodedFrames(frames)
         }
 
-        private func setupTranscodeTransfer(_ config: SessionConfiguration) {
+        private func setupTranscodeTransfer(_ config: SessionConfiguration) throws {
             transcodeOutputWidth = config.outputWidth
             transcodeOutputHeight = config.outputHeight
             transcodeNeedsTransfer = config.outputWidth != config.width || config.outputHeight != config.height
             if let session = compressionSession {
                 transcodeOutputPool = VTCompressionSessionGetPixelBufferPool(session)
             }
-            if transcodeNeedsTransfer {
-                _ = ensureTranscodeTransferSession(config)
+            if transcodeNeedsTransfer || config.hdrToSDR != nil {
+                let transfer = ensureTranscodeTransferSession(config)
+                if config.hdrToSDR != nil, transfer == nil {
+                    throw VTRemotedError.unsupported("HDR-to-SDR output pixel transfer is unavailable")
+                }
             }
         }
 
@@ -2263,13 +2273,36 @@
             _ = VTSessionSetProperty(session,
                                      key: kVTPixelTransferPropertyKey_ScalingMode,
                                      value: mode)
+            if config.hdrToSDR != nil {
+                let properties: [(CFString, CFString)] = [
+                    (kVTPixelTransferPropertyKey_DestinationColorPrimaries, kCVImageBufferColorPrimaries_ITU_R_709_2),
+                    (kVTPixelTransferPropertyKey_DestinationTransferFunction, kCVImageBufferTransferFunction_ITU_R_709_2),
+                    (kVTPixelTransferPropertyKey_DestinationYCbCrMatrix, kCVImageBufferYCbCrMatrix_ITU_R_709_2)
+                ]
+                for (key, value) in properties where VTSessionSetProperty(session, key: key, value: value) != noErr {
+                    logger.error("HDR-to-SDR output conversion is unsupported (\(key))")
+                    transcodeTransferSession = nil
+                    return nil
+                }
+            }
             return session
         }
 
         private func prepareTranscodePixelBuffer(
-            _ pixelBuffer: CVPixelBuffer,
+            _ decodedBuffer: CVPixelBuffer,
             config: SessionConfiguration
         ) -> CVPixelBuffer? {
+            let pixelBuffer: CVPixelBuffer
+            if let settings = config.hdrToSDR, let mapper = hdrToneMapper {
+                do {
+                    pixelBuffer = try mapper.map(decodedBuffer, settings: settings)
+                } catch {
+                    fail(error)
+                    return nil
+                }
+            } else {
+                pixelBuffer = decodedBuffer
+            }
             let inputWidth = CVPixelBufferGetWidth(pixelBuffer)
             let inputHeight = CVPixelBufferGetHeight(pixelBuffer)
             let inputFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
@@ -2290,8 +2323,14 @@
             }
             do {
                 try transcodePixelTransfer.transfer(transfer, from: pixelBuffer, to: outputBuffer)
+                if config.hdrToSDR != nil {
+                    hdrToneMapper?.tagOutput(outputBuffer)
+                }
             } catch {
                 logger.error("transcode pixel transfer failed: \(error)")
+                if config.hdrToSDR != nil {
+                    fail(VTRemotedError.unsupported("HDR-to-SDR output pixel transfer failed: \(error)"))
+                }
                 return nil
             }
             return outputBuffer
@@ -2446,7 +2485,8 @@
             )
 
             let attrs: [CFString: Any] = [
-                kCVPixelBufferPixelFormatTypeKey: cvPixelFormat
+                kCVPixelBufferPixelFormatTypeKey: config.hdrToSDR == nil ? cvPixelFormat :
+                    kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
             ]
 
             var decompressionSessionPtr: VTDecompressionSession?

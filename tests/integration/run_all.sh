@@ -53,6 +53,7 @@ run_step "mock_transcode_pts_dts" bash "${ROOT}/tests/integration/run_mock_trans
 run_step "mock_transcode_no_output_ack" bash "${ROOT}/tests/integration/run_mock_transcode_no_output_ack.sh"
 run_step "mock_transcode_cli_options" python3 "${ROOT}/tests/integration/run_mock_transcode_cli_options.py"
 run_step "mock_transcode_seek" python3 "${ROOT}/tests/integration/run_mock_transcode_seek.py"
+run_step "mock_hdr_to_sdr" python3 "${ROOT}/tests/integration/run_mock_hdr_to_sdr.py"
 run_step "mock_transcode_hvc1_hdr" bash "${ROOT}/tests/integration/run_mock_transcode_hvc1_hdr_signaling.sh"
 run_step "mock_decode"         bash "${ROOT}/tests/integration/run_mock_decode.sh"
 run_step "mock_protocol_capabilities" bash "${ROOT}/tests/integration/run_mock_protocol_capabilities.sh"
@@ -74,6 +75,7 @@ run_step "vtremoted_decode_hardware_output" bash "${ROOT}/tests/integration/run_
 run_step "vtremoted_transcode_hardware_ingest" bash "${ROOT}/tests/integration/run_vtremoted_transcode_hardware_ingest.sh"
 run_step "vtremoted_hevc_pixfmts" bash "${ROOT}/tests/integration/run_vtremoted_hevc_pixfmts.sh"
 run_step "vtremoted_hdr_side_data" bash "${ROOT}/tests/integration/run_vtremoted_hdr_side_data.sh"
+run_step "vtremoted_hdr_to_sdr" python3 "${ROOT}/tests/integration/run_vtremoted_hdr_to_sdr.py"
 run_step "transcode_test"      bash "${ROOT}/tests/integration/run_transcode_test.sh"
 if [[ "${VTREMOTE_RUN_INTERLACED:-0}" != "0" ]]; then
   run_step "vtremoted_interlaced" bash "${ROOT}/tests/integration/run_vtremoted_interlaced.sh"

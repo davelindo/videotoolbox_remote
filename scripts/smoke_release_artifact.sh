@@ -164,8 +164,8 @@ case "$kind" in
     for runtime_binary in "$driver" "$probe" "$plex_wrapper" "$plex_bsf"; do
       max_glibc="$(readelf --version-info "$runtime_binary" | \
         sed -n 's/.*Name: GLIBC_\([^[:space:]]*\).*/\1/p' | sort -V | tail -n1)"
-      if [[ -n "$max_glibc" && "$(printf '2.17\n%s\n' "$max_glibc" | sort -V | tail -n1)" != "2.17" ]]; then
-        echo "$(basename "$runtime_binary") requires GLIBC_$max_glibc; release ceiling is GLIBC_2.17" >&2
+      if [[ -n "$max_glibc" && "$(printf '2.39\n%s\n' "$max_glibc" | sort -V | tail -n1)" != "2.39" ]]; then
+        echo "$(basename "$runtime_binary") requires GLIBC_$max_glibc; release ceiling is GLIBC_2.39" >&2
         exit 1
       fi
     done

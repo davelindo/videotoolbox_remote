@@ -522,6 +522,8 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                         ("expect_colorspace", "colorspace"),
                         ("expect_color_primaries", "color_primaries"),
                         ("expect_color_trc", "color_trc"),
+                        ("expect_hdr_to_sdr", "hdr_to_sdr"),
+                        ("expect_hdr_source_transfer", "hdr_source_transfer"),
                         ("expect_presentation_start_pts", "presentation_start_pts"),
                         ("expect_presentation_end_pts", "presentation_end_pts"),
                     ):
@@ -746,6 +748,8 @@ def main() -> int:
         default=None,
         help="Expected CONFIGURE color_trc value",
     )
+    parser.add_argument("--expect-hdr-to-sdr", type=int, default=None)
+    parser.add_argument("--expect-hdr-source-transfer", type=int, default=None)
     parser.add_argument(
         "--hello-ack-bytes",
         type=int,

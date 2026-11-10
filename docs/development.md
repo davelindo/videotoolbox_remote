@@ -42,9 +42,9 @@ codec/filter, mock integration, and packaged-artifact smoke checks as x86_64.
 See [arm64 runtime requirements](getting-started.html#linux-arm64-release-runtime)
 for the Ubuntu 24.04 shared-library baseline. The project does not publish or test 32-bit `i686` Linux builds.
 
-The VA-API driver job runs in Ubuntu 20.04 and builds the pinned libva 2.22 /
-VA-API 1.22 headers from source. This preserves the GLIBC 2.17 release-artifact
-baseline. Locally on Linux, run `make test-vaapi-driver`. The test suite uses
+The VA-API driver job runs on Ubuntu 24.04 and builds the pinned libva 2.22 /
+VA-API 1.22 headers from source. Release artifacts target glibc 2.39.
+Locally on Linux, run `make test-vaapi-driver`. The test suite uses
 the shared repository mock and stock FFmpeg's VA-API encoders.
 
 1.  **Install assembler and library dependencies** (assemblers are needed for x86 builds):
@@ -106,6 +106,8 @@ export VTREMOTED="$PWD/vtremoted/.build/release/vtremoted"
 - **`run_vtremoted_decode_hardware_output.sh`**: Verify remote decoders can return VideoToolbox-backed frames when requested.
 - **`run_vtremoted_hevc_pixfmts.sh`**: Verify real `vtremoted` accepts HEVC `bgra`, `ayuv`, and `p210le` inputs.
 - **`run_vtremoted_hdr_side_data.sh`**: Verify real `vtremoted` preserves HEVC HDR color signaling.
+- **`run_vtremoted_hdr_to_sdr.py`**: Generate HDR10/PQ and HLG fixtures and verify SDR highlight detail, colour tags, HDR metadata removal, frame timing and bounded seeking with a macOS 15+ daemon.
+- **`run_mock_hdr_to_sdr.py`**: Verify HDR capability negotiation and configuration validation on each client platform.
 - **`run_obs_plugin_client_mock.sh`**: OBS plugin protocol smoke test against the Python mock server.
 
 ### Measuring performance

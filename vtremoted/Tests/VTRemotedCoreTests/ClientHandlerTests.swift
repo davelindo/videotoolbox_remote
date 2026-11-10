@@ -3,6 +3,18 @@ import Darwin
 import XCTest
 
 final class ClientHandlerTests: XCTestCase {
+    func testHDRToSDRRequiresAdvertisedCapability() throws {
+        let io = FakeIO(incoming: [
+            (.hello, makeHello(token: "", codec: "hevc")),
+            (.configure, makeConfigure(mode: "transcode", wireCompression: "0", hdrToSDR: true))
+        ])
+        let handler = VTRClientHandler(io: io, expectedToken: "", serverCapabilities: VTRCapability.baseline,
+            sessionFactory: { StubCodecSession(sender: $0) })
+        handler.run()
+        XCTAssertEqual(io.sent.map(\.0), [.helloAck, .error])
+        XCTAssertTrue(try decodeError(XCTUnwrap(io.sent.last).1).message.contains("HDR-to-SDR"))
+    }
+
     private final class AsyncFailingSession: CodecSession, @unchecked Sendable {
         let sender: MessageSender
         let stage: String
@@ -339,7 +351,7 @@ private func makeHello(token: String, codec: String) -> Data {
     return writer.data
 }
 
-private func makeConfigure(mode: String, wireCompression: String, packetAck: Bool = false) -> Data {
+private func makeConfigure(mode: String, wireCompression: String, packetAck: Bool = false, hdrToSDR: Bool = false) -> Data {
     var writer = ByteWriter()
     writer.writeBE(UInt32(64))
     writer.writeBE(UInt32(64))
@@ -355,6 +367,10 @@ private func makeConfigure(mode: String, wireCompression: String, packetAck: Boo
     ]
     if packetAck {
         options.append(("packet_ack.v1", "1"))
+    }
+    if hdrToSDR {
+        options.append(("hdr_to_sdr", "1"))
+        options.append(("hdr_source_transfer", "16"))
     }
 
     writer.writeBE(UInt16(options.count))

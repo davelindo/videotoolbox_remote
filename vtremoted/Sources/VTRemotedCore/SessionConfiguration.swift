@@ -33,6 +33,7 @@ public struct SessionConfiguration: Sendable {
     public var configExtradata: Data?
     public var presentationStartPTS: Int64?
     public var presentationEndPTS: Int64?
+    let hdrToSDR: HDRToSDRSettings?
     let maxFrameBytes: Int
 
     private static func presentationBound(_ value: String?) throws -> Int64? {
@@ -190,6 +191,14 @@ public struct SessionConfiguration: Sendable {
         timebase = request.timebase
         frameRate = request.frameRate
         options = SessionOptions(options: request.options)
+        hdrToSDR = try HDRToSDRSettings(codec: codec, mode: mode, pixelFormat: pixelFormat,
+                                       options: request.options)
+        if hdrToSDR != nil {
+            options.colorRange = 1
+            options.colorSpace = 1
+            options.colorPrimaries = 1
+            options.colorTRC = 1
+        }
         if let rawDepth = request.options["decode_reorder_depth"] {
             guard let depth = Int(rawDepth), (-1...64).contains(depth) else {
                 throw VTRemotedError.unsupported("decode_reorder_depth must be -1 or 0...64")
@@ -200,10 +209,13 @@ public struct SessionConfiguration: Sendable {
         configExtradata = request.extradata
         self.maxFrameBytes = frameLimit
 
+        if hdrToSDR != nil, width > frameLimit / 16 / height {
+            throw VTRemotedError.unsupported("HDR tone-mapping intermediate exceeds max frame bytes")
+        }
         try Self.validateFrameSize(
             width: width,
             height: height,
-            pixelFormat: pixelFormat,
+            pixelFormat: hdrToSDR == nil ? pixelFormat : VTRPixelFormat.p010,
             maxFrameBytes: frameLimit,
             field: "input frame"
         )

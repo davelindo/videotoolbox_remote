@@ -77,6 +77,33 @@ For H.264/HEVC input, keep decoded frames on the Mac and send compressed packets
 
 The first video stream is transcoded; other mapped streams are copied. The Mac performs video decode, optional configured resize/pixel-format conversion and encode. Client-side audio, subtitles, files and muxing stay local. Arbitrary video filters are not part of this server path; use the remote encoder after local filtering for those jobs.
 
+### HDR to SDR
+
+On macOS 15+, add `vt_remote_hdr_to_sdr=1` to the packet-transcode BSF to
+convert 10-bit HEVC HDR10/PQ or HLG to limited-range BT.709 SDR:
+
+```bash
+./ffmpeg-client/ffmpeg -i hdr.mkv -map 0 -c copy \
+  -bsf:v "vtremote_transcode=vt_remote_host=${MAC_HOST}:vt_remote_port=5555:vt_remote_hdr_to_sdr=1:vt_remote_out_codec=h264:vt_remote_bitrate=6000000" \
+  sdr.mkv
+```
+
+Set `MAC_HOST` to the Mac endpoint. Input must be 10-bit 4:2:0 HEVC with
+BT.2020 primaries, BT.2020 non-constant-luminance matrix, and PQ or HLG transfer.
+The Mac decodes to P010, applies native [Core Image headroom tone mapping](https://developer.apple.com/documentation/coreimage/citonemapheadroom) in
+32-bit floating-point linear colour, then converts to BT.709 and encodes. Video remains
+compressed in both network directions. The example produces H.264/NV12; select
+`vt_remote_out_codec=hevc:vt_remote_pix_fmt=2` for 10-bit SDR HEVC.
+HDR mastering, content-light, Dolby Vision, dynamic HDR and ICC metadata are
+removed from the SDR output; colour tags describe the converted pixels.
+Tone mapping uses Core Image's GPU renderer in arm64 builds and CPU renderer in
+x86_64 builds. Decode and encode remain in VideoToolbox.
+
+Source headroom uses available content-light metadata or mastering peak. With
+no peak metadata, PQ uses 10,000 nits and HLG uses 1,000 nits. The server must
+advertise `transcode.hdr_to_sdr.v1`; unsupported requests fail during setup.
+Omitting this option retains the existing HDR-preserving and SDR paths.
+
 Applications request an accurate presentation window with the BSF options
 `vt_remote_start_time` (inclusive) and `vt_remote_end_time` (exclusive). Values
 are durations in the input packet clock. The caller supplies the window and

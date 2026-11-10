@@ -130,8 +130,8 @@ static VAStatus sync_object(VTRVADriver *driver, VASurfaceID surface_id, VABuffe
     if (timeout_ns == VA_TIMEOUT_INFINITE) {
         pthread_mutex_lock(&context->io_lock);
     } else {
-        /* Include contention with another submit/sync in the caller's deadline.
-         * A monotonic try-lock loop also works on the GLIBC 2.17 baseline. */
+        /* Include contention with another submit/sync in the caller's
+         * monotonic deadline. */
         int rc;
         while ((rc = pthread_mutex_trylock(&context->io_lock)) == EBUSY) {
             if (pipeline_now_ms() >= deadline) {

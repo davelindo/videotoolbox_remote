@@ -37,6 +37,7 @@
 #include "libavutil/intreadwrite.h"
 #include "libavutil/log.h"
 #include "libavutil/mathematics.h"
+#include "libavutil/mastering_display_metadata.h"
 #include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
@@ -116,6 +117,8 @@ typedef struct VTRemoteTranscodeContext {
     int colorspace;
     int color_primaries;
     int color_trc;
+    int hdr_to_sdr;
+    double hdr_source_peak;
     int sar_num;
     int sar_den;
     int a53_cc;
@@ -532,6 +535,81 @@ static int vtremote_seed_color_props(AVBSFContext *ctx)
     if (s->color_trc >= 0)
         ctx->par_out->color_trc = s->color_trc;
 
+    return 0;
+}
+
+static int vtremote_is_hdr_side_data(uint32_t type)
+{
+    switch (type) {
+    case AV_PKT_DATA_MASTERING_DISPLAY_METADATA:
+    case AV_PKT_DATA_CONTENT_LIGHT_LEVEL:
+    case AV_PKT_DATA_ICC_PROFILE:
+    case AV_PKT_DATA_DOVI_CONF:
+    case AV_PKT_DATA_DYNAMIC_HDR10_PLUS:
+    case 41: /* SMPTE 2094 App 5 wire ID; not named by older Plex SDKs. */
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int vtremote_prepare_hdr_to_sdr(AVBSFContext *ctx)
+{
+    VTRemoteTranscodeContext *s = ctx->priv_data;
+    const AVCodecParameters *input = ctx->par_in;
+    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(input->format);
+    const AVPacketSideData *metadata;
+    const int output_values[] = { s->color_range, s->colorspace, s->color_primaries, s->color_trc };
+
+    if (!s->hdr_to_sdr)
+        return 0;
+    if (input->codec_id != AV_CODEC_ID_HEVC ||
+        (desc ? (desc->comp[0].depth != 10 || desc->log2_chroma_w != 1 || desc->log2_chroma_h != 1) :
+                input->profile != AV_PROFILE_HEVC_MAIN_10) ||
+        input->color_primaries != AVCOL_PRI_BT2020 || input->color_space != AVCOL_SPC_BT2020_NCL ||
+        (input->color_trc != AVCOL_TRC_SMPTE2084 && input->color_trc != AVCOL_TRC_ARIB_STD_B67) ||
+        (s->pixel_format != VTREMOTE_PIX_FMT_NV12 && s->pixel_format != VTREMOTE_PIX_FMT_P010)) {
+        av_log(ctx, AV_LOG_ERROR, "HDR-to-SDR requires 10-bit 4:2:0 HEVC BT.2020 PQ/HLG input and NV12/P010 output\n");
+        return AVERROR(EINVAL);
+    }
+    for (size_t i = 0; i < FF_ARRAY_ELEMS(output_values); i++) {
+        int unspecified = i == 0 ? AVCOL_RANGE_UNSPECIFIED : AVCOL_SPC_UNSPECIFIED;
+        if (output_values[i] != -1 && output_values[i] != 1 && output_values[i] != unspecified) {
+            av_log(ctx, AV_LOG_ERROR, "HDR-to-SDR output must be limited-range BT.709\n");
+            return AVERROR(EINVAL);
+        }
+    }
+    metadata = av_packet_side_data_get(input->coded_side_data, input->nb_coded_side_data,
+                                      AV_PKT_DATA_CONTENT_LIGHT_LEVEL);
+    if (metadata && metadata->size >= sizeof(AVContentLightMetadata))
+        s->hdr_source_peak = ((const AVContentLightMetadata *)metadata->data)->MaxCLL;
+    if (s->hdr_source_peak <= 0) {
+        metadata = av_packet_side_data_get(input->coded_side_data, input->nb_coded_side_data,
+                                          AV_PKT_DATA_MASTERING_DISPLAY_METADATA);
+        if (metadata && metadata->size >= sizeof(AVMasteringDisplayMetadata)) {
+            const AVMasteringDisplayMetadata *mastering = (const AVMasteringDisplayMetadata *)metadata->data;
+            if (mastering->has_luminance)
+                s->hdr_source_peak = av_q2d(mastering->max_luminance);
+        }
+    }
+    if (!isfinite(s->hdr_source_peak) || s->hdr_source_peak < 0 || s->hdr_source_peak > 10000) {
+        av_log(ctx, AV_LOG_ERROR, "HDR source peak must be within 0..10000 nits\n");
+        return AVERROR_INVALIDDATA;
+    }
+    s->color_range = AVCOL_RANGE_MPEG;
+    s->colorspace = AVCOL_SPC_BT709;
+    s->color_primaries = AVCOL_PRI_BT709;
+    s->color_trc = AVCOL_TRC_BT709;
+    for (int i = ctx->par_out->nb_coded_side_data - 1; i >= 0; i--) {
+        enum AVPacketSideDataType type = ctx->par_out->coded_side_data[i].type;
+        if (vtremote_is_hdr_side_data(type))
+            av_packet_side_data_remove(ctx->par_out->coded_side_data, &ctx->par_out->nb_coded_side_data, type);
+    }
+    ctx->par_out->format = s->pixel_format == VTREMOTE_PIX_FMT_P010 ? AV_PIX_FMT_YUV420P10LE : AV_PIX_FMT_YUV420P;
+    ctx->par_out->bits_per_raw_sample = s->pixel_format == VTREMOTE_PIX_FMT_P010 ? 10 : 8;
+    ctx->par_out->profile = AV_PROFILE_UNKNOWN;
+    ctx->par_out->level = AV_LEVEL_UNKNOWN;
+    ctx->par_out->chroma_location = AVCHROMA_LOC_UNSPECIFIED;
     return 0;
 }
 
@@ -1077,6 +1155,24 @@ static int vtremote_append_transcode_opts(AVBSFContext *ctx, VTRemoteKV **opts,
     if (ret < 0)
         return ret;
 
+    if (s->hdr_to_sdr) {
+        ret = vtremote_require_server_cap(ctx, VTREMOTE_CAP_TRANSCODE_HDR_TO_SDR_V1,
+                                         "HDR-to-SDR tone mapping");
+        if (ret < 0)
+            return ret;
+        ret = vtremote_add_opt_string(opts, opt_count, opt_cap, "hdr_to_sdr", "1");
+        if (ret < 0)
+            return ret;
+        ret = vtremote_add_opt_int(opts, opt_count, opt_cap, "hdr_source_transfer", ctx->par_in->color_trc);
+        if (ret < 0)
+            return ret;
+        if (s->hdr_source_peak > 0) {
+            ret = vtremote_add_opt_double(opts, opt_count, opt_cap, "hdr_source_peak", s->hdr_source_peak);
+            if (ret < 0)
+                return ret;
+        }
+    }
+
     if (s->start_time != AV_NOPTS_VALUE || s->end_time != AV_NOPTS_VALUE) {
         AVRational tb = ctx->time_base_in.num > 0 && ctx->time_base_in.den > 0 ?
                         ctx->time_base_in : (AVRational){1, 90000};
@@ -1295,6 +1391,8 @@ static int enqueue_packet(AVBSFContext *ctx, const uint8_t *payload, int payload
     dst->duration = view.duration;
     dst->flags = (view.flags & 1) ? AV_PKT_FLAG_KEY : 0;
     for (int i = 0; i < view.side_data_count; i++) {
+        if (s->hdr_to_sdr && vtremote_is_hdr_side_data((enum AVPacketSideDataType)view.side_data[i].type))
+            continue;
         uint8_t *sd = av_packet_new_side_data(
             dst, (enum AVPacketSideDataType)view.side_data[i].type,
             view.side_data[i].size);
@@ -1728,6 +1826,9 @@ static int vtremote_transcode_init(AVBSFContext *ctx) {
     ctx->par_out->codec_id = s->codec_id_out;
     ctx->par_out->codec_tag = s->codec_tag >= 0 ? (uint32_t)s->codec_tag : 0;
     ctx->time_base_out = ctx->time_base_in;
+    ret = vtremote_prepare_hdr_to_sdr(ctx);
+    if (ret < 0)
+        return ret;
     ret = vtremote_seed_color_props(ctx);
     if (ret < 0)
         return ret;
@@ -1985,6 +2086,7 @@ static const AVOption vtremote_transcode_options[] = {
     { "vt_remote_colorspace", "colorspace", OFFSET(colorspace), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, FLAGS },
     { "vt_remote_color_primaries", "color primaries", OFFSET(color_primaries), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, FLAGS },
     { "vt_remote_color_trc", "color transfer", OFFSET(color_trc), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, FLAGS },
+    { "vt_remote_hdr_to_sdr", "tone map HDR10/PQ or HLG input to BT.709 SDR", OFFSET(hdr_to_sdr), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, FLAGS },
     { "vt_remote_sar_num", "sample aspect ratio num", OFFSET(sar_num), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },
     { "vt_remote_sar_den", "sample aspect ratio den", OFFSET(sar_den), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, FLAGS },
     { "vt_remote_a53_cc", "a53 cc", OFFSET(a53_cc), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, FLAGS },

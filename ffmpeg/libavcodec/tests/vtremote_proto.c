@@ -14,6 +14,7 @@
 #include "libavutil/log.h"
 #include "libavutil/mem.h"
 #include "libavcodec/vtremote_proto.h"
+#include "libavcodec/packet.h"
 #include "../../../vaapi-driver/tests/protocol_golden.h"
 
 static int test_roundtrip(void)
@@ -327,6 +328,16 @@ static int test_pix_fmt_and_cap_helpers(void)
     av_assert0(vtremote_cap_flag_from_name((const uint8_t *)"transcode.presentation_window.v1",
                                          sizeof("transcode.presentation_window.v1") - 1, &flag) == 0);
     av_assert0(flag == VTREMOTE_CAP_TRANSCODE_PRESENTATION_WINDOW_V1);
+    av_assert0(vtremote_cap_flag_from_name((const uint8_t *)"transcode.hdr_to_sdr.v1",
+                                         sizeof("transcode.hdr_to_sdr.v1") - 1, &flag) == 0);
+    av_assert0(flag == VTREMOTE_CAP_TRANSCODE_HDR_TO_SDR_V1);
+    /* side_data.v2 uses FFmpeg's numeric packet side-data identifiers. */
+    av_assert0(AV_PKT_DATA_MASTERING_DISPLAY_METADATA == 20);
+    av_assert0(AV_PKT_DATA_CONTENT_LIGHT_LEVEL == 22);
+    av_assert0(AV_PKT_DATA_ICC_PROFILE == 28);
+    av_assert0(AV_PKT_DATA_DOVI_CONF == 29);
+    av_assert0(AV_PKT_DATA_DYNAMIC_HDR10_PLUS == 31);
+    av_assert0(AV_PKT_DATA_DYNAMIC_HDR_SMPTE_2094_APP5 == 41);
     av_assert0(vtremote_cap_flag_from_name((const uint8_t *)"unknown", 7, &flag) == 0);
     av_assert0(flag == 0);
 

@@ -20,7 +20,7 @@ if ! grep -F 'export MACOSX_DEPLOYMENT_TARGET="$(MACOSX_DEPLOYMENT_TARGET)"' "${
   exit 1
 fi
 
-vtremoted_bin="${repo_root}/vtremoted/.build/release/vtremoted"
+vtremoted_bin="${VTREMOTED:-${repo_root}/vtremoted/.build/release/vtremoted}"
 if [[ -x "${vtremoted_bin}" ]]; then
   if ! command -v vtool >/dev/null 2>&1; then
     echo "vtool is required to verify the built vtremoted deployment target" >&2
@@ -30,6 +30,12 @@ if [[ -x "${vtremoted_bin}" ]]; then
   if [[ "${minos}" != "13.0" ]]; then
     echo "expected built vtremoted minimum macOS 13.0, got ${minos:-<unknown>}" >&2
     vtool -show-build "${vtremoted_bin}" >&2 || true
+    exit 1
+  fi
+  sdk="$(vtool -show-build "${vtremoted_bin}" 2>/dev/null | awk '/sdk / { print $2; exit }')"
+  expected_sdk="$(xcrun --sdk macosx --show-sdk-version)"
+  if [[ "$sdk" != "$expected_sdk" ]]; then
+    echo "expected built SDK ${expected_sdk}, got ${sdk:-<unknown>} (affects HDR colour management)" >&2
     exit 1
   fi
 fi

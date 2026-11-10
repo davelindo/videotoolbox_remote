@@ -148,6 +148,8 @@ int vtremote_cap_flag_from_name(const uint8_t *name, int name_len, uint64_t *fla
         value = VTREMOTE_CAP_PACKET_ACK_V1;
     } else if (cap_name_equals(name, name_len, "transcode.presentation_window.v1")) {
         value = VTREMOTE_CAP_TRANSCODE_PRESENTATION_WINDOW_V1;
+    } else if (cap_name_equals(name, name_len, "transcode.hdr_to_sdr.v1")) {
+        value = VTREMOTE_CAP_TRANSCODE_HDR_TO_SDR_V1;
     }
 
     *flag = value;

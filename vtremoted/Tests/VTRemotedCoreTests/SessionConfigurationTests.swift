@@ -2,6 +2,18 @@
 import XCTest
 
 final class SessionConfigurationTests: XCTestCase {
+    func testHDRToSDRConfiguresBT709AndAccountsForIntermediatePrecision() throws {
+        var request = makeRequest()
+        request.options = ["mode": "transcode", "hdr_to_sdr": "1", "hdr_source_transfer": "18"]
+        let config = try SessionConfiguration(codec: .hevc, request: request, maxFrameBytes: 64 * 64 * 16)
+        XCTAssertNotNil(config.hdrToSDR)
+        XCTAssertEqual(config.options.colorRange, 1)
+        XCTAssertEqual(config.options.colorSpace, 1)
+        XCTAssertEqual(config.options.colorPrimaries, 1)
+        XCTAssertEqual(config.options.colorTRC, 1)
+        XCTAssertThrowsError(try SessionConfiguration(codec: .hevc, request: request, maxFrameBytes: 64 * 64 * 16 - 1))
+    }
+
     func testTranscodePresentationWindowUsesInclusiveStartAndExclusiveEnd() throws {
         var request = makeRequest()
         request.options = ["mode": "transcode", "presentation_start_pts": "-12", "presentation_end_pts": "24"]

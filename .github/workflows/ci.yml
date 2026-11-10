@@ -204,6 +204,7 @@ jobs:
       - name: Build vtremoted
         run: |
           make build-vtremoted
+          bash tests/test_macos_deployment_target.sh
       - name: Run tests
         run: |
           cd vtremoted && swift test --sanitize=thread
@@ -253,6 +254,7 @@ jobs:
       - name: Build vtremoted
         run: |
           make build-vtremoted
+          bash tests/test_macos_deployment_target.sh
       - name: Run tests
         run: |
           cd vtremoted && swift test --sanitize=thread
@@ -300,8 +302,7 @@ jobs:
 
       - name: Install dependencies (Linux)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y yasm nasm pkg-config meson ninja-build cmake liblz4-dev libzstd-dev ccache \
+          sudo bash scripts/ci_apt_install.sh yasm nasm pkg-config meson ninja-build cmake liblz4-dev libzstd-dev ccache \
             libaom-dev libdav1d-dev \
             libopus-dev libvorbis-dev libmp3lame-dev libx264-dev libx265-dev libvpx-dev \
             libass-dev libfreetype6-dev libfontconfig1-dev libfribidi-dev libharfbuzz-dev \
@@ -371,6 +372,7 @@ jobs:
           bash tests/integration/run_mock_transcode_pts_dts_semantics.sh
           python3 tests/integration/run_mock_transcode_cli_options.py
           python3 tests/integration/run_mock_transcode_seek.py
+          python3 tests/integration/run_mock_hdr_to_sdr.py
           bash tests/integration/run_mock_transcode_hvc1_hdr_signaling.sh
           bash tests/integration/run_mock_protocol_capabilities.sh
           bash tests/integration/run_mock_side_data_roundtrip.sh
@@ -418,8 +420,7 @@ jobs:
 
       - name: Install dependencies (Linux)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y yasm nasm pkg-config meson ninja-build cmake liblz4-dev libzstd-dev ccache \
+          sudo bash scripts/ci_apt_install.sh yasm nasm pkg-config meson ninja-build cmake liblz4-dev libzstd-dev ccache \
             libaom-dev libdav1d-dev \
             libopus-dev libvorbis-dev libmp3lame-dev libx264-dev libx265-dev libvpx-dev \
             libass-dev libfreetype6-dev libfontconfig1-dev libfribidi-dev libharfbuzz-dev \
@@ -489,6 +490,7 @@ jobs:
           bash tests/integration/run_mock_transcode_pts_dts_semantics.sh
           python3 tests/integration/run_mock_transcode_cli_options.py
           python3 tests/integration/run_mock_transcode_seek.py
+          python3 tests/integration/run_mock_hdr_to_sdr.py
           bash tests/integration/run_mock_transcode_hvc1_hdr_signaling.sh
           bash tests/integration/run_mock_protocol_capabilities.sh
           bash tests/integration/run_mock_side_data_roundtrip.sh
@@ -620,6 +622,7 @@ jobs:
         run: |
           python3 tests/integration/run_transport_regressions.py --skip-daemon
           python3 tests/integration/run_mock_transcode_seek.py
+          python3 tests/integration/run_mock_hdr_to_sdr.py
           python3 tests/integration/run_decode_duplex.py
           python3 tests/integration/run_encode_negative_stride.py
           python3 tests/integration/run_configure_ack.py
@@ -668,6 +671,7 @@ jobs:
           ./socket_timeouts.exe
           python tests/integration/run_transport_regressions.py --ffmpeg ./ffmpeg/ffmpeg.exe --skip-daemon
           python tests/integration/run_mock_transcode_seek.py --ffmpeg ./ffmpeg/ffmpeg.exe
+          python tests/integration/run_mock_hdr_to_sdr.py --ffmpeg ./ffmpeg/ffmpeg.exe
           python tests/integration/bench_inflight.py --ffmpeg ./ffmpeg/ffmpeg.exe --frames 600 --repeats 1 --depths 0 --changing-capacity --output vtremote-inflight.json
       - name: Package ffmpeg (Windows/MSYS2)
         if: runner.os == 'Windows'
@@ -699,19 +703,19 @@ jobs:
     needs: changes
     if: needs.changes.outputs.release_candidate == 'true' || (github.event_name == 'schedule' && needs.changes.outputs.publishable == 'true') || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly) || needs.changes.outputs.semver_tag == 'true' || (github.event_name != 'schedule' && (needs.changes.outputs.vaapi_driver == 'true' || needs.changes.outputs.ci == 'true'))
     runs-on: ubuntu-24.04
-    # Build release binaries before glibc's pthread merge so the package keeps
-    # its advertised GLIBC 2.17 ceiling. libva 2.22 is installed below because
-    # Ubuntu 20.04's packaged headers predate the required VA-API 1.22 ABI.
-    container: ubuntu:20.04
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
       - name: Install build and test dependencies
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            build-essential gcc-10 cmake pkg-config python3 ffmpeg git binutils curl \
+          sudo bash scripts/ci_apt_install.sh --no-install-recommends \
+            build-essential cmake pkg-config python3 ffmpeg git binutils curl \
             meson ninja-build libdrm-dev libx11-dev libxext-dev libxfixes-dev \
             libx11-xcb-dev libxcb1-dev libxcb-dri3-dev \
             liblz4-dev libzstd-dev ca-certificates
@@ -725,14 +729,9 @@ jobs:
           meson setup /tmp/libva-build /tmp/libva-2.22.0 \
             --prefix=/usr/local --libdir=lib \
             -Dwith_x11=yes -Dwith_glx=no -Dwith_wayland=no -Denable_docs=false
-          ninja -C /tmp/libva-build install
-          ldconfig
+          sudo ninja -C /tmp/libva-build install
+          sudo ldconfig
           echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-          persist-credentials: false
       - name: Verify VA-API baseline
         run: |
           test "$(uname -m)" = x86_64
@@ -757,7 +756,7 @@ jobs:
           make test-vaapi-driver VTREMOTE_VERSION="$version"
           cmake -S vaapi-driver -B vaapi-driver/build-analyzer \
             -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=OFF \
-            -DVTREMOTE_WARNINGS_AS_ERRORS=ON -DCMAKE_C_COMPILER=gcc-10 \
+            -DVTREMOTE_WARNINGS_AS_ERRORS=ON \
             -DCMAKE_C_FLAGS=-fanalyzer
           cmake --build vaapi-driver/build-analyzer --parallel
           cmake -S vaapi-driver -B vaapi-driver/build-sanitized \
@@ -810,8 +809,7 @@ jobs:
           persist-credentials: false
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake g++ pkg-config liblz4-dev libzstd-dev libobs-dev python3 xvfb xauth
+          sudo bash scripts/ci_apt_install.sh cmake g++ pkg-config liblz4-dev libzstd-dev libobs-dev python3 xvfb xauth
       - name: Run OBS plugin tests
         run: |
           make test-obs-plugin
@@ -941,8 +939,7 @@ jobs:
           persist-credentials: false
       - name: Install dependencies (Linux)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y yasm nasm pkg-config meson ninja-build cmake gh liblz4-dev libzstd-dev ccache \
+          sudo bash scripts/ci_apt_install.sh yasm nasm pkg-config meson ninja-build cmake gh liblz4-dev libzstd-dev ccache \
             libaom-dev libdav1d-dev \
             libopus-dev libvorbis-dev libmp3lame-dev libx264-dev libx265-dev libvpx-dev \
             libass-dev libfreetype6-dev libfontconfig1-dev libfribidi-dev libharfbuzz-dev \
