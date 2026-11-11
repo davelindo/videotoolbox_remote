@@ -39,7 +39,6 @@
 typedef double (*SwsFilterKernel)(double x, const double *params);
 
 typedef struct SwsFilterFunction {
-    char name[16];
     double radius; /* negative means resizable */
     SwsFilterKernel kernel;
     SwsFilterKernel window; /* optional */
@@ -60,6 +59,20 @@ static double scaler_sample(const SwsFilterFunction *f, double x)
     return w;
 }
 
+/**
+ * Explanation of the 0.5 offsets: Normally, pixel samples are assumed
+ * to be representative of the center of their containing area; e.g. for
+ * a 2x2 image, the samples are located at {0.5, 1.5}^2. However, with
+ * integer indexing, we round sample positions down (0-based indexing).
+ * So the (0, 0) sample is actually located at (0.5, 0.5) and represents
+ * the entire square from (0,0) to (1,1). When normalizing between different
+ * image sizes, we therefore need to add/subtract off these 0.5 offsets.
+ */
+static double get_src_pos(int dst_pos, double ratio_inv, double offset)
+{
+    return (dst_pos + 0.5) * ratio_inv - 0.5 + offset;
+}
+
 static void compute_row(SwsFilterWeights *f, const SwsFilterFunction *fun,
                         double radius, double ratio_inv, double stretch_inv,
                         int dst_pos, double *tmp)
@@ -67,16 +80,7 @@ static void compute_row(SwsFilterWeights *f, const SwsFilterFunction *fun,
     int *out = &f->weights[dst_pos * f->filter_size];
     int *pos = &f->offsets[dst_pos];
 
-    /**
-     * Explanation of the 0.5 offsets: Normally, pixel samples are assumed
-     * to be representative of the center of their containing area; e.g. for
-     * a 2x2 image, the samples are located at {0.5, 1.5}^2. However, with
-     * integer indexing, we round sample positions down (0-based indexing).
-     * So the (0, 0) sample is actually located at (0.5, 0.5) and represents
-     * the entire square from (0,0) to (1,1). When normalizing between different
-     * image sizes, we therefore need to add/subtract off these 0.5 offsets.
-     */
-    const double src_pos = (dst_pos + 0.5) * ratio_inv - 0.5 + f->offset;
+    const double src_pos = get_src_pos(dst_pos, ratio_inv, f->offset);
     if (f->filter_size == 1) {
         *pos = fmin(fmax(round(src_pos), 0.0), f->src_size - 1);
         *out = SWS_FILTER_SCALE;
@@ -84,8 +88,8 @@ static void compute_row(SwsFilterWeights *f, const SwsFilterFunction *fun,
     }
 
     /* First and last pixels that are actually within the filter envelope */
-    const int start   = ceil (src_pos - radius);
-    const int stop    = floor(src_pos + radius);
+    const int start   = floor(src_pos - radius) + 1;
+    const int stop    = ceil (src_pos + radius) - 1;
     const int clamped = av_clip(start, 0, f->src_size - f->filter_size);
     *pos = clamped;
 
@@ -200,7 +204,7 @@ int ff_sws_filter_generate(void *log, const SwsFilterParams *params,
                            SwsFilterWeights **out)
 {
     SwsScaler scaler = params->scaler;
-    if (scaler >= SWS_SCALE_NB)
+    if (scaler >= SWS_SCALE_NB || params->src_size <= 0 || params->dst_size <= 0)
         return AVERROR(EINVAL);
 
     if (scaler == SWS_SCALE_AUTO)
@@ -211,20 +215,12 @@ int ff_sws_filter_generate(void *log, const SwsFilterParams *params,
         virtual_size = params->dst_size;
 
     const double ratio = virtual_size / params->src_size;
-    double stretch = 1.0;
+    const double ratio_inv = 1.0 / ratio;
+    double stretch = 1.0, stretch_inv = 1.0;
     if (ratio < 1.0 && scaler != SWS_SCALE_POINT) {
         /* Widen filter for downscaling (anti-aliasing) */
         stretch = 1.0 / ratio;
-    }
-
-    if (scaler == SWS_SCALE_AREA) {
-        /**
-         * SWS_SCALE_AREA is a pseudo-filter that is equivalent to bilinear
-         * filtering for upscaling (since bilinear just evenly mixes samples
-         * according to the relative distance), and equivalent to (anti-aliased)
-         * point sampling for downscaling.
-         */
-        scaler = ratio >= 1.0 ? SWS_SCALE_BILINEAR : SWS_SCALE_POINT;
+        stretch_inv = ratio;
     }
 
     SwsFilterFunction fun = filter_functions[scaler];
@@ -238,7 +234,7 @@ int ff_sws_filter_generate(void *log, const SwsFilterParams *params,
 
     if (!validate_params(&fun, scaler)) {
         av_log(log, AV_LOG_ERROR, "Invalid parameters for scaler %s: {%f, %f}\n",
-               fun.name, fun.params[0], fun.params[1]);
+               ff_sws_scaler_name(scaler), fun.params[0], fun.params[1]);
         return AVERROR(EINVAL);
     }
 
@@ -253,6 +249,12 @@ int ff_sws_filter_generate(void *log, const SwsFilterParams *params,
     case SWS_SCALE_BILINEAR:
         radius = 1.0 - SWS_MAX_REDUCE_CUTOFF;
         break;
+    case SWS_SCALE_AREA:
+        /* Above ratio 1.0, this behaves like bilinear */
+        fun.params[0] = fmin(ratio, 1.0);
+        fun.radius = 0.5 + 0.5 * fun.params[0];
+        radius = fun.radius - SWS_MAX_REDUCE_CUTOFF * fun.params[0];
+        break;
     default:
         /* Numerically estimate radius of nontrivial or parametric kernels */
         radius = est_filter_radius(&fun);
@@ -260,17 +262,28 @@ int ff_sws_filter_generate(void *log, const SwsFilterParams *params,
     }
     radius *= stretch;
 
-    int filter_size = ceil(radius * 2.0);
-    filter_size = FFMIN(filter_size, params->src_size);
-    av_assert0(filter_size >= 1);
-    if (filter_size > SWS_FILTER_SIZE_MAX)
-        return AVERROR(ENOTSUP);
+    /* Compute filter size by checking the number of taps in each row */
+    int filter_size = 0;
+    for (int i = 0; i < params->dst_size; i++) {
+        /* Matches the indexing in compute_row() */
+        const double src_pos = get_src_pos(i, ratio_inv, params->offset);
+        const int start = floor(src_pos - radius) + 1;
+        const int stop  = ceil (src_pos + radius) - 1;
+        const int taps  = av_clip(stop - start + 1, 1, params->src_size);
+        if (taps > SWS_FILTER_SIZE_MAX) {
+            return AVERROR(ENOTSUP);
+        } else if (taps > filter_size) {
+            filter_size = taps;
+            if (taps == params->src_size)
+                break; /* can't get any bigger */
+        }
+    }
 
     SwsFilterWeights *filter;
     filter = av_refstruct_alloc_ext(sizeof(*filter), 0, NULL, sws_filter_free);
     if (!filter)
         return AVERROR(ENOMEM);
-    memcpy(filter->name, fun.name, sizeof(filter->name));
+    filter->scaler = scaler;
     filter->src_size = params->src_size;
     filter->dst_size = params->dst_size;
     filter->virtual_size = virtual_size;
@@ -280,7 +293,7 @@ int ff_sws_filter_generate(void *log, const SwsFilterParams *params,
         filter->sum_positive = SWS_FILTER_SCALE;
 
     av_log(log, AV_LOG_DEBUG, "Generating %s filter with %d taps (radius = %f)\n",
-           filter->name, filter->filter_size, radius);
+           ff_sws_scaler_name(scaler), filter->filter_size, radius);
 
     filter->num_weights = (size_t) params->dst_size * filter->filter_size;
     const size_t padded = filter->num_weights +
@@ -303,7 +316,6 @@ int ff_sws_filter_generate(void *log, const SwsFilterParams *params,
         return AVERROR(ENOMEM);
     }
 
-    const double ratio_inv = 1.0 / ratio, stretch_inv = 1.0 / stretch;
     for (int i = 0; i < params->dst_size; i++)
         compute_row(filter, &fun, radius, ratio_inv, stretch_inv, i, tmp);
     av_free(tmp);
@@ -334,6 +346,19 @@ int ff_sws_filter_generate(void *log, const SwsFilterParams *params,
 av_unused static double box(double x, const double *params)
 {
     return 1.0;
+}
+
+/**
+ * Overlap between a destination pixel (unit box) and a source pixel of width
+ * params[0] <= 1, i.e. the convolution of two box filters (a trapezoid).
+ */
+static double area(double x, const double *params)
+{
+    const double w = params[0];
+    const double edge = 0.5 - 0.5 * w;
+    if (x <= edge)
+        return 1.0;
+    return fmax(1.0 - (x - edge) / w, 0.0);
 }
 
 av_unused static double triangle(double x, const double *params)
@@ -472,12 +497,30 @@ av_unused static double spline(double x, const double *params)
 }
 
 static const SwsFilterFunction filter_functions[SWS_SCALE_NB] = {
-    [SWS_SCALE_BILINEAR]    = { "bilinear",     1.0, triangle },
-    [SWS_SCALE_BICUBIC]     = { "bicubic",      2.0, cubic, .params = { 0.0, 0.6 } },
-    [SWS_SCALE_POINT]       = { "point",        0.5, box },
-    [SWS_SCALE_GAUSSIAN]    = { "gaussian",     4.0, gaussian, .params = { 3.0 } },
-    [SWS_SCALE_SINC]        = { "sinc",         RADIUS_MAX, sinc },
-    [SWS_SCALE_LANCZOS]     = { "lanczos",      -1.0, sinc, sinc, .params = { 3.0 } },
-    [SWS_SCALE_SPLINE]      = { "spline",       RADIUS_MAX, spline },
-    /* SWS_SCALE_AREA is a pseudo-filter, see code above */
+    [SWS_SCALE_BILINEAR]    = { 1.0, triangle },
+    [SWS_SCALE_BICUBIC]     = { 2.0, cubic, .params = { 0.0, 0.6 } },
+    [SWS_SCALE_POINT]       = { 0.5, box },
+    [SWS_SCALE_GAUSSIAN]    = { 4.0, gaussian, .params = { 3.0 } },
+    [SWS_SCALE_SINC]        = { RADIUS_MAX, sinc },
+    [SWS_SCALE_LANCZOS]     = { -1.0, sinc, sinc, .params = { 3.0 } },
+    [SWS_SCALE_SPLINE]      = { RADIUS_MAX, spline },
+    [SWS_SCALE_AREA]        = { 1.0, area },
 };
+
+const char *ff_sws_scaler_name(SwsScaler scaler)
+{
+    switch (scaler) {
+    case SWS_SCALE_AUTO:     return "auto";
+    case SWS_SCALE_BILINEAR: return "bilinear";
+    case SWS_SCALE_BICUBIC:  return "bicubic";
+    case SWS_SCALE_POINT:    return "point";
+    case SWS_SCALE_AREA:     return "area";
+    case SWS_SCALE_GAUSSIAN: return "gaussian";
+    case SWS_SCALE_SINC:     return "sinc";
+    case SWS_SCALE_LANCZOS:  return "lanczos";
+    case SWS_SCALE_SPLINE:   return "spline";
+    case SWS_SCALE_NB:       break;
+    }
+
+    return NULL;
+}
