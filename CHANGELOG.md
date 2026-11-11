@@ -7,17 +7,10 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
-## [v0.10.12] - 2026-11-09
-
-### Added
-- Opt-in HDR10/PQ and HLG to BT.709 SDR packet transcoding on macOS 15+, with native tone mapping on the Mac and compressed transport in both directions.
+## [v0.10.12] - 2026-11-11
 
 ### Changed
-- Build the VA-API release and Plex container on Ubuntu 24.04 (glibc 2.39), and refresh the pinned official Plex base image.
-
-### Fixed
-- Continue HEVC decode and transcode sessions when VideoToolbox omits leading pictures after random access. Discard side data for those pictures while preserving fatal handling of other decoder errors.
-- Drain disposable encoder warm-up sessions so buffered encoders provide codec headers before configuration completes.
+- Rebased the vendored `ffmpeg/` subtree to upstream `master` snapshot `a337e8ddaa09` (from `b2b543c07924`).
 
 ## [v0.10.11] - 2026-11-09
 
