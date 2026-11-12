@@ -104,6 +104,10 @@ rgb8                bcdc033b4ef0979d060dbc8893d4db58
 rgba                85bb5d03cea1c6e8002ced3373904336
 rgba64be            ee73e57923af984b31cc7795d13929da
 rgba64le            783d2779adfafe3548bdb671ec0de69e
+rgbaf32be           67fe9802ad94adfa4b290e7ef731ffea
+rgbaf32le           9415cec74d7c019b4357c9c9487b2345
+rgbf32be            8491b339d91c40ad4d96d5b68aefd046
+rgbf32le            0262f60b0a8f1a05b24f3959d8122857
 uyva                2358038be6dac002a6c736e798a3d91c
 uyvy422             aeb4ba4f9f003ae21f6d18089198244f
 v30xle              8cba1fdc0ba2c39eb6fb5885dcf628a7
@@ -125,8 +129,8 @@ y216le              17be2999e97d36b8ed903f07ef428c09
 ya16be              2c473f0f4c9330c1ed61bcc80ee11022
 ya16le              76d4ff84d1014db24397f936dad9d0fa
 ya8                 0a9db5bb4b009de9197eede5e9d19e16
-yaf32be             e3aad2e56b46ac9ecb7cdb76de8bd954
-yaf32le             7ece90b90ad6e132421a9feea6273a3e
+yaf32be             485ab8e871268a1e1a441055fe07be8c
+yaf32le             075edf21cc05db2c98db56af25dd0b15
 yuv410p             e8f49b5fb9335b62c074f7f8bb0234fc
 yuv411p             5af32557c93beb482e26e7af693104c6
 yuv420p             5d3ac239c3712143560b1dfbd48a7ddd

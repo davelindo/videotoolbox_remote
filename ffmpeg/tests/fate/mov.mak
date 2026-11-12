@@ -163,7 +163,7 @@ fate-mov-aac-2048-priming-preroll: CMD = run ffprobe$(PROGSSUF)$(EXESUF) -show_e
 
 # Where a seek lands.
 FATE_MOV_FFPROBE-$(call DEMDEC, MOV, AAC) += fate-mov-aac-2048-priming-seek-landing
-fate-mov-aac-2048-priming-seek-landing: CMD = run ffprobe$(PROGSSUF)$(EXESUF) -read_intervals 2.3%+\#3 -show_entries packet=pts,dts,duration -print_format compact $(TARGET_SAMPLES)/mov/aac-2048-priming.mov
+fate-mov-aac-2048-priming-seek-landing: CMD = run ffprobe$(PROGSSUF)$(EXESUF) -seek_flags preroll -read_intervals 2.3%+\#3 -show_entries packet=pts,dts,duration -print_format compact $(TARGET_SAMPLES)/mov/aac-2048-priming.mov
 
 # Seeking into the stream must not drop samples to the container's priming.
 FATE_MOV-$(call FRAMECRC, MOV, AAC, PCM_S16LE_ENCODER ARESAMPLE_FILTER VOLUME_FILTER) += fate-mov-aac-2048-priming-seek
@@ -414,8 +414,19 @@ fate-mov-pcm-remux: REF = 389df40a487ac8397ba20bda472434d7
 
 FATE_MOV_FFMPEG-$(call TRANSCODE, RAWVIDEO, MOV, TESTSRC_FILTER SETPTS_FILTER) += fate-mov-vfr
 fate-mov-vfr: CMD = md5 -filter_complex testsrc=size=2x2:duration=1,setpts=N*N:strip_fps=1 -c rawvideo -fflags +bitexact -f mov
+
+FATE_MOV_FFMPEG-$(call TRANSCODE, DFPWM, MOV, LAVFI_INDEV SINE_FILTER ATRIM_FILTER PCM_S16LE_DECODER ARESAMPLE_FILTER) += fate-mov-dfpwm-last-packet
+fate-mov-dfpwm-last-packet: CMD = transcode lavfi "sine=r=48000,atrim=end_sample=85" mov "-auto_conversion_filters -c:a dfpwm -movie_timescale 48000" "-c copy"
 fate-mov-vfr: CMP = oneline
 fate-mov-vfr: REF = 1558b4a9398d8635783c93f84eb5a60d
+
+# The QuickTime user data list has to carry the composer atom the demuxer
+# already reads: without it a mov to mov remux dropped the tag.
+FATE_MOV_FFMPEG_FFPROBE-$(call TRANSCODE, PCM_S16LE, MOV, WAV_DEMUXER ARESAMPLE_FILTER) += fate-mov-composer-metadata
+fate-mov-composer-metadata: tests/data/asynth-44100-2.wav
+fate-mov-composer-metadata: CMD = transcode wav ./tests/data/asynth-44100-2.wav mov \
+    "-af aresample -c:a pcm_s16le -t 0.05 -metadata composer=Bach" \
+    "-af aresample -c:a pcm_s16le" "-show_entries format_tags"
 
 FATE_MOV_FFMPEG_FFPROBE-$(call ALLYES, COLOR_FILTER SETPTS_FILTER MPEG4_ENCODER \
                                       MOV_MUXER MOV_DEMUXER FILE_PROTOCOL)      \
