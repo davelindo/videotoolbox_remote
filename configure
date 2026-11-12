@@ -4364,7 +4364,7 @@ avutil_extralibs="d3d11va_extralibs d3d12va_extralibs mediacodec_extralibs nanos
 ffmpeg_deps="avcodec avfilter avformat threads"
 ffmpeg_select="aformat_filter alphamerge_filter anull_filter atrim_filter crop_filter
                format_filter hflip_filter null_filter rotate_filter
-               transpose_filter trim_filter vflip_filter"
+               transpose_filter trim_filter vflip_filter xstack_filter"
 ffmpeg_suggest="ole32 psapi shell32"
 ffplay_deps="avcodec avformat avfilter swscale swresample sdl2"
 ffplay_select="crop_filter transpose_filter hflip_filter vflip_filter rotate_filter lcevc_merge_bsf"
@@ -5763,9 +5763,7 @@ elif enabled mips; then
                 enable simd_align_16
                 enable fast_64bit
                 enable fast_clz
-                enable fast_cmov
                 enable fast_unaligned
-                disable aligned_stack
                 # When gcc version less than 5.3.0, add -fno-expensive-optimizations flag.
                 if test "$cc_type" = "gcc"; then
                     case $gcc_basever in
@@ -7820,7 +7818,7 @@ fi
 
 enabled amf &&
     check_cpp_condition amf "AMF/core/Version.h" \
-        "(AMF_VERSION_MAJOR << 48 | AMF_VERSION_MINOR << 32 | AMF_VERSION_RELEASE << 16 | AMF_VERSION_BUILD_NUM) >= 0x1000500020000"
+        "(AMF_VERSION_MAJOR << 48 | AMF_VERSION_MINOR << 32 | AMF_VERSION_RELEASE << 16 | AMF_VERSION_BUILD_NUM) >= 0x1000500030000"
 
 # Funny iconv installations are not unusual, so check it after all flags have been set
 if enabled libc_iconv; then

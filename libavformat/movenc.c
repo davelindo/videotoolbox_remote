@@ -5225,6 +5225,9 @@ static int mov_write_udta_tag(AVIOContext *pb, MOVMuxContext *mov,
         mov_write_string_metadata(s, pb_buf, "\251nam", "title",       0);
         mov_write_string_metadata(s, pb_buf, "\251aut", "author",      0);
         mov_write_string_metadata(s, pb_buf, "\251alb", "album",       0);
+        /* mov_read_udta_string() already maps this atom back to "composer";
+         * without it a mov to mov remux dropped the tag on the floor. */
+        mov_write_string_metadata(s, pb_buf, "\251com", "composer",    0);
         mov_write_string_metadata(s, pb_buf, "\251day", "date",        0);
         mov_write_string_metadata(s, pb_buf, "\251swr", "encoder",     0);
         // currently ignored by mov.c
@@ -7508,7 +7511,10 @@ int ff_mov_write_packet(AVFormatContext *s, AVPacket *pkt)
 
     sd = av_packet_side_data_get(pkt->side_data, pkt->side_data_elems, AV_PKT_DATA_SKIP_SAMPLES);
     if (sd && sd->size >= 10 && trk->par->frame_size) {
-        duration = FFMAX(av_rescale_q(trk->par->frame_size, (AVRational){ 1, trk->par->sample_rate },
+        int coded_samples = av_get_audio_frame_duration2(trk->par, pkt->size);
+        if (coded_samples <= 0)
+            coded_samples = trk->par->frame_size;
+        duration = FFMAX(av_rescale_q(coded_samples, (AVRational){ 1, trk->par->sample_rate },
                                       trk->st->time_base), pkt->duration);
         if (mov->use_editlist)
             pkt->duration = duration;

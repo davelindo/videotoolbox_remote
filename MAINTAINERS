@@ -69,7 +69,7 @@ Trac bug tracker                    [X] (W: https://trac.ffmpeg.org) Alexander S
 Forgejo issue tracker                   (W: https://code.ffmpeg.org/FFmpeg/FFmpeg/issues)
 Patchwork                           [2] (W: https://patchwork.ffmpeg.org) Andriy Gelman
 mailing lists                           (W: https://ffmpeg.org/contact.html#MailingLists) Baptiste Coudurier
-Twitter                                 Reynaldo H. Verdejo Pinochet
+Twitter                                 Michael Niedermayer, Reynaldo H. Verdejo Pinochet
 Launchpad                               Timothy Gu
 ffmpeg-security                     [2] (L: ffmpeg-security@ffmpeg.org) (W: https://ffmpeg.org/security.html) Michael Niedermayer, Reimar Doeffinger
 YesWeHack Security reports          [2] Timo Rothenpieler, Michael Niedermayer
@@ -435,7 +435,7 @@ Muxers/Demuxers:
   hlsenc.c                              Christian Suloway, Steven Liu
   hxvs.c                                Zhao Zhili
   iamf*                             [2] James Almer
-  id3v2*                                Romain Beauxis
+  id3v2.h, id3v2/*                      Romain Beauxis
   idcin.c                               Mike Melanson
   idroqdec.c                            Mike Melanson
   iff.c                                 Jaikrishnan Menon
@@ -470,9 +470,9 @@ Muxers/Demuxers:
   nsvdec.c                              Francois Revol
   nut*                                  Michael Niedermayer
   nuv.c                                 Reimar Doeffinger
-  oggdec.c, oggdec.h                    David Conrad, Romain Beauxis
-  oggenc.c                              Baptiste Coudurier, Romain Beauxis
-  oggparse*.c                           David Conrad, Romain Beauxis
+  ogg/demuxer.c, ogg/mapping.h          David Conrad, Romain Beauxis
+  ogg/muxer.c                           Baptiste Coudurier, Romain Beauxis
+  ogg/mapping/*                         David Conrad, Romain Beauxis
   oma.c                                 Maxim Poliakovski
   pp_bnk.c                              Zane van Iperen
   psxstr.c                              Mike Melanson
@@ -506,6 +506,7 @@ Muxers/Demuxers:
   tta.c                                 Alex Beregszaszi
   txd.c                                 Ivo van Poorten
   voc.c                                 Aurelien Jacobs
+  vorbis/comment/reader.c               David Conrad, Romain Beauxis
   wav.c                                 Michael Niedermayer
   wc3movie.c                            Mike Melanson
   webm dash (matroskaenc.c)             Vignesh Venkatasubramanian
@@ -646,7 +647,7 @@ Rainbaby                      4031 D805 A071 3995 A80F C1F2 DD1A A038 EAE4 6C2B
 Ramiro Polla                  7859 C65B 751B 1179 792E DAE8 8E95 8B2F 9B6C 5700
 Reimar Doeffinger             C61D 16E5 9E2C D10C 8958 38A4 0899 A2B9 06D4 D9C7
 Reinhard Tartler              9300 5DC2 7E87 6C37 ED7B CA9A 9808 3544 9453 48A4
-Reynaldo H. Verdejo Pinochet  6E27 CD34 170C C78E 4D4F 5F40 C18E 077F 3114 452A
+Reynaldo H. Verdejo Pinochet  D0CF 64C5 D138 4CBB ABEB 8178 EAB9 E4EE DD7B D64B
 Robert Swain                  EE7A 56EA 4A81 A7B5 2001 A521 67FA 362D A2FC 3E71
 Sascha Sommer                 38A0 F88B 868E 9D3A 97D4 D6A0 E823 706F 1E07 0D3C
 Sean McGovern (Sean_McG)      6D03 BC60 3A33 E615 6E2E 06AD 8C06 8175 6F59 8684
