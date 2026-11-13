@@ -795,11 +795,27 @@ static struct mpeg4_bit_rate_values calculate_mpeg4_bit_rates(MOVTrack *track)
     return bit_rates;
 }
 
+static int esds_has_decoder_specific_info(enum AVCodecID codec_id)
+{
+    switch (codec_id) {
+    case AV_CODEC_ID_AAC:
+    case AV_CODEC_ID_MP4ALS:
+    case AV_CODEC_ID_MPEG4:
+    case AV_CODEC_ID_VORBIS:
+    case AV_CODEC_ID_DVD_SUBTITLE:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 static int mov_write_esds_tag(AVIOContext *pb, MOVTrack *track) // Basic
 {
     struct mpeg4_bit_rate_values bit_rates = calculate_mpeg4_bit_rates(track);
     int64_t pos = avio_tell(pb);
-    int decoder_specific_info_len = track->extradata_size[track->last_stsd_index] ?
+    int write_dsi = track->extradata_size[track->last_stsd_index] &&
+                    esds_has_decoder_specific_info(track->par->codec_id);
+    int decoder_specific_info_len = write_dsi ?
                                     5 + track->extradata_size[track->last_stsd_index] : 0;
 
     avio_wb32(pb, 0); // size
@@ -835,7 +851,7 @@ static int mov_write_esds_tag(AVIOContext *pb, MOVTrack *track) // Basic
     avio_wb32(pb, bit_rates.max_bit_rate); // maxbitrate
     avio_wb32(pb, bit_rates.avg_bit_rate);
 
-    if (track->extradata_size[track->last_stsd_index]) {
+    if (write_dsi) {
         // DecoderSpecific info descriptor
         put_descr(pb, 0x05, track->extradata_size[track->last_stsd_index]);
         avio_write(pb, track->extradata[track->last_stsd_index],
@@ -5191,6 +5207,8 @@ static int mov_write_chpl_tag(AVIOContext *pb, AVFormatContext *s)
 
         if ((t = av_dict_get(c->metadata, "title", NULL, 0))) {
             int len = FFMIN(strlen(t->value), 255);
+            while (len > 252 && (t->value[len] & 0xC0) == 0x80)
+                len--;
             avio_w8(pb, len);
             avio_write(pb, t->value, len);
         } else
