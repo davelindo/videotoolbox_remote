@@ -77,21 +77,14 @@ jobs:
       - name: Classify release ref
         id: release_ref
         run: |
-          semver_tag=false
-          release_candidate=false
-          if [[ "${GITHUB_REF}" == refs/tags/* ]] && bash scripts/is_semver_tag.sh "${GITHUB_REF#refs/tags/}"; then
-            semver_tag=true
-          fi
-          if [[ "${GITHUB_REF}" == refs/heads/automation/ffmpeg-sync/* ]]; then
-            release_candidate=true
-          fi
-          printf 'semver_tag=%s\n' "${semver_tag}" >> "$GITHUB_OUTPUT"
-          printf 'release_candidate=%s\n' "${release_candidate}" >> "$GITHUB_OUTPUT"
-      - name: Run schedule change classifier tests
+          bash scripts/classify_ci_ref.sh >> "$GITHUB_OUTPUT"
+      - name: Run CI helper tests
         run: |
           bash scripts/check_ffmpeg_subtree.sh
           bash tests/test_nightly_change_classifier.sh
           bash tests/test_is_semver_tag.sh
+          bash tests/test_classify_ci_ref.sh
+          bash tests/test_ccache_usage.sh
           bash tests/test_macos_deployment_target.sh
           bash tests/test_vtremoted_package_shape.sh
           bash tests/test_ffmpeg_linux_arm64_ci.sh
@@ -119,7 +112,7 @@ jobs:
           fi
       - uses: dorny/paths-filter@v3
         id: filter
-        if: github.event_name != 'schedule'
+        if: github.event_name != 'schedule' && steps.release_ref.outputs.tagged_sync != 'true'
         with:
           filters: |
             ffmpeg:
@@ -341,11 +334,9 @@ jobs:
           export CCACHE_DIR="${GITHUB_WORKSPACE}/.ccache"
           ccache -M 2G
           ccache -z
-          export CC="ccache gcc"
-          export CXX="ccache g++"
           export PKG_CONFIG_PATH="${RUNNER_TEMP}/vtremote-svtav1/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig:${PKG_CONFIG_PATH}"
-          make build-ffmpeg
-          ccache -s
+          make build-ffmpeg FFMPEG_CONFIGURE_FLAGS="${FFMPEG_CONFIGURE_FLAGS} --cc=/usr/lib/ccache/gcc --cxx=/usr/lib/ccache/g++"
+          bash scripts/check_ccache.sh
 
       - name: Verify quality metrics filters (Linux)
         run: |
@@ -459,11 +450,9 @@ jobs:
           export CCACHE_DIR="${GITHUB_WORKSPACE}/.ccache"
           ccache -M 2G
           ccache -z
-          export CC="ccache gcc"
-          export CXX="ccache g++"
           export PKG_CONFIG_PATH="${RUNNER_TEMP}/vtremote-svtav1/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig:${PKG_CONFIG_PATH}"
-          make build-ffmpeg
-          ccache -s
+          make build-ffmpeg FFMPEG_CONFIGURE_FLAGS="${FFMPEG_CONFIGURE_FLAGS} --cc=/usr/lib/ccache/gcc --cxx=/usr/lib/ccache/g++"
+          bash scripts/check_ccache.sh
 
       - name: Verify quality metrics filters (Linux)
         run: |
@@ -590,10 +579,9 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           export CCACHE_DIR="${GITHUB_WORKSPACE}/.ccache"
+          export PATH="$(dirname "$(xcrun -f clang)"):$PATH"
           ccache -M 2G
           ccache -z
-          export CC="ccache clang"
-          export CXX="ccache clang++"
           BREW_PKGS="lz4 zstd libvmaf aom dav1d svt-av1 opus libvorbis lame x264 x265 libvpx libass freetype fontconfig fribidi harfbuzz libxml2 zimg webp sdl2"
           for p in $BREW_PKGS; do
             prefix="$(brew --prefix "$p")"
@@ -602,8 +590,9 @@ jobs:
           export PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig:${PKG_CONFIG_PATH}"
           export CPPFLAGS="-I$(brew --prefix)/include ${CPPFLAGS}"
           export LDFLAGS="-L$(brew --prefix)/lib ${LDFLAGS}"
-          make build-ffmpeg
-          ccache -s
+          make build-ffmpeg FFMPEG_CC="$(brew --prefix ccache)/libexec/clang" \
+            FFMPEG_CXX="$(brew --prefix ccache)/libexec/clang++"
+          bash scripts/check_ccache.sh
 
       - name: Verify quality metrics filters (macOS)
         if: runner.os == 'macOS'
@@ -651,10 +640,8 @@ jobs:
           export CCACHE_DIR="${GITHUB_WORKSPACE}/.ccache"
           ccache -M 2G
           ccache -z
-          export CC="ccache gcc"
-          export CXX="ccache g++"
-          make build-ffmpeg
-          ccache -s
+          make build-ffmpeg FFMPEG_CONFIGURE_FLAGS="${FFMPEG_CONFIGURE_FLAGS} --cc=/ucrt64/lib/ccache/bin/gcc --cxx=/ucrt64/lib/ccache/bin/g++"
+          bash scripts/check_ccache.sh
 
       - name: Verify quality metrics filters (Windows/MSYS2)
         if: runner.os == 'Windows'

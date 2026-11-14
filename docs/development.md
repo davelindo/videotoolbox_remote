@@ -47,6 +47,11 @@ VA-API 1.22 headers from source. Release artifacts target glibc 2.39.
 Locally on Linux, run `make test-vaapi-driver`. The test suite uses
 the shared repository mock and stock FFmpeg's VA-API encoders.
 
+FFmpeg sync candidates run the full CI matrix before promotion. After promotion,
+the release tag runs validation and packaging; the identical tagged sync push to
+main skips duplicate builds. FFmpeg compiler-cache checks require actual
+compilation hits or misses, so a bypassed cache fails CI.
+
 1.  **Install assembler and library dependencies** (assemblers are needed for x86 builds):
     ```bash
     nasm -v
