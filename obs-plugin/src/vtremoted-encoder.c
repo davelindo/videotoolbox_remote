@@ -258,11 +258,12 @@ static bool vtremoted_encode(void *data, struct encoder_frame *frame,
     result = vtremoted_client_receive_packet(enc->client, &pkt_data, &pkt_size,
                                               &pts, &dts, &keyframe, remaining_ms);
   }
-  if (result != VTR_RECEIVE_PACKET || pts != frame->pts) {
+  /* max_b_frames=0 preserves submission order; output PTS may be adjusted. */
+  if (result != VTR_RECEIVE_PACKET) {
     char error[1024] = {0};
     vtremoted_client_get_error(enc->client, error, sizeof(error));
     vtremoted_client_cancel(enc->client);
-    obs_encoder_set_last_error(enc->encoder, error[0] ? error : "Remote output does not match the submitted frame.");
+    obs_encoder_set_last_error(enc->encoder, error[0] ? error : "Remote encoder returned no packet.");
     return false;
   }
 

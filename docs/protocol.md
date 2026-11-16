@@ -170,6 +170,10 @@ Raw frame planes.
   transformed implicitly.
 
 **PACKET (Type 6)**
+
+With `max_b_frames=0`, encoded packets complete frames in submission order. The server can normalize duplicate or regressing PTS; clients associate completions by submission order and use the returned timestamps for output.
+
+H.264 decode sessions accept in-band parameter-set changes. For HEVC, start a new session with updated extradata when parameter sets change.
 Encoded Annex B NAL units.
 - `pts`, `dts`, `duration` (int64).
 - `flags` (uint32): Bit 0 = Keyframe.

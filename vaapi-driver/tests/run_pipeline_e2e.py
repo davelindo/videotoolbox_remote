@@ -58,5 +58,8 @@ if __name__ == "__main__":
         result = run(probe, "poll", count=20, fragmented=True)
         records.append(result)
         print(json.dumps(result), flush=True)
+        result = run(probe, "duplicates", count=20)
+        records.append(result)
+        print(json.dumps(result), flush=True)
     if args.output:
         args.output.write_text(json.dumps(records, indent=2) + "\n")

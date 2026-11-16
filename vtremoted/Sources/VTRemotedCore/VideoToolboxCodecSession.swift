@@ -668,28 +668,32 @@
                 return UInt32(bigEndian: value)
             }
 
-            func readBEUInt64() throws -> UInt64 {
-                try require(8)
-                var value: UInt64 = 0
-                try withUnsafeMutableBytes(of: &value) { raw in
-                    try streamIO.readExact(into: raw.baseAddress!, count: 8)
+            func readPlaneHeader() throws -> (stride: Int, height: Int, length: Int) {
+                try require(12)
+                let header = try withUnsafeTemporaryAllocation(byteCount: 12, alignment: 1) { raw in
+                    try streamIO.readExact(into: raw.baseAddress!, count: raw.count)
+                    return (Int(raw.loadUnaligned(fromByteOffset: 0, as: UInt32.self).bigEndian),
+                            Int(raw.loadUnaligned(fromByteOffset: 4, as: UInt32.self).bigEndian),
+                            Int(raw.loadUnaligned(fromByteOffset: 8, as: UInt32.self).bigEndian))
                 }
-                remaining -= 8
-                return UInt64(bigEndian: value)
+                remaining -= 12
+                return header
             }
 
-            let ptsTicks = Int64(bitPattern: try readBEUInt64())
-            let durTicks = Int64(bitPattern: try readBEUInt64())
-            let flags = try readBEUInt32()
-            let planes = try readUInt8()
+            try require(21)
+            let (ptsTicks, durTicks, flags, planes) = try withUnsafeTemporaryAllocation(byteCount: 21, alignment: 1) { raw in
+                try streamIO.readExact(into: raw.baseAddress!, count: raw.count)
+                return (Int64(bitPattern: raw.loadUnaligned(fromByteOffset: 0, as: UInt64.self).bigEndian),
+                        Int64(bitPattern: raw.loadUnaligned(fromByteOffset: 8, as: UInt64.self).bigEndian),
+                        raw.loadUnaligned(fromByteOffset: 16, as: UInt32.self).bigEndian, raw[20])
+            }
+            remaining -= 21
             let expectedPlanes = Self.expectedPlaneCount(pixelFormat: config.pixelFormat)
             guard planes == expectedPlanes else {
                 throw VTRemotedError.protocolViolation("expected \(expectedPlanes) planes")
             }
 
-            let stride0 = Int(try readBEUInt32())
-            let height0 = Int(try readBEUInt32())
-            let len0 = Int(try readBEUInt32())
+            let (stride0, height0, len0) = try readPlaneHeader()
             let rowBytes = Self.planeRowBytes(width: config.width, pixelFormat: config.pixelFormat)
             let planeHeights = Self.planeHeights(frameHeight: config.height, pixelFormat: config.pixelFormat)
             let layout0 = try FramePlaneValidation.validate(
@@ -817,9 +821,7 @@
             if planes > 1 {
                 // Plane metadata is interleaved with plane bytes on the wire:
                 // [plane0 meta][plane0 bytes][plane1 meta][plane1 bytes]...
-                let stride1 = Int(try readBEUInt32())
-                let height1 = Int(try readBEUInt32())
-                let len1 = Int(try readBEUInt32())
+                let (stride1, height1, len1) = try readPlaneHeader()
                 let layout1 = try FramePlaneValidation.validate(
                     stride: stride1,
                     height: height1,
@@ -904,6 +906,12 @@
         }
 
         func handlePacketMessage(_ payload: Data) throws {
+            // Drain temporary Objective-C ownership per packet. VideoToolbox
+            // retains the block buffer itself until asynchronous decode ends.
+            try autoreleasepool { try submitPacket(payload) }
+        }
+
+        private func submitPacket(_ payload: Data) throws {
             try failure.check()
             guard let config else { throw VTRemotedError.protocolViolation("PACKET before CONFIGURE") }
             guard config.mode == .decode || config.mode == .transcode else { return }
@@ -913,46 +921,23 @@
             let durTicks = try Int64(bitPattern: reader.readBEUInt64())
             _ = try reader.readBEUInt32() // isKey
             let dataLen = try Int(reader.readBEUInt32())
-            let annexB = try reader.readBytes(count: dataLen)
+            let annexBRange = try reader.sliceRange(count: dataLen)
             let sideData = try Self.readWireSideData(&reader)
 
-            if config.codec == .h264 {
-                try updateH264DecoderFormat(annexB, config: config)
+            let lengthPrefixed = try payload.withUnsafeBytes { raw in
+                let annexB = UnsafeRawBufferPointer(rebasing: raw[annexBRange])
+                if config.codec == .h264 {
+                    try updateH264DecoderFormat(annexB, config: config)
+                }
+                return AnnexB.toLengthPrefixed(annexB, lengthSize: nalLengthField, pool: inputBuffers)
             }
             guard let session = decompressionSession, let fmt = formatDescription else {
                 throw VTRemotedError.videoToolboxUnavailable
             }
             storePendingDecodeSideData(ptsTicks: ptsTicks, sideData: sideData)
 
-            let lengthPrefixed = AnnexB.toLengthPrefixed(annexB, lengthSize: nalLengthField)
-
-            var block: CMBlockBuffer?
             let dataCount = lengthPrefixed.count
-            var status = CMBlockBufferCreateWithMemoryBlock(
-                allocator: kCFAllocatorDefault,
-                memoryBlock: nil,
-                blockLength: dataCount,
-                blockAllocator: kCFAllocatorDefault,
-                customBlockSource: nil,
-                offsetToData: 0,
-                dataLength: dataCount,
-                flags: 0,
-                blockBufferOut: &block
-            )
-            try checkStatus(status, "CMBlockBufferCreateWithMemoryBlock")
-            guard let bufferBlock = block else { throw VTRemotedError.protocolViolation("missing decode block buffer") }
-
-            lengthPrefixed.withUnsafeBytes { ptr in
-                guard let base = ptr.baseAddress else { return }
-                status = CMBlockBufferReplaceDataBytes(
-                    with: base,
-                    blockBuffer: bufferBlock,
-                    offsetIntoDestination: 0,
-                    dataLength: dataCount
-                )
-            }
-
-            try checkStatus(status, "CMBlockBufferReplaceDataBytes")
+            let bufferBlock = try PacketBlockBuffer.make(lengthPrefixed)
 
             var timing = CMSampleTimingInfo(
                 duration: durTicks > 0 ? cmTime(fromTicks: durTicks, timebase: config.timebase) : .invalid,
@@ -961,7 +946,7 @@
             )
 
             var sample: CMSampleBuffer?
-            status = CMSampleBufferCreateReady(
+            var status = CMSampleBufferCreateReady(
                 allocator: kCFAllocatorDefault,
                 dataBuffer: bufferBlock,
                 formatDescription: fmt,
@@ -2436,11 +2421,12 @@
             return sets
         }
 
-        private func updateH264DecoderFormat(_ annexB: Data, config: SessionConfiguration) throws {
-            let parameterSets = AnnexB.splitNALUnits(annexB).filter {
-                guard let byte = $0.first else { return false }
-                let type = byte & 0x1F
-                return type == 7 || type == 8
+        private func updateH264DecoderFormat(_ annexB: UnsafeRawBufferPointer, config: SessionConfiguration) throws {
+            let parameterSets = AnnexB.nalUnitRanges(annexB).compactMap { range -> Data? in
+                guard !range.isEmpty else { return nil }
+                let type = annexB[range.lowerBound] & 0x1F
+                guard type == 7 || type == 8 else { return nil }
+                return Data(bytes: annexB.baseAddress!.advanced(by: range.lowerBound), count: range.count)
             }
             guard !parameterSets.isEmpty, let currentFormat = formatDescription,
                   let currentSession = decompressionSession else { return }

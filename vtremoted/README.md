@@ -12,6 +12,8 @@ The Swift package supports macOS 13 and newer. Building on macOS 27 or with a ne
 
 LZ4 and Zstd are runtime dependencies for wire compression. Default FFmpeg/OBS clients request LZ4, so install `lz4` for normal compressed sessions and `zstd` if clients use `-vt_remote_wire_compression zstd`.
 
+Startup probes the H.264 encoder and logs failures. Each CONFIGURE validates the requested codec and mode independently.
+
 ## Run (foreground)
 
 ```bash
@@ -39,7 +41,7 @@ From the client, add `-vt_remote_transcode` to a normal VideoToolbox encode comm
 | `--token` | (none) | Require clients to authenticate with this token (avoid in production; leaks into process listings) |
 | `--token-file` | (none) | Read token from a file (recommended) |
 | `--token-env` | (none) | Read token from an environment variable |
-| `--max-sessions` | `4` | Maximum concurrent encode/decode sessions |
+| `--max-sessions` | `4` | Maximum concurrent sessions, including handshakes |
 | `--handshake-timeout` | `10` | Seconds allowed for HELLO/CONFIGURE |
 | `--idle-timeout` | `60` | Seconds allowed between messages before disconnect |
 | `--max-message-bytes` | `268435456` | Hard cap on any single message body (prevents OOM) |

@@ -334,6 +334,7 @@ build_harness
 run_case none success --expect-wire-compression 0 -- --wire-compression none
 run_case lz4 success --expect-wire-compression 1 -- --wire-compression lz4
 run_case zstd success --expect-wire-compression 2 -- --wire-compression zstd
+run_case duplicate_pts success --normalize-frame-pts -- --wire-compression none --duplicate-pts
 run_case packet_oversize failure --expect-wire-compression 1 --packet-bytes 9000000 -- --wire-compression lz4
 run_case delayed success --packet-delay-ms 150 -- --wire-compression none
 run_case error success --frame-response error -- --expect-encode-error --error-contains 'injected frame failure'

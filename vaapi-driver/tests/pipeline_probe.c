@@ -50,7 +50,7 @@ int main(int argc, char **argv) {
     double started = now();
     while (received < count && rc >= 0) {
         while (sent < count && sent - received < depth) {
-            frame.pts = sent;
+            frame.pts = !strcmp(argv[2], "duplicates") && sent > 1 ? 1 : sent;
             rc = vtr_client_send_frame(&client, &frame, error, sizeof(error));
             if (rc < 0)
                 break;

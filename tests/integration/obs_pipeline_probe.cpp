@@ -40,12 +40,13 @@ int main(int argc, char **argv) {
   for (int i = 0; i < count && !failed; ++i) {
     std::this_thread::sleep_until(started + std::chrono::microseconds(i * 1000000 / 60));
     auto before = Clock::now();
+    int64_t input_pts = !std::strcmp(argv[2], "duplicates") && i > 1 ? 1 : i;
     if (synchronous) {
-      if (!vtremoted_client_send_frame(client, i, 1, 2, planes, strides, heights, sizes))
+      if (!vtremoted_client_send_frame(client, input_pts, 1, 2, planes, strides, heights, sizes))
         failed = true;
       accept(vtremoted_client_receive_packet(client, &bytes, &size, &pts, &dts, &keyframe, 5000));
     } else {
-      if (!vtremoted_pipeline_submit(pipeline, i, planes, strides, heights, sizes))
+      if (!vtremoted_pipeline_submit(pipeline, input_pts, planes, strides, heights, sizes))
         failed = true;
       accept(vtremoted_pipeline_receive(pipeline, &bytes, &size, &pts, &dts, &keyframe));
     }

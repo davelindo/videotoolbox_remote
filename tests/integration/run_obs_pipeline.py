@@ -38,6 +38,7 @@ def run(probe, mode, fault="none", delay=0.04, count=120, fragmented=False):
                     peer.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                     accept_h264_encoder(peer, "pipeline-test", "1")
                     replies = queue.Queue()
+                    last_pts = None
                     stop = threading.Event()
 
                     def output():
@@ -70,6 +71,9 @@ def run(probe, mode, fault="none", delay=0.04, count=120, fragmented=False):
                                 break
                             assert kind == 5
                             pts = struct.unpack_from(">q", body)[0]
+                            if mode == "duplicates":
+                                pts = max(pts, last_pts + 1) if last_pts is not None else pts
+                                last_pts = pts
                             if pts == 3 and fault != "none":
                                 if fault == "error":
                                     peer.sendall(
@@ -162,5 +166,8 @@ if __name__ == "__main__":
             record = run(probe, "pipeline", fault=fault)
             records.append(record)
             print(json.dumps(record), flush=True)
+        record = run(probe, "duplicates", count=20)
+        records.append(record)
+        print(json.dumps(record), flush=True)
         if args.output:
             args.output.write_text(json.dumps(records, indent=2) + "\n")

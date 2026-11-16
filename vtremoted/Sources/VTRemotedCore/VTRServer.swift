@@ -68,6 +68,15 @@ public final class VTRServer {
     private func configureSocketBuffers(socketFD: Int32, bytes: Int32 = 16 * 1024 * 1024) {
         setSocketOption(socketFD: socketFD, level: Int32(SOL_SOCKET), name: Int32(SO_SNDBUF), value: bytes)
         setSocketOption(socketFD: socketFD, level: Int32(SOL_SOCKET), name: Int32(SO_RCVBUF), value: bytes)
+        var sendBytes: Int32 = 0
+        var receiveBytes: Int32 = 0
+        var size = socklen_t(MemoryLayout<Int32>.size)
+        let sendStatus = getsockopt(socketFD, SOL_SOCKET, SO_SNDBUF, &sendBytes, &size)
+        size = socklen_t(MemoryLayout<Int32>.size)
+        let receiveStatus = getsockopt(socketFD, SOL_SOCKET, SO_RCVBUF, &receiveBytes, &size)
+        if sendStatus == 0 && receiveStatus == 0 {
+            logger.debug("socket buffers requested=\(bytes) send=\(sendBytes) receive=\(receiveBytes)")
+        }
     }
 
     // `serverName/serverVersion/serverCapabilities` are passed through to the handshake ACK.

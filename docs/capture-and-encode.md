@@ -59,6 +59,8 @@ On Thunderbolt networking or fast Ethernet, **None** sends raw frames directly a
 
 These are frame payload rates before network headers. NV12 uses 1.5 bytes per pixel; P010 uses 3. Thunderbolt networking presents an IP interface: use the Mac's address on that link as the endpoint.
 
+At log level 2, `vtremoted` reports the requested and effective socket-buffer sizes. The OS can cap the request; on macOS, inspect `sysctl kern.ipc.maxsockbuf`. Use these values and the link's bandwidth-delay product when tuning system buffer limits.
+
 ## Filter locally, encode remotely
 
 An existing video input can use remote decode, local filters and remote encode. The two directions can use different compression settings. In the measured 4K filter workflow, **LZ4 for decoded frames returning to Linux and no compression for uploads to the encoder** delivered the highest throughput:

@@ -27,7 +27,7 @@ struct VTRemotedPipeline {
   std::condition_variable changed;
   std::deque<QueuedFrame> frames;
   std::deque<QueuedPacket> packets;
-  std::deque<int64_t> awaiting;
+  size_t awaiting = 0;
   QueuedPacket returned;
   std::thread sender, receiver;
   bool stopped = false, flushing = false, flush_sent = false, done = false;
@@ -63,7 +63,7 @@ struct VTRemotedPipeline {
         } else {
           frame = std::move(frames.front());
           frames.pop_front();
-          awaiting.push_back(frame.pts);
+          ++awaiting;
         }
       }
       changed.notify_all();
@@ -84,7 +84,7 @@ struct VTRemotedPipeline {
     for (;;) {
       {
         std::unique_lock<std::mutex> lock(mutex);
-        changed.wait(lock, [&] { return stopped || !awaiting.empty() || flush_sent; });
+        changed.wait(lock, [&] { return stopped || awaiting || flush_sent; });
         if (stopped)
           return;
       }
@@ -101,7 +101,7 @@ struct VTRemotedPipeline {
       }
       std::unique_lock<std::mutex> lock(mutex);
       if (result == VTR_RECEIVE_DONE) {
-        if (!flush_sent || !awaiting.empty()) {
+        if (!flush_sent || awaiting) {
           lock.unlock();
           fail("Remote encoder ended before all submitted frames completed.");
         } else {
@@ -109,12 +109,13 @@ struct VTRemotedPipeline {
         }
         return;
       }
-      if (awaiting.empty() || awaiting.front() != packet.pts) {
+      // No-reorder output completes the oldest submission, even after PTS adjustment.
+      if (!awaiting) {
         lock.unlock();
         fail("Remote packet does not match the submitted frame.");
         return;
       }
-      awaiting.pop_front();
+      --awaiting;
       packet.bytes.assign(bytes, bytes + size);
       packets.push_back(std::move(packet));
     }

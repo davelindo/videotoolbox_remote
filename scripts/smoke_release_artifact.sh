@@ -119,6 +119,9 @@ case "$kind" in
       exit 1
     fi
     "$vtremoted_bin" --help | grep -q -- '--listen HOST:PORT'
+    bash "$tmpdir/vtremoted/launchd_plist.sh" org.example.vtremoted \
+      /tmp/vtremoted.log /tmp/vtremoted.err.log "$vtremoted_bin" --token 'test<&>token' >"$tmpdir/service.plist"
+    plutil -lint "$tmpdir/service.plist"
     ;;
 
   vaapi-driver)

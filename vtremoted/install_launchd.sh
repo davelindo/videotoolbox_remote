@@ -117,25 +117,8 @@ if [[ -n "$MAX_MESSAGE_BYTES" ]]; then
   ARGS+=( "--max-message-bytes" "$MAX_MESSAGE_BYTES" )
 fi
 
-{
-  echo "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
-  echo "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">"
-  echo "<plist version=\"1.0\">"
-  echo "<dict>"
-  echo "  <key>Label</key><string>${LABEL}</string>"
-  echo "  <key>ProgramArguments</key>"
-  echo "  <array>"
-  for a in "${ARGS[@]}"; do
-    echo "    <string>${a}</string>"
-  done
-  echo "  </array>"
-  echo "  <key>RunAtLoad</key><true/>"
-  echo "  <key>KeepAlive</key><true/>"
-  echo "  <key>StandardOutPath</key><string>${STDOUT_LOG}</string>"
-  echo "  <key>StandardErrorPath</key><string>${STDERR_LOG}</string>"
-  echo "</dict>"
-  echo "</plist>"
-} | $SUDO tee "$PLIST" >/dev/null
+bash "$(dirname "${BASH_SOURCE[0]}")/launchd_plist.sh" \
+  "$LABEL" "$STDOUT_LOG" "$STDERR_LOG" "${ARGS[@]}" | $SUDO tee "$PLIST" >/dev/null
 
 $SUDO launchctl bootout "$DOMAIN" "$PLIST" >/dev/null 2>&1 || true
 $SUDO launchctl bootstrap "$DOMAIN" "$PLIST"

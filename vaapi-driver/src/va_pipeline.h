@@ -16,7 +16,6 @@ static void finish_pending_locked(VTRVAContext *context, VTRVASurface *surface, 
 }
 
 static void abort_pending(VTRVADriver *driver, VTRVAContext *context) {
-    context->session_failed = true;
     vtr_client_destroy(&context->client);
     vtr_client_init(&context->client);
     pthread_mutex_lock(&driver->lock);
@@ -38,9 +37,10 @@ static VAStatus complete_pending(VTRVADriver *driver, VTRVAContext *context, int
                                                &flags, error, sizeof(error), timeout_ms);
     if (rc == -EAGAIN)
         return VA_STATUS_ERROR_TIMEDOUT;
-    if (rc != 0 || pts != context->pending[slot].pts) {
+    /* The no-reorder wire session completes the FIFO head, even if PTS changed. */
+    if (rc != 0) {
         vtrva_log(driver, true, "remote completion failed: %s",
-                  error[0] ? error : "unexpected packet timestamp");
+                  error[0] ? error : "expected encoded packet");
         abort_pending(driver, context);
         return VA_STATUS_ERROR_ENCODING_ERROR;
     }

@@ -7,6 +7,17 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
+## [v0.10.16] - 2026-11-16
+
+### Fixed
+- Match no-reorder encoder completions by submission order so duplicate or adjusted timestamps do not disconnect C, VA-API or OBS clients.
+- Let VA-API contexts reconnect and reuse surfaces after terminal transport failures.
+- Escape launchd plist values, log failed VideoToolbox startup probes, and defer filtered log-message evaluation.
+
+### Changed
+- Batch streaming frame metadata reads and report effective socket-buffer sizes at debug level.
+- Convert borrowed packet input directly into pooled decoder storage and retain it through asynchronous VideoToolbox decoding.
+
 ## [v0.10.15] - 2026-11-15
 
 ### Changed

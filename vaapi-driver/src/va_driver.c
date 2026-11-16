@@ -117,7 +117,6 @@ typedef struct VTRVAContext {
     VTRWireCompression wire_compression;
     bool connection_dirty;
     bool force_keyframe;
-    bool session_failed;
 
     pthread_mutex_t io_lock;
     bool io_lock_initialized;
@@ -128,7 +127,6 @@ typedef struct VTRVAContext {
     struct {
         VASurfaceID surface;
         VABufferID coded;
-        int64_t pts;
     } pending[16];
     unsigned pending_head, pending_count;
     unsigned io_users;
@@ -1305,7 +1303,9 @@ static VAStatus vtrva_begin_picture(VADriverContextP ctx, VAContextID context_id
     VTRVASurface *surface;
     if (!driver) return VA_STATUS_ERROR_INVALID_DISPLAY;
     VAStatus status = sync_object(driver, render_target, VA_INVALID_ID, VA_TIMEOUT_INFINITE);
-    if (status != VA_STATUS_SUCCESS) return status;
+    /* Sync/map retain the previous encode error. A new picture may reuse the
+     * now-ready surface and establish a fresh remote session. */
+    if (status != VA_STATUS_SUCCESS && status != VA_STATUS_ERROR_ENCODING_ERROR) return status;
     pthread_mutex_lock(&driver->lock);
     context = lookup_context_locked(driver, context_id);
     surface = lookup_surface_locked(driver, render_target);
@@ -1392,7 +1392,6 @@ static int ensure_remote_connection(VTRVADriver *driver, VTRVAContext *context,
     VTRPixelFormat pixel_format;
     int rc;
     if (!driver || !context || !config || !surface) return -EINVAL;
-    if (context->session_failed) return -EPIPE;
     pixel_format = surface->fourcc == VA_FOURCC_P010 ? VTR_PIXFMT_P010
                                                       : VTR_PIXFMT_NV12;
     if (context->client.connected && !context->connection_dirty)
@@ -1512,7 +1511,6 @@ static VAStatus vtrva_end_picture(VADriverContextP ctx, VAContextID context_id) 
         unsigned slot = (context->pending_head + context->pending_count) % ARRAY_SIZE(context->pending);
         context->pending[slot].surface = surface->id;
         context->pending[slot].coded = coded->id;
-        context->pending[slot].pts = frame.pts;
         ++context->pending_count;
         ++context->frame_index;
     } else {

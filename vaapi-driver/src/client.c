@@ -698,6 +698,7 @@ int vtr_client_connect(VTRClient *client, const VTRClientConfig *config,
     vtr_client_destroy(client);
     vtr_client_init(client);
     client->timeout_ms = config->timeout_ms > 0 ? config->timeout_ms : 10000;
+    client->max_b_frames = config->max_b_frames;
     snprintf(client->endpoint, sizeof(client->endpoint), "%s", config->endpoint);
     snprintf(client->codec, sizeof(client->codec), "%s", config->codec);
     client->wire_compression = resolve_wire_compression(config);
@@ -851,8 +852,13 @@ int vtr_client_receive_packet_timeout(VTRClient *client, VTRBuffer *packet,
         set_error(error, error_size, "invalid PACKET payload");
         return terminal_error(client, rc);
     }
-    for (pending = 0; pending < client->pending_count; ++pending)
-        if (client->pending_pts[pending] == view.pts) break;
+    /* No-reorder sessions emit in submission order. The daemon may adjust
+     * duplicate/regressing PTS, so timestamps are not frame identifiers. */
+    pending = 0;
+    if (client->max_b_frames) {
+        for (; pending < client->pending_count; ++pending)
+            if (client->pending_pts[pending] == view.pts) break;
+    }
     if (pending == client->pending_count) {
         set_error(error, error_size, "PACKET does not match an outstanding frame");
         return terminal_error(client, -EPROTO);

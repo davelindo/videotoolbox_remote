@@ -406,6 +406,7 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
     with conn:
         try:
             config_options: Dict[str, str] = {}
+            last_frame_pts = None
 
             msg_type, length = read_header(conn)
             if msg_type != MSG_HELLO:
@@ -604,6 +605,9 @@ def handle_client(conn: socket.socket, expected_token: str, args: argparse.Names
                         write_configured_filled_msg(conn, MSG_PACKET, args.packet_bytes, args)
                         return
 
+                    if getattr(args, "normalize_frame_pts", False):
+                        pts = max(pts, last_frame_pts + 1) if last_frame_pts is not None else pts
+                        last_frame_pts = pts
                     dts = pts + int(getattr(args, "packet_dts_offset", 0))
                     write_msg(conn, MSG_PACKET,
                               make_packet_body(args.packet_data, pts, dts, duration, flags))
@@ -838,6 +842,7 @@ def main() -> int:
     parser.add_argument("--expect-presentation-start-pts", type=int)
     parser.add_argument("--expect-presentation-end-pts", type=int)
     parser.add_argument("--once", action="store_true", help="handle a single connection then exit")
+    parser.add_argument("--normalize-frame-pts", action="store_true", help="Normalize encode PTS in submission order")
     args = parser.parse_args()
     try:
         global OUTBOUND_VERSION

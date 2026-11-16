@@ -11,17 +11,24 @@ public enum AnnexB {
     }
 
     public static func splitNALUnits(_ data: Data) -> [Data] {
-        var units: [Data] = []
+        data.withUnsafeBytes { raw in
+            nalUnitRanges(raw).map { range in
+                range.isEmpty ? Data() : Data(bytes: raw.baseAddress!.advanced(by: range.lowerBound), count: range.count)
+            }
+        }
+    }
+
+    static func nalUnitRanges(_ bytes: UnsafeRawBufferPointer) -> [Range<Int>] {
+        var units: [Range<Int>] = []
         var index = 0
         var startPos: Int?
-        let count = data.count
+        let count = bytes.count
 
-        data.withUnsafeBytes { ptr in
-            guard let base = ptr.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+        if let base = bytes.baseAddress?.assumingMemoryBound(to: UInt8.self) {
 
             func commit(until endPos: Int) {
                 if let start = startPos, endPos > start {
-                    units.append(data.subdata(in: start ..< endPos))
+                    units.append(start ..< endPos)
                 }
             }
 
@@ -47,47 +54,51 @@ public enum AnnexB {
 
         if startPos != nil {
             if let start = startPos, start < count {
-                units.append(data.subdata(in: start ..< count))
+                units.append(start ..< count)
             }
         } else {
-            units.append(data)
+            units.append(0 ..< count)
         }
         return units
     }
 
     public static func toLengthPrefixed(_ annexB: Data, lengthSize: Int) -> Data {
         precondition((1 ... 4).contains(lengthSize), "lengthSize must be 1...4")
-        let units = splitNALUnits(annexB)
-        
-        // Calculate total size
-        let totalSize = units.reduce(0) { $0 + lengthSize + $1.count }
-        var out = Data(count: totalSize)
-        
-        var offset = 0
-        out.withUnsafeMutableBytes { outRaw in
-             guard let outBase = outRaw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
-             
-             for unit in units {
-                 let len = unit.count
-                 // Write length prefix
-                 for idx in 0 ..< lengthSize {
-                     let shift = (lengthSize - 1 - idx) * 8
-                     outBase[offset + idx] = UInt8((len >> shift) & 0xFF)
-                 }
-                 offset += lengthSize
-                 
-                 // Copy NAL unit
-                 unit.withUnsafeBytes { inRaw in
-                     if let from = inRaw.baseAddress {
-                        // UnsafeRawPointer to UnsafeMutableRawPointer copy
-                        // We need to cast destinations to raw for memcpy or use assign
-                        // But since we have specific pointers let's use memcpy which is available in Darwin
-                        memcpy(outBase + offset, from, len)
-                     }
-                 }
-                 offset += len
-             }
+        return annexB.withUnsafeBytes { source in
+            let units = nalUnitRanges(source)
+            let totalSize = units.reduce(0) { $0 + lengthSize + $1.count }
+            var out = Data(count: totalSize)
+            out.withUnsafeMutableBytes { destination in
+                writeLengthPrefixed(source, units: units, lengthSize: lengthSize, into: destination)
+            }
+            return out
         }
-        return out
+    }
+
+    static func toLengthPrefixed(_ source: UnsafeRawBufferPointer, lengthSize: Int, pool: RawBufferPool) -> Data {
+        precondition((1 ... 4).contains(lengthSize), "lengthSize must be 1...4")
+        let units = nalUnitRanges(source)
+        let totalSize = units.reduce(0) { $0 + lengthSize + $1.count }
+        return pool.data(capacity: totalSize) { destination in
+            writeLengthPrefixed(source, units: units, lengthSize: lengthSize, into: destination)
+            return totalSize
+        }!
+    }
+
+    private static func writeLengthPrefixed(_ source: UnsafeRawBufferPointer, units: [Range<Int>],
+                                            lengthSize: Int, into destination: UnsafeMutableRawBufferPointer) {
+        var offset = 0
+        for unit in units {
+            for index in 0 ..< lengthSize {
+                let shift = (lengthSize - 1 - index) * 8
+                destination[offset + index] = UInt8((unit.count >> shift) & 0xFF)
+            }
+            offset += lengthSize
+            if !unit.isEmpty {
+                memcpy(destination.baseAddress!.advanced(by: offset),
+                       source.baseAddress!.advanced(by: unit.lowerBound), unit.count)
+            }
+            offset += unit.count
+        }
     }
 }

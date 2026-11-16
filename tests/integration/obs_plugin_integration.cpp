@@ -29,6 +29,7 @@ struct Args {
   int updated_keyint_sec = 3;
   int wire_compression = VTR_WIRE_LZ4;
   bool expect_encode_error = false;
+  bool duplicate_pts = false;
   int error_wait_ms = 500;
   std::string error_contains;
 };
@@ -114,6 +115,8 @@ Args parse_args(int argc, char **argv) {
       args.expected_extradata_hex = require_value("--expected-extradata-hex");
     } else if (arg == "--expect-encode-error") {
       args.expect_encode_error = true;
+    } else if (arg == "--duplicate-pts") {
+      args.duplicate_pts = true;
     } else if (arg == "--error-wait-ms") {
       args.error_wait_ms = std::stoi(require_value("--error-wait-ms"));
     } else if (arg == "--error-contains") {
@@ -442,13 +445,13 @@ int run(const Args &args) {
 
   int received_count = 0;
   for (int i = 0; i < 2; ++i) {
-    frame.pts = 1000 + (i * 1000);
+    frame.pts = args.duplicate_pts ? 1000 : 1000 + (i * 1000);
     struct encoder_packet packet = {};
     bool received_packet = false;
 
     require(info->encode(data.ptr, &frame, &packet, &received_packet),
             "encoder encode callback failed");
-    if (received_packet) validate_packet(packet, 1000 + 1000 * received_count++);
+    if (received_packet) validate_packet(packet, 1000 + (args.duplicate_pts ? 1 : 1000) * received_count++);
 
     if (i == 0)
       validate_extradata(info, data.ptr, expected_extradata);

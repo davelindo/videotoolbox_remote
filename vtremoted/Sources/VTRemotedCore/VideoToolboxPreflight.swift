@@ -7,7 +7,7 @@ import Foundation
 #endif
 
 public enum VideoToolboxPreflight {
-    public static func checkOrExit(logger: Logger = .shared) {
+    public static func check(logger: Logger = .shared) {
         #if canImport(VideoToolbox) && canImport(CoreMedia) && canImport(CoreVideo)
             var compressionSession: VTCompressionSession?
             let status = VTCompressionSessionCreate(
@@ -26,6 +26,7 @@ public enum VideoToolboxPreflight {
                 VTCompressionSessionInvalidate(session)
                 return
             }
+            logger.error("WARN VideoToolbox H.264 encoder probe failed status=\(status); codec availability will be checked at CONFIGURE")
         #else
             _ = logger
         #endif

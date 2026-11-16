@@ -35,4 +35,23 @@ final class AnnexBTests: XCTestCase {
         XCTAssertEqual(lengthPrefixed.prefix(4), Data([0, 0, 0, 3]))
         XCTAssertEqual(lengthPrefixed.dropFirst(4), nal)
     }
+
+    func testPooledConversionOfBorrowedMixedStartCodes() {
+        let packet = Data([0xFF, 0, 0, 0, 1, 0x65, 0xAA, 0, 0, 1, 0x41, 0xBB, 0xCC, 0xFF])
+        let pool = RawBufferPool()
+        for lengthSize in 1...4 {
+            let converted = packet.withUnsafeBytes { raw in
+                AnnexB.toLengthPrefixed(UnsafeRawBufferPointer(rebasing: raw[1..<13]),
+                                        lengthSize: lengthSize, pool: pool)
+            }
+            let padding = [UInt8](repeating: 0, count: lengthSize - 1)
+            let expected = padding + [2, 0x65, 0xAA] + padding + [3, 0x41, 0xBB, 0xCC]
+            XCTAssertEqual(converted, Data(expected))
+        }
+    }
+
+    func testLengthPrefixedNALWithoutStartCode() {
+        let nal = Data([0x41, 0xAA, 0xBB])
+        XCTAssertEqual(AnnexB.toLengthPrefixed(nal, lengthSize: 4), Data([0, 0, 0, 3, 0x41, 0xAA, 0xBB]))
+    }
 }

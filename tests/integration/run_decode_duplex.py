@@ -69,8 +69,11 @@ def run(probe, fault):
                 text=True,
                 timeout=20,
             )
+            try:
+                future.result()
+            except Exception as error:
+                raise AssertionError(f"decoder duplex fault={fault}: {result.stderr}{result.stdout}") from error
             assert result.returncode == 0, result.stderr + result.stdout
-            future.result(timeout=5)
         print(f"PASS decoder duplex fault={fault}")
 
 

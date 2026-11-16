@@ -5,13 +5,18 @@
 #include <errno.h>
 #include <string.h>
 
-static int submitted, completed, reconfigured, fail_at = -1;
+static int submitted, completed, reconfigured, fail_at = -1, connect_failures;
 static int test_connect(VTRClient *client, const VTRClientConfig *config, char *error,
                         size_t size) {
     (void)config;
     (void)error;
     (void)size;
-    assert(submitted == completed);
+    assert(!client->pending_count);
+    if (connect_failures) {
+        --connect_failures;
+        return -ECONNREFUSED;
+    }
+    completed = submitted; /* A replacement session cannot return aborted output. */
     ++reconfigured;
     client->connected = 1;
     return 0;
@@ -42,10 +47,11 @@ static int test_receive(VTRClient *client, VTRBuffer *packet, int64_t *pts, int6
     if (completed == fail_at)
         return -ECONNRESET;
     assert(completed < submitted);
-    *pts = *dts = completed++;
+    *pts = completed + 1000; /* Output timestamp normalization cannot change ownership. */
+    *dts = completed++;
     *flags = 0;
     vtr_buffer_reset(packet);
-    uint8_t payload = (uint8_t)*pts;
+    uint8_t payload = (uint8_t)*dts;
     return vtr_put_bytes(packet, &payload, 1);
 }
 #define vtr_client_send_frame test_send_frame
@@ -149,6 +155,19 @@ int main(void) {
         assert(driver.surfaces[i].last_error == VA_STATUS_ERROR_ENCODING_ERROR);
         assert(!driver.buffers[i].pending);
     }
+    fail_at = -1;
+    connect_failures = 1;
+    driver.surfaces[0].data[0] = (uint8_t)submitted;
+    assert(vtrva_begin_picture(&va, context->id, driver.surfaces[0].id) == VA_STATUS_SUCCESS);
+    context->pending_coded_buffer = driver.buffers[0].id;
+    assert(vtrva_end_picture(&va, context->id) == VA_STATUS_ERROR_ENCODING_ERROR);
+    assert(!driver.buffers[0].pending && !context->pending_count);
+    assert(vtrva_begin_picture(&va, context->id, driver.surfaces[0].id) == VA_STATUS_SUCCESS);
+    context->pending_coded_buffer = driver.buffers[0].id;
+    assert(vtrva_end_picture(&va, context->id) == VA_STATUS_SUCCESS);
+    assert(vtrva_sync_surface(&va, driver.surfaces[0].id) == VA_STATUS_SUCCESS);
+    assert(driver.buffers[0].data[0] == submitted - 1);
+    assert(reconfigured == 2 && !context->pending_count);
     assert(vtrva_destroy_context(&va, context->id) == VA_STATUS_SUCCESS);
     for (int i = 0; i < 20; ++i) {
         release_buffer_locked(&driver.buffers[i]);

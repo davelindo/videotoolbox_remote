@@ -85,6 +85,7 @@ jobs:
           bash tests/test_is_semver_tag.sh
           bash tests/test_classify_ci_ref.sh
           bash tests/test_ccache_usage.sh
+          python3 tests/test_launchd_plist.py
           bash tests/test_macos_deployment_target.sh
           bash tests/test_vtremoted_package_shape.sh
           bash tests/test_ffmpeg_linux_arm64_ci.sh
@@ -209,6 +210,7 @@ jobs:
           cp vtremoted/.build/release/vtremoted dist/vtremoted/
           cp vtremoted/README.md dist/vtremoted/README.md
           cp vtremoted/install_launchd.sh dist/vtremoted/install_launchd.sh
+          cp vtremoted/launchd_plist.sh dist/vtremoted/launchd_plist.sh
           tar -C dist -czf vtremoted-macos-arm64.tar.gz vtremoted
           shasum -a 256 vtremoted-macos-arm64.tar.gz > vtremoted-macos-arm64.tar.gz.sha256
       - name: Smoke packaged vtremoted artifact
@@ -259,6 +261,7 @@ jobs:
           cp vtremoted/.build/release/vtremoted dist/vtremoted/
           cp vtremoted/README.md dist/vtremoted/README.md
           cp vtremoted/install_launchd.sh dist/vtremoted/install_launchd.sh
+          cp vtremoted/launchd_plist.sh dist/vtremoted/launchd_plist.sh
           tar -C dist -czf vtremoted-macos-x86_64.tar.gz vtremoted
           shasum -a 256 vtremoted-macos-x86_64.tar.gz > vtremoted-macos-x86_64.tar.gz.sha256
       - name: Smoke packaged vtremoted artifact

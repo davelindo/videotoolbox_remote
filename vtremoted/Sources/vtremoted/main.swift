@@ -21,7 +21,7 @@ if args.showVersion {
 
 Logger.shared.level = args.logLevel
 
-VideoToolboxPreflight.checkOrExit()
+VideoToolboxPreflight.check()
 
 do {
     let server = VTRServer(arguments: args)

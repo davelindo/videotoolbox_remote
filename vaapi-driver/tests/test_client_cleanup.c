@@ -250,6 +250,63 @@ static void test_partial_pong(uint16_t next_message) {
     vtr_client_destroy(&client);
 }
 
+static void test_packet_timestamps(int reordering) {
+    int sockets[2];
+    VTRClient client, peer;
+    VTRBuffer packet, body;
+    char error[256] = {0};
+    const int64_t timestamps[] = {0, 1, 1, INT64_MIN, 0};
+    uint8_t y[4] = {1, 2, 3, 4}, uv[2] = {5, 6};
+    VTRFrame frame = {0};
+    frame.duration = 1;
+    frame.plane_count = 2;
+    frame.planes[0] = (VTRFramePlane){y, 2, 2, sizeof(y)};
+    frame.planes[1] = (VTRFramePlane){uv, 2, 1, sizeof(uv)};
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    vtr_client_init(&client);
+    vtr_client_init(&peer);
+    vtr_buffer_init(&packet);
+    vtr_buffer_init(&body);
+    client.fd = sockets[0];
+    peer.fd = sockets[1];
+    client.connected = 1;
+    client.max_b_frames = reordering ? 2 : 0;
+    client.timeout_ms = peer.timeout_ms = 100;
+    for (unsigned i = 0; i < sizeof(timestamps) / sizeof(timestamps[0]); ++i) {
+        frame.pts = reordering ? (int64_t)i : timestamps[i];
+        assert(vtr_client_send_frame(&client, &frame, error, sizeof(error)) == 0);
+    }
+    for (unsigned i = 0; i < sizeof(timestamps) / sizeof(timestamps[0]); ++i) {
+        vtr_buffer_reset(&body);
+        int64_t returned_pts = reordering ? 4 - (int64_t)i : (int64_t)i;
+        assert(vtr_put_u64(&body, (uint64_t)returned_pts) == 0);
+        assert(vtr_put_u64(&body, i) == 0);
+        assert(vtr_put_u64(&body, 1) == 0);
+        assert(vtr_put_u32(&body, 0) == 0);
+        assert(vtr_put_u32(&body, 1) == 0);
+        assert(vtr_put_u8(&body, (uint8_t)i) == 0);
+        assert(send_message(&peer, VTR_MSG_PACKET, body.data, body.size) == 0);
+        int64_t pts = -1;
+        assert(vtr_client_receive_packet(&client, &packet, &pts, NULL, NULL,
+                                          error, sizeof(error)) == 0);
+        assert(pts == returned_pts && packet.size == 1 && packet.data[0] == i);
+    }
+    assert(client.connected && !client.pending_count);
+    if (reordering) {
+        client.pending_count = 1;
+        client.pending_pts[0] = 99; /* A reordered packet must match a submission. */
+    }
+    /* An extra packet still fails: FIFO completion requires an outstanding frame. */
+    assert(send_message(&peer, VTR_MSG_PACKET, body.data, body.size) == 0);
+    assert(vtr_client_receive_packet(&client, &packet, NULL, NULL, NULL,
+                                      error, sizeof(error)) == -EPROTO);
+    assert(!client.connected);
+    vtr_buffer_free(&packet);
+    vtr_buffer_free(&body);
+    vtr_client_destroy(&client);
+    vtr_client_destroy(&peer);
+}
+
 int main(void) {
     VTRClient client;
     VTRBuffer packet;
@@ -287,6 +344,8 @@ int main(void) {
     test_partial_pong(0);
     test_partial_pong(VTR_MSG_FRAME);
     test_partial_pong(VTR_MSG_FLUSH);
+    test_packet_timestamps(0);
+    test_packet_timestamps(1);
     puts("PASS client cleanup, receive storage, DONE validation, deadlines, and resumable PONGs");
     return 0;
 }

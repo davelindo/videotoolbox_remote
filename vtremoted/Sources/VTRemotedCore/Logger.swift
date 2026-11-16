@@ -18,31 +18,31 @@ public final class Logger: @unchecked Sendable {
     public var level: LogLevel = .info
     private let lock = NSLock()
 
-    private init() {}
+    init() {}
 
     public func error(_ message: @autoclosure () -> String) {
-        log(.error, message())
+        log(.error, message)
     }
 
     public func info(_ message: @autoclosure () -> String) {
-        log(.info, message())
+        log(.info, message)
     }
 
     public func debug(_ message: @autoclosure () -> String) {
-        log(.debug, message())
+        log(.debug, message)
     }
 
     private static func writeToStderr(_ raw: UnsafeRawBufferPointer) {
         _ = write(2, raw.baseAddress, raw.count)
     }
 
-    private func log(_ msgLevel: LogLevel, _ message: String) {
+    private func log(_ msgLevel: LogLevel, _ message: () -> String) {
         guard level.rawValue >= msgLevel.rawValue else { return }
         lock.lock()
         defer { lock.unlock() }
 
         // Avoid `stderr` global for Swift 6 strict concurrency.
-        let line = "[vtremoted] \(message)\n"
+        let line = "[vtremoted] \(message())\n"
         _ = line.utf8.withContiguousStorageIfAvailable { buf in
             buf.withUnsafeBytes { raw in
                 Self.writeToStderr(raw)

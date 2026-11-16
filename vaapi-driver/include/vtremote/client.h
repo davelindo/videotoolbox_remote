@@ -46,6 +46,7 @@ typedef struct VTRClient {
     size_t pong_tx_sent; /* Completed replies remain marked until receive consumes them. */
     unsigned pending_count;
     int64_t pending_pts[16];
+    uint32_t max_b_frames;
     int flushing;
     uint8_t rx_header[VTR_HEADER_SIZE];
     size_t rx_header_read;
