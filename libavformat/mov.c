@@ -928,11 +928,12 @@ static int mov_read_iacb(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     int nb_frames, disposition;
     int version, ret;
 
+    st = get_curr_st(c);
+    if (!st)
+        return 0;
+
     if (atom.size < 5)
         return AVERROR_INVALIDDATA;
-
-    if (c->fc->nb_streams < 1)
-        return 0;
 
     version = avio_r8(pb);
     if (version != 1) {
@@ -945,7 +946,6 @@ static int mov_read_iacb(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     if (!descriptors_size || descriptors_size > INT_MAX)
         return AVERROR_INVALIDDATA;
 
-    st = c->fc->streams[c->fc->nb_streams - 1];
     sc = st->priv_data;
 
     if (st->codecpar->extradata) {
@@ -5561,7 +5561,8 @@ static int mov_update_iamf_streams(MOVContext *c, const AVStream *st)
             out_sti->index_entries_allocated_size = sti->index_entries_allocated_size;
             out_sti->nb_index_entries = sti->nb_index_entries;
             out_sti->skip_samples = sti->skip_samples;
-            memcpy(out_sti->index_entries, sti->index_entries, sti->index_entries_allocated_size);
+            if (sti->index_entries_allocated_size)
+                memcpy(out_sti->index_entries, sti->index_entries, sti->index_entries_allocated_size);
         }
     }
 
@@ -7366,6 +7367,7 @@ static int mov_read_sv3d(MOVContext *c, AVIOContext *pb, MOVAtom atom)
         return 0;
     }
 
+    av_freep(&sc->spherical);
     sc->spherical = av_spherical_alloc(&sc->spherical_size);
     if (!sc->spherical)
         return AVERROR(ENOMEM);
@@ -7450,6 +7452,7 @@ static int mov_read_vexu_proj(MOVContext *c, AVIOContext *pb, MOVAtom atom)
         return AVERROR_INVALIDDATA;
     }
 
+    av_freep(&sc->spherical);
     sc->spherical = av_spherical_alloc(&sc->spherical_size);
     if (!sc->spherical)
         return AVERROR(ENOMEM);
@@ -9834,10 +9837,12 @@ fail:
     return ret;
 }
 
-static int mov_read_iref_dimg(MOVContext *c, AVIOContext *pb, int version)
+static int mov_read_iref_dimg(MOVContext *c, AVIOContext *pb, int version,
+                              uint32_t size)
 {
     HEIFItem *item = NULL;
     int entries;
+    int item_id_size = version ? 4 : 2;
     int from_item_id = version ? avio_rb32(pb) : avio_rb16(pb);
     int ret;
 
@@ -9874,6 +9879,11 @@ static int mov_read_iref_dimg(MOVContext *c, AVIOContext *pb, int version)
     if (!entries) {
         av_log(c->fc, AV_LOG_ERROR,
                "Derived image item references no input images\n");
+        return AVERROR_INVALIDDATA;
+    }
+    if ((int64_t)entries * item_id_size > (int64_t)size - item_id_size - 2) {
+        av_log(c->fc, AV_LOG_ERROR, "iref dimg entry count %d exceeds the sub-box size\n",
+               entries);
         return AVERROR_INVALIDDATA;
     }
 
@@ -10013,7 +10023,7 @@ static int mov_read_iref(MOVContext *c, AVIOContext *pb, MOVAtom atom)
         type = avio_rl32(pb);
         switch (type) {
         case MKTAG('d','i','m','g'):
-            ret = mov_read_iref_dimg(c, pb, version);
+            ret = mov_read_iref_dimg(c, pb, version, size - 8);
             if (ret < 0)
                 return ret;
             break;
