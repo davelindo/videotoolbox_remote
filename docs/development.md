@@ -52,6 +52,12 @@ the release tag runs validation and packaging; the identical tagged sync push to
 main skips duplicate builds. FFmpeg compiler-cache checks require actual
 compilation hits or misses, so a bypassed cache fails CI.
 
+If GitHub fails to allocate a hosted runner before any steps execute, the
+`Recover CI runner allocation` workflow retries the failed jobs and their
+dependents, up to three total attempts. It requires GitHub's explicit allocation
+error on every failed job; build and test failures are left for investigation.
+The workflow can also inspect an older CI run through its `run_id` dispatch input.
+
 1.  **Install assembler and library dependencies** (assemblers are needed for x86 builds):
     ```bash
     nasm -v
