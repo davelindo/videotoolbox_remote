@@ -53,6 +53,9 @@ fate-mov-vpcc-reserved-color-tags: CMD = run ffprobe$(PROGSSUF)$(EXESUF) -v erro
     -show_entries stream=color_primaries,color_transfer,color_space -of default=nw=1 \
     $(TARGET_SAMPLES)/mov/vpcc-reserved-color-tags.mp4
 
+FATE_MOV-$(call DEMDEC, MOV, RAWVIDEO) += fate-mov-uncv-rgb24
+fate-mov-uncv-rgb24: CMD = framecrc -i $(TARGET_SAMPLES)/mov/uncv-rgb24.mp4
+
 FATE_MOV_FFPROBE-$(CONFIG_MOV_DEMUXER) += fate-ffprobe-stream-entries-tmcd \
                                        fate-ffprobe-group-stream-entries-tmcd \
                                        fate-ffprobe-show-groups-tmcd
@@ -427,6 +430,29 @@ fate-mov-composer-metadata: tests/data/asynth-44100-2.wav
 fate-mov-composer-metadata: CMD = transcode wav ./tests/data/asynth-44100-2.wav mov \
     "-af aresample -c:a pcm_s16le -t 0.05 -metadata composer=Bach" \
     "-af aresample -c:a pcm_s16le" "-show_entries format_tags"
+
+# 3GPP loci location: ties rounded to even, the altitude clipped to its
+# 16.16 range, and a missing altitude written as zero.
+FATE_MOV_FFMPEG_FFPROBE-$(call TRANSCODE, PCM_S16LE, MP4 MOV, WAV_DEMUXER ARESAMPLE_FILTER) \
+                       += fate-mov-mp4-loci fate-mov-mp4-loci-no-altitude
+fate-mov-mp4-loci fate-mov-mp4-loci-no-altitude: tests/data/asynth-44100-2.wav
+fate-mov-mp4-loci: CMD = transcode wav ./tests/data/asynth-44100-2.wav mp4 \
+    "-af aresample -c:a pcm_s16le -t 0.05 -metadata location=+00.03125-000.15625+32767.999999/Place" \
+    "-af aresample -c:a pcm_s16le" "-show_entries format_tags=location"
+fate-mov-mp4-loci-no-altitude: CMD = transcode wav ./tests/data/asynth-44100-2.wav mp4 \
+    "-af aresample -c:a pcm_s16le -t 0.05 -metadata location=-33.8568+151.2153/" \
+    "-af aresample -c:a pcm_s16le" "-show_entries format_tags=location"
+
+# The 3GPP TS 26.244 user data boxes have to be read back with their languages.
+FATE_MOV_FFMPEG_FFPROBE-$(call TRANSCODE, MPEG4, TGP MOV, LAVFI_INDEV COLOR_FILTER WRAPPED_AVFRAME_DECODER) += fate-mov-3gp-udta-metadata
+fate-mov-3gp-udta-metadata: CMD = transcode lavfi "color=s=32x32:r=1:d=1" 3gp \
+    "-c:v mpeg4 -metadata title=Title -metadata artist=Artist -metadata author=Author \
+     -metadata genre=Genre -metadata comment=Comment -metadata album=Album -metadata track=7 \
+     -metadata copyright=Copyright -metadata date=2024 \
+     -metadata title-eng=Title -metadata artist-eng=Artist -metadata author-eng=Author \
+     -metadata genre-eng=Genre -metadata comment-eng=Comment -metadata album-eng=Album \
+     -metadata copyright-eng=Copyright" \
+    "-c copy" "-show_entries format_tags"
 
 FATE_MOV_FFMPEG_FFPROBE-$(call ALLYES, COLOR_FILTER SETPTS_FILTER MPEG4_ENCODER \
                                       MOV_MUXER MOV_DEMUXER FILE_PROTOCOL)      \
