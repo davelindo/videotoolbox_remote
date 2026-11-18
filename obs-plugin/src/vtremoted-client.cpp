@@ -2,6 +2,17 @@
  * VTRemoted Client - C++ implementation of the vtremoted protocol
  */
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
+
 #include "vtremoted-client.h"
 #include "vtremoted-byteorder.h"
 #include "vtremoted-protocol.h"
@@ -21,13 +32,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
 
 #ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
 #pragma comment(lib, "Ws2_32.lib")
 typedef SOCKET socket_t;
 #define SOCKET_INVALID INVALID_SOCKET
@@ -36,6 +46,7 @@ typedef SOCKET socket_t;
 #else
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
@@ -70,11 +81,14 @@ int wait_socket(socket_t sock, bool writing, SocketDeadline deadline) {
         remaining.count(), 0, std::numeric_limits<int>::max()));
 #ifdef _WIN32
     fd_set descriptors;
+    fd_set errors;
     FD_ZERO(&descriptors);
+    FD_ZERO(&errors);
     FD_SET(sock, &descriptors);
+    FD_SET(sock, &errors);
     timeval timeout = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
     int ready = select(0, writing ? nullptr : &descriptors,
-                       writing ? &descriptors : nullptr, nullptr, &timeout);
+                       writing ? &descriptors : nullptr, writing ? &errors : nullptr, &timeout);
     if (ready < 0 && WSAGetLastError() == WSAEINTR)
       continue;
 #else
@@ -141,6 +155,42 @@ bool make_socket_nonblocking(socket_t sock) {
   int flags = fcntl(sock, F_GETFL, 0);
   return flags >= 0 && fcntl(sock, F_SETFL, flags | O_NONBLOCK) == 0;
 #endif
+}
+
+socket_t connect_socket(const std::string &host, int port) {
+  addrinfo hints = {};
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  addrinfo *addresses = nullptr;
+  const auto service = std::to_string(port);
+  if (getaddrinfo(host.c_str(), service.c_str(), &hints, &addresses))
+    return SOCKET_INVALID;
+  std::unique_ptr<addrinfo, decltype(&freeaddrinfo)> result(addresses, freeaddrinfo);
+  auto deadline = SocketClock::now() + std::chrono::milliseconds(SOCKET_TIMEOUT_MS);
+
+  for (auto *address = addresses; address && SocketClock::now() < deadline; address = address->ai_next) {
+    socket_t sock = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
+    if (sock == SOCKET_INVALID)
+      continue;
+    if (make_socket_nonblocking(sock) && configure_socket_io(sock)) {
+      int rc = connect(sock, address->ai_addr, static_cast<int>(address->ai_addrlen));
+      if (!rc)
+        return sock;
+#ifdef _WIN32
+      bool pending = WSAGetLastError() == WSAEWOULDBLOCK;
+      int error_size = sizeof(int);
+#else
+      bool pending = errno == EINPROGRESS || errno == EINTR;
+      socklen_t error_size = sizeof(int);
+#endif
+      int error = 0;
+      if (pending && wait_socket(sock, true, deadline) > 0 &&
+          !getsockopt(sock, SOL_SOCKET, SO_ERROR, reinterpret_cast<char *>(&error), &error_size) && !error)
+        return sock;
+    }
+    close_socket(sock);
+  }
+  return SOCKET_INVALID;
 }
 
 const char *wire_compression_name(int mode) {
@@ -246,6 +296,9 @@ static inline void write_be64(uint8_t *p, int64_t v) {
 }
 
 struct VTRemotedClient {
+#ifdef _WIN32
+  bool winsock_started = false;
+#endif
   socket_t sock;
   std::string host;
   int port;
@@ -376,8 +429,7 @@ static int write_progress(socket_t sock, const void *buf, size_t len, size_t &se
       return WRITE_PENDING;
     attempted = true;
     const size_t remaining = len - sent;
-    const int chunk = static_cast<int>(std::min<size_t>(
-        remaining, static_cast<size_t>(std::numeric_limits<int>::max())));
+    const int chunk = static_cast<int>(std::min<size_t>(remaining, 1024 * 1024));
     auto w = send(sock, (const char *)(p + sent), chunk, flags);
     if (w <= 0) {
 #ifdef _WIN32
@@ -389,7 +441,7 @@ static int write_progress(socket_t sock, const void *buf, size_t len, size_t &se
       const int err = errno;
       if (w < 0 && err == EINTR)
         continue;
-      bool pending = w < 0 && (err == EAGAIN || err == EWOULDBLOCK);
+      bool pending = w < 0 && (err == EAGAIN || err == EWOULDBLOCK || err == ENOBUFS);
 #endif
       if (pending) {
         int ready = wait_socket(sock, true, deadline);
@@ -468,16 +520,14 @@ bool vtremoted_client_connect(VTRemotedClient *client, const char *host,
 
 #ifdef _WIN32
   WSADATA wsa;
-  WSAStartup(MAKEWORD(2, 2), &wsa);
+  if (WSAStartup(MAKEWORD(2, 2), &wsa))
+    return false;
+  client->winsock_started = true;
 #endif
 
-  client->sock = socket(AF_INET, SOCK_STREAM, 0);
-  if (client->sock == SOCKET_INVALID)
-    return false;
-
-  if (!configure_socket_io(client->sock)) {
-    close_socket(client->sock);
-    client->sock = SOCKET_INVALID;
+  client->sock = connect_socket(client->host, client->port);
+  if (client->sock == SOCKET_INVALID) {
+    vtremoted_client_disconnect(client);
     return false;
   }
 
@@ -485,26 +535,6 @@ bool vtremoted_client_connect(VTRemotedClient *client, const char *host,
   int yes = 1;
   setsockopt(client->sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&yes,
              sizeof(yes));
-
-  struct sockaddr_in addr = {};
-  addr.sin_family = AF_INET;
-  addr.sin_port = htons((uint16_t)client->port);
-  if (inet_pton(AF_INET, client->host.c_str(), &addr.sin_addr) != 1) {
-    vtr_log("Invalid address: %s", client->host.c_str());
-    close_socket(client->sock);
-    client->sock = SOCKET_INVALID;
-    return false;
-  }
-
-  if (connect(client->sock, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
-    close_socket(client->sock);
-    client->sock = SOCKET_INVALID;
-    return false;
-  }
-  if (!make_socket_nonblocking(client->sock)) {
-    vtremoted_client_disconnect(client);
-    return false;
-  }
 
   client->connected = true;
 
@@ -573,8 +603,15 @@ void vtremoted_client_disconnect(VTRemotedClient *client) {
     close_socket(client->sock);
     client->sock = SOCKET_INVALID;
   }
+#ifdef _WIN32
+  if (client->winsock_started) {
+    WSACleanup();
+    client->winsock_started = false;
+  }
+#endif
   client->connected = false;
   client->configured = false;
+  client->extradata.clear();
   client->recv_header_read = client->recv_body_read = 0;
   client->recv_deadline = SocketDeadline::max();
   client->pong_buf.clear();
@@ -631,6 +668,11 @@ bool vtremoted_client_configure(VTRemotedClient *client, uint32_t width,
                                 int gop, int wire_compression) {
   if (!client || !client->connected)
     return false;
+  auto fail_configure = [&](const std::string &message) {
+    fail_client(client, message);
+    vtremoted_client_disconnect(client);
+    return false;
+  };
   if (!is_supported_wire_compression(wire_compression)) {
     vtr_log("Unsupported wire compression mode=%d", wire_compression);
     return false;
@@ -695,53 +737,42 @@ bool vtremoted_client_configure(VTRemotedClient *client, uint32_t width,
 
   vtr_log_debug("Sending CONFIGURE, len=%u", (uint32_t)cfg.size());
   if (!send_msg(client->sock, VTR_MSG_CONFIGURE, cfg.data(),
-                (uint32_t)cfg.size())) {
-    vtr_log("Send CONFIGURE failed");
-    return false;
-  }
+                (uint32_t)cfg.size()))
+    return fail_configure("Send CONFIGURE failed");
 
   /* Receive CONFIGURE_ACK */
   struct vtr_header hdr;
   vtr_log("Waiting for CONFIGURE_ACK");
   auto deadline = SocketClock::now() + std::chrono::milliseconds(SOCKET_TIMEOUT_MS);
-  if (!recv_header(client->sock, &hdr, deadline)) {
-    vtr_log("Recv CONFIGURE_ACK header failed");
-    return false;
-  }
-  if (hdr.type != VTR_MSG_CONFIGURE_ACK) {
-    vtr_log("Expected CONFIGURE_ACK (4), got %d", hdr.type);
-    return false;
-  }
-  if (!validate_inbound_length(hdr.type, hdr.length, CONFIGURE_ACK_MAX_BYTES)) {
-    vtremoted_client_disconnect(client);
-    return false;
-  }
+  if (!recv_header(client->sock, &hdr, deadline))
+    return fail_configure("Invalid or missing CONFIGURE_ACK header");
+  if (hdr.type != VTR_MSG_CONFIGURE_ACK && hdr.type != VTR_MSG_ERROR)
+    return fail_configure("Unexpected message while awaiting CONFIGURE_ACK");
+  if (!validate_inbound_length(hdr.type, hdr.length, CONFIGURE_ACK_MAX_BYTES))
+    return fail_configure("Oversized CONFIGURE response");
   vtr_log("Received CONFIGURE_ACK, len=%d", hdr.length);
 
   std::vector<uint8_t> ack_body(hdr.length);
-  if (hdr.length > 0 && read_exact(client->sock, ack_body.data(), hdr.length, deadline)) {
-    vtr_log("Recv CONFIGURE_ACK body failed");
-    return false;
-  }
+  if (hdr.length > 0 && read_exact(client->sock, ack_body.data(), hdr.length, deadline))
+    return fail_configure("Truncated CONFIGURE response");
 
-  if (ack_body.size() < 4) {
-    vtr_log("CONFIGURE_ACK too short: %zu", ack_body.size());
-    return false;
+  if (hdr.type == VTR_MSG_ERROR) {
+    if (ack_body.size() < 6 || vtr_read_be16(ack_body.data() + 4) > ack_body.size() - 6)
+      return fail_configure("Malformed server ERROR");
+    return fail_configure("Server error: " + std::string(
+        reinterpret_cast<const char *>(ack_body.data() + 6), vtr_read_be16(ack_body.data() + 4)));
   }
+  if (ack_body.size() < 5)
+    return fail_configure("CONFIGURE_ACK too short");
 
   const uint8_t status = ack_body[0];
-  if (status != VTR_STATUS_OK) {
-    vtr_log("CONFIGURE_ACK status error: %u", status);
-    return false;
-  }
+  if (status != VTR_STATUS_OK)
+    return fail_configure("CONFIGURE_ACK status error: " + std::to_string(status));
 
   const uint16_t extradata_len = (uint16_t(ack_body[1]) << 8) | ack_body[2];
   const size_t expected_min = size_t(3) + extradata_len + 2; // +pixel_format +warnings
-  if (ack_body.size() < expected_min) {
-    vtr_log("CONFIGURE_ACK malformed: extradata_len=%u body_len=%zu",
-            extradata_len, ack_body.size());
-    return false;
-  }
+  if (ack_body.size() < expected_min)
+    return fail_configure("Invalid CONFIGURE_ACK extradata length");
 
   client->extradata.assign(ack_body.begin() + 3,
                            ack_body.begin() + 3 + extradata_len);
@@ -916,7 +947,7 @@ VTRReceiveResult vtremoted_client_receive_packet(VTRemotedClient *client,
   uint32_t data_len = vtr_read_be32(buf.data() + 28);
 
   size_t data_offset = 32;
-  if (buf.size() < data_offset + data_len) {
+  if (data_len > buf.size() - data_offset) {
     vtr_log("Packet message data length exceeds payload: len=%zu data_len=%u",
             buf.size(), data_len);
     return fail_client(client, "PACKET data length exceeds payload");

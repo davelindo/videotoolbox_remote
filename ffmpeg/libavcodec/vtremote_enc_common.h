@@ -55,6 +55,7 @@ typedef struct VTRemoteEncContext {
     double alpha_quality;
     /* runtime state */
     int fd;
+    int net_initialized;
     int connected;
     int flushing;
     int done;

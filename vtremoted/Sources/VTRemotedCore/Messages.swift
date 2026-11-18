@@ -30,8 +30,9 @@ public struct HelloAckResponse: Equatable, Sendable {
         writer.write(status)
         writer.writeLengthPrefixedUTF8(serverName)
         writer.writeLengthPrefixedUTF8(serverVersion)
-        writer.write(UInt8(UInt8(clamping: capabilities.count)))
-        for cap in capabilities {
+        let advertised = capabilities.prefix(Int(UInt8.max))
+        writer.write(UInt8(advertised.count))
+        for cap in advertised {
             writer.writeLengthPrefixedUTF8(cap)
         }
         writer.writeBE(maxSessions)

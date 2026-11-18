@@ -292,7 +292,7 @@ final class ClientHandlerTests: XCTestCase {
 
         XCTAssertEqual(fakeIO.sent.map(\.0), [.helloAck, .error])
         let error = try decodeError(fakeIO.sent[1].1)
-        XCTAssertEqual(error.code, 1)
+        XCTAssertEqual(error.code, 3)
         XCTAssertEqual(error.message, "configure failed: Unsupported: wire_compression=lz4")
         XCTAssertEqual(fakeIO.incoming.map(\.0), [.flush])
     }

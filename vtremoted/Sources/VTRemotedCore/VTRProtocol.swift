@@ -39,6 +39,7 @@ public enum VTRCapability {
     public static let hwFramesVideoToolboxInput = "hwframes.videotoolbox.input"
     public static let hwFramesVideoToolboxOutput = "hwframes.videotoolbox.output"
     public static let sideDataV2 = "side_data.v2"
+    public static let sideDataTypedV1 = "side_data.typed.v1"
     public static let packetAckV1 = "packet_ack.v1"
     public static let transcodePresentationWindowV1 = "transcode.presentation_window.v1"
     public static let transcodeHDRToSDRV1 = "transcode.hdr_to_sdr.v1"
@@ -57,6 +58,7 @@ public enum VTRCapability {
         hwFramesVideoToolboxInput,
         hwFramesVideoToolboxOutput,
         sideDataV2,
+        sideDataTypedV1,
         packetAckV1,
         transcodePresentationWindowV1,
         transcodeHDRToSDRV1

@@ -3766,7 +3766,8 @@ mpeg2_metadata_bsf_select="cbs_mpeg2"
 smpte436m_to_eia608_bsf_select="smpte_436m"
 trace_headers_bsf_select="cbs cbs_vp8"
 vp9_metadata_bsf_select="cbs_vp9"
-vtremote_transcode_bsf_select="cbs_h264"
+vtremote_transcode_bsf_deps="videotoolbox_remote network"
+vtremote_transcode_bsf_select="cbs_h264 h264_mp4toannexb_bsf hevc_mp4toannexb_bsf"
 vvc_metadata_bsf_select="cbs_h266"
 
 # external libraries
@@ -3809,14 +3810,14 @@ h264_videotoolbox_encoder_deps="videotoolbox pthreads"
 h264_videotoolbox_encoder_select="atsc_a53 videotoolbox_encoder"
 hevc_videotoolbox_encoder_deps="videotoolbox pthreads"
 hevc_videotoolbox_encoder_select="videotoolbox_encoder"
-h264_videotoolbox_remote_decoder_deps="network liblz4 libzstd"
-h264_videotoolbox_remote_decoder_select=""
-h264_videotoolbox_remote_encoder_deps="network liblz4 libzstd"
+h264_videotoolbox_remote_decoder_deps="videotoolbox_remote network liblz4 libzstd"
+h264_videotoolbox_remote_decoder_select="h264_mp4toannexb_bsf"
+h264_videotoolbox_remote_encoder_deps="videotoolbox_remote network liblz4 libzstd"
 h264_videotoolbox_remote_encoder_select=""
 
-hevc_videotoolbox_remote_decoder_deps="network liblz4 libzstd"
-hevc_videotoolbox_remote_decoder_select=""
-hevc_videotoolbox_remote_encoder_deps="network liblz4 libzstd"
+hevc_videotoolbox_remote_decoder_deps="videotoolbox_remote network liblz4 libzstd"
+hevc_videotoolbox_remote_decoder_select="hevc_mp4toannexb_bsf"
+hevc_videotoolbox_remote_encoder_deps="videotoolbox_remote network liblz4 libzstd"
 hevc_videotoolbox_remote_encoder_select=""
 prores_videotoolbox_encoder_deps="videotoolbox pthreads"
 prores_videotoolbox_encoder_select="videotoolbox_encoder"
@@ -4808,6 +4809,7 @@ if enabled videotoolbox_remote; then
            hevc_videotoolbox_remote_encoder hevc_videotoolbox_remote_decoder
     enable network
     enable liblz4
+    enable libzstd
 fi
 
 enabled libnpp && warn "libnpp has been removed and enabling it does nothing."

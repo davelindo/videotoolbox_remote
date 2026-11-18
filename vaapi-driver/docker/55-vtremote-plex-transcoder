@@ -6,11 +6,16 @@ wrapper=/opt/vtremote-vaapi/bin/vtremote-plex-transcoder
 target='/usr/lib/plexmediaserver/Plex Transcoder'
 real='/usr/lib/plexmediaserver/Plex Transcoder.real'
 audit=${VTREMOTE_PLEX_AUDIT_FILE:-/dev/shm/plex/vtremote-plex-wrapper.log}
-audit_dir=${audit%/*}
+audit_dir=$(dirname -- "$audit")
 decision_audit=${audit}.decision
 avcodec=${VTREMOTE_PLEX_AVCODEC_LIBRARY:-/usr/lib/plexmediaserver/lib/libavcodec.so.60}
 tested_avcodec_sha256=${VTREMOTE_PLEX_AVCODEC_SHA256:-}
 approved=false
+
+is_wrapper() {
+    cmp -s "$wrapper" "$target" ||
+        grep -aFq 'vtremote Plex wrapper: allocation failed' "$target"
+}
 
 if [ -f "$avcodec" ]; then
     actual_avcodec_sha256=$(sha256sum "$avcodec" | awk '{print $1}')
@@ -27,13 +32,13 @@ fi
 
 if [ "$approved" != true ]; then
     echo "vtremote Plex wrapper: bundled libavcodec is not an approved build; keeping native transcoding" >&2
-    if cmp -s "$wrapper" "$target" && [ -e "$real" ]; then
+    if [ -e "$real" ] && is_wrapper; then
         mv -f "$real" "$target"
     fi
     exit 0
 fi
 
-if [ "$audit_dir" != "$audit" ]; then
+if [ ! -d "$audit_dir" ]; then
     install -d -o plex -g plex -m 0755 "$audit_dir"
 fi
 touch "$audit"
@@ -47,7 +52,11 @@ if cmp -s "$wrapper" "$target"; then
     exit 0
 fi
 
-if [ -e "$target" ]; then
+if [ -e "$target" ] && ! is_wrapper; then
     mv -f "$target" "$real"
+fi
+if [ ! -e "$real" ]; then
+    echo "vtremote Plex wrapper: saved native transcoder is missing" >&2
+    exit 1
 fi
 install -m 0755 "$wrapper" "$target"

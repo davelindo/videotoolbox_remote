@@ -144,6 +144,8 @@ int vtremote_cap_flag_from_name(const uint8_t *name, int name_len, uint64_t *fla
         value = VTREMOTE_CAP_HWFRAMES_VIDEOTOOLBOX_OUT;
     } else if (cap_name_equals(name, name_len, "side_data.v2")) {
         value = VTREMOTE_CAP_SIDE_DATA_V2;
+    } else if (cap_name_equals(name, name_len, "side_data.typed.v1")) {
+        value = VTREMOTE_CAP_SIDE_DATA_TYPED_V1;
     } else if (cap_name_equals(name, name_len, "packet_ack.v1")) {
         value = VTREMOTE_CAP_PACKET_ACK_V1;
     } else if (cap_name_equals(name, name_len, "transcode.presentation_window.v1")) {
@@ -242,9 +244,12 @@ static int wbuf_reserve(VTRemoteWBuf *b, size_t add)
     if (!b)
         return AVERROR(EINVAL);
     size_t needed = b->size + add;
-    b->data = av_fast_realloc(b->data, &b->capacity, needed);
-    if (!b->data)
+    unsigned capacity = b->capacity;
+    uint8_t *data = av_fast_realloc(b->data, &capacity, needed);
+    if (!data)
         return AVERROR(ENOMEM);
+    b->data = data;
+    b->capacity = capacity;
     return 0;
 }
 
@@ -313,11 +318,12 @@ int vtremote_wbuf_put_bytes(VTRemoteWBuf *b, const uint8_t *src, int len)
 {
     if (len < 0)
         return AVERROR(EINVAL);
+    if (!len)
+        return 0;
     int ret = wbuf_reserve(b, (size_t)len);
     if (ret < 0)
         return ret;
-    if (len)
-        memcpy(b->data + b->size, src, len);
+    memcpy(b->data + b->size, src, len);
     b->size += len;
     return 0;
 }
@@ -448,11 +454,13 @@ int vtremote_payload_hello(VTRemoteWBuf *b,
                           const char *client_build_id)
 {
     vtremote_wbuf_reset(b);
-    int ret = 0;
-    ret |= vtremote_wbuf_put_str(b, token);
-    ret |= vtremote_wbuf_put_str(b, requested_codec);
-    ret |= vtremote_wbuf_put_str(b, client_name);
-    ret |= vtremote_wbuf_put_str(b, client_build_id);
+    int ret = vtremote_wbuf_put_str(b, token);
+    if (ret >= 0)
+        ret = vtremote_wbuf_put_str(b, requested_codec);
+    if (ret >= 0)
+        ret = vtremote_wbuf_put_str(b, client_name);
+    if (ret >= 0)
+        ret = vtremote_wbuf_put_str(b, client_build_id);
     return ret;
 }
 

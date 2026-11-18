@@ -476,15 +476,25 @@ static int vtremote_prepare_upload_frame(AVCodecContext *avctx,
   dst_fmt = vtremote_target_upload_pix_fmt(frame, s->codec_id);
   if (frame->format == dst_fmt && vtremote_is_upload_pix_fmt(dst_fmt)) {
     int needs_copy = 0;
-    for (int i = 0; i < vtremote_upload_plane_count(dst_fmt); i++)
-      needs_copy |= frame->linesize[i] < 0;
+    for (int i = 0; i < vtremote_upload_plane_count(dst_fmt); i++) {
+      const AVBufferRef *buffer = av_frame_get_plane_buffer(frame, i);
+      int rows = i && dst_fmt != AV_PIX_FMT_P210LE ? AV_CEIL_RSHIFT(frame->height, 1)
+                                                   : frame->height;
+      uint64_t plane_size = (uint64_t)frame->linesize[i] * rows;
+      size_t offset = buffer ? (uintptr_t)frame->data[i] - (uintptr_t)buffer->data : 0;
+      if (frame->linesize[i] <= 0 || plane_size > UINT32_MAX ||
+          !buffer || offset > buffer->size ||
+          plane_size > buffer->size - offset) {
+        needs_copy = 1;
+        break;
+      }
+    }
     if (!needs_copy) {
       *out_frame = frame;
       return 0;
     }
 
-    /* Wire planes have unsigned strides and contiguous forwards storage.
-     * Normalize flipped input while retaining the positive-stride fast path. */
+    /* Normalize flipped or cropped planes that cannot supply full wire rows. */
     ret = vtremote_ensure_convert_frame(s, dst_fmt, frame->width, frame->height);
     if (ret < 0)
       return ret;
@@ -946,8 +956,10 @@ static int vtremote_add_opt(VTRemoteKV **opts, int *count, int *cap,
   if (*count >= *cap) {
     int new_cap = (*cap == 0) ? 16 : (*cap * 2);
     VTRemoteKV *tmp = av_realloc_array(*opts, new_cap, sizeof(**opts));
-    if (!tmp)
+    if (!tmp) {
+      av_free(value);
       return AVERROR(ENOMEM);
+    }
     *opts = tmp;
     *cap = new_cap;
   }
@@ -1664,9 +1676,10 @@ static int vtremote_handshake(AVCodecContext *avctx) {
   /* HELLO */
   VTRemoteWBuf payload;
   vtremote_wbuf_init(&payload);
-  vtremote_payload_hello(&payload, s->token, codec_name_for_id(s->codec_id),
-                         "ffmpeg-vtremote", FFMPEG_VERSION);
-  int ret = vtremote_send_msg_blocking(s, VTREMOTE_MSG_HELLO, &payload);
+  int ret = vtremote_payload_hello(&payload, s->token, codec_name_for_id(s->codec_id),
+                                  "ffmpeg-vtremote", FFMPEG_VERSION);
+  if (ret >= 0)
+    ret = vtremote_send_msg_blocking(s, VTREMOTE_MSG_HELLO, &payload);
   vtremote_wbuf_free(&payload);
   if (ret < 0) {
     VTR_CLOSE_SOCKET(fd);
@@ -1708,6 +1721,7 @@ static int vtremote_handshake(AVCodecContext *avctx) {
   int opt_count = 0;
   int opt_cap = 0;
   char *tmp = NULL;
+  VTRemoteWBuf cfg = {0};
 
   tmp = av_strdup("encode");
   ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "mode", tmp);
@@ -2053,8 +2067,6 @@ static int vtremote_handshake(AVCodecContext *avctx) {
     if (ret < 0)
       goto cfg_fail;
   }
-  VTRemoteWBuf cfg;
-  vtremote_wbuf_init(&cfg);
   AVRational tb = avctx->time_base;
   if (tb.num <= 0 || tb.den <= 0 ||
       (tb.num == 1 && tb.den == 1 && avctx->framerate.num > 0 &&
@@ -2077,10 +2089,11 @@ static int vtremote_handshake(AVCodecContext *avctx) {
     }
   }
 
-  vtremote_payload_configure(&cfg, avctx->width, avctx->height, wire_pix_fmt,
-                             tb.num, tb.den, fr.num, fr.den,
-                             opt_count ? opts : NULL, opt_count, NULL, 0);
-  ret = vtremote_send_msg_blocking(s, VTREMOTE_MSG_CONFIGURE, &cfg);
+  ret = vtremote_payload_configure(&cfg, avctx->width, avctx->height, wire_pix_fmt,
+                                 tb.num, tb.den, fr.num, fr.den,
+                                 opts, opt_count, NULL, 0);
+  if (ret >= 0)
+    ret = vtremote_send_msg_blocking(s, VTREMOTE_MSG_CONFIGURE, &cfg);
 cfg_fail:
   for (int i = 0; i < opt_count; i++)
     av_freep(&opts[i].value);
@@ -2132,6 +2145,8 @@ static int enqueue_packet(AVCodecContext *avctx, const uint8_t *payload,
     return ret;
   if (!s->pkt_queue)
     return AVERROR_BUG;
+  if (s->pkt_q_count >= s->pkt_q_size)
+    return AVERROR_BUFFER_TOO_SMALL;
   int idx = (s->pkt_q_head + s->pkt_q_count) % s->pkt_q_size;
   AVPacket *dst = &s->pkt_queue[idx];
   av_packet_unref(dst);
@@ -2144,6 +2159,9 @@ static int enqueue_packet(AVCodecContext *avctx, const uint8_t *payload,
   dst->duration = view.duration;
   dst->flags = (view.flags & 1) ? AV_PKT_FLAG_KEY : 0;
   for (int i = 0; i < view.side_data_count; i++) {
+    if (!(s->server_caps & VTREMOTE_CAP_SIDE_DATA_TYPED_V1) ||
+        view.side_data[i].type >= AV_PKT_DATA_NB)
+      continue;
     uint8_t *sd = av_packet_new_side_data(
         dst, (enum AVPacketSideDataType)view.side_data[i].type,
         view.side_data[i].size);
@@ -2158,16 +2176,19 @@ static int enqueue_packet(AVCodecContext *avctx, const uint8_t *payload,
   if (dst->dts == AV_NOPTS_VALUE)
     dst->dts = dst->pts;
   if (dst->dts != AV_NOPTS_VALUE) {
-    if (s->last_dts != AV_NOPTS_VALUE && dst->dts <= s->last_dts)
+    if (s->last_dts != AV_NOPTS_VALUE && dst->dts <= s->last_dts) {
+      if (s->last_dts == INT64_MAX) {
+        av_packet_unref(dst);
+        return AVERROR_INVALIDDATA;
+      }
       dst->dts = s->last_dts + 1;
+      dst->pts = FFMAX(dst->pts, dst->dts);
+    }
     s->last_dts = dst->dts;
   }
   if (dst->pts == AV_NOPTS_VALUE)
     dst->pts = dst->dts;
-  if (s->pkt_q_count < s->pkt_q_size)
-    s->pkt_q_count++;
-  else
-    return AVERROR_BUFFER_TOO_SMALL;
+  s->pkt_q_count++;
   s->packets_recv++;
   return 0;
 }
@@ -2188,7 +2209,7 @@ int ff_vtremote_common_init(AVCodecContext *avctx) {
   s->comp_buf[0] = s->comp_buf[1] = NULL;
   s->comp_buf_cap[0] = s->comp_buf_cap[1] = 0;
   s->zstd_cctx = NULL;
-  s->zstd_last_level = -1;
+  s->zstd_last_level = INT_MIN;
   s->zstd_last_workers = -1;
   s->zstd_last_job_size = -1;
   s->send_queue = NULL;
@@ -2217,6 +2238,7 @@ int ff_vtremote_common_init(AVCodecContext *avctx) {
   ret = vtremote_net_init();
   if (ret < 0)
     return ret;
+  s->net_initialized = 1;
 
   {
     int inflight_cap =
@@ -2227,30 +2249,20 @@ int ff_vtremote_common_init(AVCodecContext *avctx) {
   if (!s->send_queue)
     return AVERROR(ENOMEM);
 
-  ret = vtremote_handshake(avctx);
-  if (ret < 0) {
-    vtremote_net_close();
-    if (s->send_queue) {
-      for (int i = 0; i < s->send_q_size; i++)
-        vtremote_sendbuf_reset(&s->send_queue[i]);
-      av_freep(&s->send_queue);
-      s->send_q_size = 0;
-      s->send_q_head = 0;
-      s->send_q_tail = 0;
-      s->send_q_count = 0;
-      s->queued_frames = 0;
-    }
-  }
-  return ret;
+  return vtremote_handshake(avctx);
 }
 
 int ff_vtremote_common_close(AVCodecContext *avctx) {
   VTRemoteEncContext *s = avctx->priv_data;
   if (vtremote_log_enabled(s, AV_LOG_VERBOSE))
     av_log(avctx, AV_LOG_VERBOSE, "VT remote close\n");
-  if (s->fd >= 0)
-    VTR_CLOSE_SOCKET(s->fd);
-  vtremote_net_close();
+  if (s->net_initialized) {
+    if (s->fd >= 0)
+      VTR_CLOSE_SOCKET(s->fd);
+    s->fd = -1;
+    s->net_initialized = 0;
+    vtremote_net_close();
+  }
   vtremote_wbuf_free(&s->frame_buf);
   if (s->pkt_queue) {
     for (int i = 0; i < s->pkt_q_size; i++)
@@ -2308,10 +2320,10 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame) {
       return AVERROR_EOF;
     if (s->flushing)
       return 0;
-    s->flushing = 1;
     ret = vtremote_sendq_enqueue_empty(s, VTREMOTE_MSG_FLUSH, 0);
     if (ret < 0)
       return ret;
+    s->flushing = 1;
     return vtremote_sendq_pump(avctx, 1);
   }
 
@@ -2383,7 +2395,7 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame) {
   int side_data_bytes = 0;
   int valid_side_data = 0;
   if (frame->nb_side_data > 0 &&
-      !(s->server_caps & VTREMOTE_CAP_SIDE_DATA_V2)) {
+      !(s->server_caps & VTREMOTE_CAP_SIDE_DATA_TYPED_V1)) {
     for (int i = 0; i < frame->nb_side_data; i++) {
       AVFrameSideData *frame_sd = frame->side_data[i];
       if (frame_sd->size > 0 &&
@@ -2394,7 +2406,7 @@ int ff_vtremote_common_send_frame(AVCodecContext *avctx, const AVFrame *frame) {
     }
     if (valid_side_data > 0 && !s->warned_frame_side_data_no_cap) {
       av_log(avctx, AV_LOG_WARNING,
-             "Remote server does not advertise side_data.v2; dropping frame side data\n");
+             "Remote server does not advertise side_data.typed.v1; dropping frame side data\n");
       s->warned_frame_side_data_no_cap = 1;
     }
   } else if (frame->nb_side_data > 0) {

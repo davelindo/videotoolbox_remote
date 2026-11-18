@@ -58,6 +58,7 @@ run_step "mock_transcode_hvc1_hdr" bash "${ROOT}/tests/integration/run_mock_tran
 run_step "mock_decode"         bash "${ROOT}/tests/integration/run_mock_decode.sh"
 run_step "mock_protocol_capabilities" bash "${ROOT}/tests/integration/run_mock_protocol_capabilities.sh"
 run_step "mock_side_data_roundtrip" bash "${ROOT}/tests/integration/run_mock_side_data_roundtrip.sh"
+run_step "mock_transcode_eof" bash "${ROOT}/tests/integration/run_mock_transcode_no_output_ack.sh"
 run_step "mock_hevc_pixfmt_negotiation" bash "${ROOT}/tests/integration/run_mock_hevc_pixfmt_negotiation.sh"
 if [[ "${VTREMOTE_RUN_OBS_PLUGIN:-0}" != "0" ]]; then
   run_step "obs_plugin_client_mock" bash "${ROOT}/tests/integration/run_obs_plugin_client_mock.sh"

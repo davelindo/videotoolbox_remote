@@ -199,7 +199,10 @@ public final class VTRWireConnection: @unchecked Sendable {
         var remaining = length
         while remaining > 0 {
             let chunk = min(remaining, skipBuf.count)
-            try POSIXIO.readExact(fd: fileDescriptor, into: &skipBuf, count: chunk, deadline: readDeadline)
+            try skipBuf.withUnsafeMutableBytes { buffer in
+                try POSIXIO.readExact(fd: fileDescriptor, into: buffer.baseAddress!,
+                                      count: chunk, deadline: readDeadline)
+            }
             remaining -= chunk
         }
     }

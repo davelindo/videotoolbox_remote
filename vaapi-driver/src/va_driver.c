@@ -113,10 +113,14 @@ typedef struct VTRVAContext {
     uint32_t global_quality;
     int realtime;
     int constant_bit_rate;
+    bool has_rate_control;
     int timeout_ms;
     VTRWireCompression wire_compression;
     bool connection_dirty;
     bool force_keyframe;
+    uint32_t connected_width;
+    uint32_t connected_height;
+    uint32_t connected_fourcc;
 
     pthread_mutex_t io_lock;
     bool io_lock_initialized;
@@ -677,9 +681,7 @@ static VAStatus vtrva_query_config_attributes(VADriverContextP ctx,
                                                int *num_attributes) {
     VTRVADriver *driver = driver_data(ctx);
     VTRVAConfig *config;
-    int capacity;
     if (!driver || !num_attributes) return VA_STATUS_ERROR_INVALID_PARAMETER;
-    capacity = *num_attributes;
     pthread_mutex_lock(&driver->lock);
     config = lookup_config_locked(driver, config_id);
     if (!config) {
@@ -688,18 +690,15 @@ static VAStatus vtrva_query_config_attributes(VADriverContextP ctx,
     }
     if (profile) *profile = config->profile;
     if (entrypoint) *entrypoint = config->entrypoint;
-    if (attributes && capacity > 0) {
+    if (attributes) {
         attributes[0].type = VAConfigAttribRTFormat;
         attributes[0].value = config->rt_format;
-    }
-    if (attributes && capacity > 1) {
         attributes[1].type = VAConfigAttribRateControl;
         attributes[1].value = config->rate_control;
     }
     *num_attributes = 2;
     pthread_mutex_unlock(&driver->lock);
-    return capacity < 2 && attributes ? VA_STATUS_ERROR_MAX_NUM_EXCEEDED
-                                      : VA_STATUS_SUCCESS;
+    return VA_STATUS_SUCCESS;
 }
 
 static VAStatus create_one_surface_locked(VTRVADriver *driver, uint32_t format,
@@ -758,7 +757,7 @@ static VAStatus vtrva_create_surfaces2(VADriverContextP ctx, unsigned int format
     uint32_t fourcc;
     unsigned int i;
     VAStatus status = VA_STATUS_SUCCESS;
-    if (!driver || !surfaces || !num_surfaces)
+    if (!driver || !surfaces || !num_surfaces || (num_attributes && !attributes))
         return VA_STATUS_ERROR_INVALID_PARAMETER;
     if (!(format & (VA_RT_FORMAT_YUV420 | VA_RT_FORMAT_YUV420_10)))
         return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
@@ -821,12 +820,20 @@ static VAStatus vtrva_destroy_surfaces(VADriverContextP ctx,
             pthread_mutex_unlock(&driver->lock);
             return VA_STATUS_ERROR_INVALID_SURFACE;
         }
-        if (surface->pending_context) {
+        if (surface->status == VASurfaceRendering || surface->pending_context) {
             pthread_mutex_unlock(&driver->lock);
             return VA_STATUS_ERROR_SURFACE_BUSY;
         }
-        release_surface_locked(surface);
+        for (unsigned j = 0; j < ARRAY_SIZE(driver->images); ++j) {
+            VTRVAImageObject *image = &driver->images[j];
+            if (image->active && image->derived && image->surface_id == surface->id) {
+                pthread_mutex_unlock(&driver->lock);
+                return VA_STATUS_ERROR_SURFACE_BUSY;
+            }
+        }
     }
+    for (i = 0; i < num_surfaces; ++i)
+        release_surface_locked(lookup_surface_locked(driver, surface_list[i]));
     pthread_mutex_unlock(&driver->lock);
     return VA_STATUS_SUCCESS;
 }
@@ -989,6 +996,9 @@ static VAStatus vtrva_destroy_context(VADriverContextP ctx,
     release_context_io(driver, context);
 
     pthread_mutex_lock(&driver->lock);
+    VTRVASurface *surface = lookup_surface_locked(driver, context->current_surface);
+    if (surface && !surface->pending_context)
+        surface->status = VASurfaceReady;
     memset(context, 0, sizeof(*context));
     pthread_mutex_unlock(&driver->lock);
     return VA_STATUS_SUCCESS;
@@ -1090,6 +1100,10 @@ static VAStatus vtrva_map_buffer(VADriverContextP ctx, VABufferID buffer_id,
     if (!buffer) {
         pthread_mutex_unlock(&driver->lock);
         return VA_STATUS_ERROR_INVALID_BUFFER;
+    }
+    if (buffer->pending) {
+        pthread_mutex_unlock(&driver->lock);
+        return VA_STATUS_ERROR_SURFACE_BUSY;
     }
     buffer->mapped = true;
     if (buffer->type == VAEncCodedBufferType) {
@@ -1207,7 +1221,8 @@ static VAStatus handle_sequence_parameter_locked(VTRVAContext *context,
     if (ip_period > 1) return VA_STATUS_ERROR_INVALID_PARAMETER;
     status = set_stream_u32(context, &context->gop_size,
                             intra_idr_period ? intra_idr_period : intra_period);
-    if (status != VA_STATUS_SUCCESS) return status;
+    if (status != VA_STATUS_SUCCESS || context->has_rate_control)
+        return status;
     status = set_stream_u32(context, &context->bit_rate, bit_rate);
     if (status != VA_STATUS_SUCCESS) return status;
     return set_stream_u32(context, &context->max_rate, bit_rate);
@@ -1275,7 +1290,10 @@ static VAStatus handle_misc_parameter_locked(VTRVAContext *context,
         status = set_stream_u32(context, &context->max_rate,
                                 rate->bits_per_second);
         if (status != VA_STATUS_SUCCESS) return status;
-        return set_stream_u32(context, &context->bit_rate, (uint32_t)target);
+        status = set_stream_u32(context, &context->bit_rate, (uint32_t)target);
+        if (status == VA_STATUS_SUCCESS && rate->bits_per_second)
+            context->has_rate_control = true;
+        return status;
     } else if (header->type == VAEncMiscParameterTypeFrameRate) {
         const VAEncMiscParameterFrameRate *rate;
         uint32_t numerator;
@@ -1305,7 +1323,7 @@ static VAStatus vtrva_begin_picture(VADriverContextP ctx, VAContextID context_id
     VAStatus status = sync_object(driver, render_target, VA_INVALID_ID, VA_TIMEOUT_INFINITE);
     /* Sync/map retain the previous encode error. A new picture may reuse the
      * now-ready surface and establish a fresh remote session. */
-    if (status != VA_STATUS_SUCCESS && status != VA_STATUS_ERROR_ENCODING_ERROR) return status;
+    if (status == VA_STATUS_ERROR_TIMEDOUT) return status;
     pthread_mutex_lock(&driver->lock);
     context = lookup_context_locked(driver, context_id);
     surface = lookup_surface_locked(driver, render_target);
@@ -1316,6 +1334,10 @@ static VAStatus vtrva_begin_picture(VADriverContextP ctx, VAContextID context_id
     if (!surface) {
         pthread_mutex_unlock(&driver->lock);
         return VA_STATUS_ERROR_INVALID_SURFACE;
+    }
+    if (surface->status == VASurfaceRendering || surface->pending_context) {
+        pthread_mutex_unlock(&driver->lock);
+        return VA_STATUS_ERROR_SURFACE_BUSY;
     }
     if (context->current_surface != VA_INVALID_SURFACE) {
         pthread_mutex_unlock(&driver->lock);
@@ -1340,6 +1362,19 @@ static VAStatus vtrva_begin_picture(VADriverContextP ctx, VAContextID context_id
     return VA_STATUS_SUCCESS;
 }
 
+#include "va_pipeline.h"
+
+static VTRVAContext *lock_context_io(VTRVADriver *driver, VAContextID context_id) {
+    pthread_mutex_lock(&driver->lock);
+    VTRVAContext *context = lookup_context_locked(driver, context_id);
+    if (context)
+        ++context->io_users;
+    pthread_mutex_unlock(&driver->lock);
+    if (context)
+        pthread_mutex_lock(&context->io_lock);
+    return context;
+}
+
 static VAStatus vtrva_render_picture(VADriverContextP ctx, VAContextID context_id,
                                       VABufferID *buffers, int num_buffers) {
     VTRVADriver *driver = driver_data(ctx);
@@ -1349,26 +1384,24 @@ static VAStatus vtrva_render_picture(VADriverContextP ctx, VAContextID context_i
     int i;
     if (!driver || num_buffers < 0 || (num_buffers && !buffers))
         return VA_STATUS_ERROR_INVALID_PARAMETER;
+    context = lock_context_io(driver, context_id);
+    if (!context)
+        return VA_STATUS_ERROR_INVALID_CONTEXT;
     pthread_mutex_lock(&driver->lock);
-    context = lookup_context_locked(driver, context_id);
-    if (!context) {
-        pthread_mutex_unlock(&driver->lock);
-        return VA_STATUS_ERROR_INVALID_CONTEXT;
-    }
     if (context->current_surface == VA_INVALID_SURFACE) {
-        pthread_mutex_unlock(&driver->lock);
-        return VA_STATUS_ERROR_INVALID_CONTEXT;
+        status = VA_STATUS_ERROR_INVALID_CONTEXT;
+        goto done;
     }
     config = lookup_config_locked(driver, context->config_id);
     if (!config) {
-        pthread_mutex_unlock(&driver->lock);
-        return VA_STATUS_ERROR_INVALID_CONFIG;
+        status = VA_STATUS_ERROR_INVALID_CONFIG;
+        goto done;
     }
     for (i = 0; i < num_buffers; ++i) {
         VTRVABuffer *buffer = lookup_buffer_locked(driver, buffers[i]);
         if (!buffer || buffer->context_id != context_id) {
-            pthread_mutex_unlock(&driver->lock);
-            return VA_STATUS_ERROR_INVALID_BUFFER;
+            status = VA_STATUS_ERROR_INVALID_BUFFER;
+            break;
         }
         if (buffer->type == VAEncSequenceParameterBufferType)
             status = handle_sequence_parameter_locked(context, config, buffer);
@@ -1376,13 +1409,13 @@ static VAStatus vtrva_render_picture(VADriverContextP ctx, VAContextID context_i
             status = handle_picture_parameter_locked(driver, context, config, buffer);
         else if (buffer->type == VAEncMiscParameterBufferType)
             status = handle_misc_parameter_locked(context, buffer);
-        if (status != VA_STATUS_SUCCESS) {
-            pthread_mutex_unlock(&driver->lock);
-            return status;
-        }
+        if (status != VA_STATUS_SUCCESS)
+            break;
     }
+done:
     pthread_mutex_unlock(&driver->lock);
-    return VA_STATUS_SUCCESS;
+    release_io_user(driver, context);
+    return status;
 }
 
 static int ensure_remote_connection(VTRVADriver *driver, VTRVAContext *context,
@@ -1425,6 +1458,9 @@ static int ensure_remote_connection(VTRVADriver *driver, VTRVAContext *context,
     rc = vtr_client_connect(&context->client, &client_config, error, error_size);
     if (rc == 0) {
         context->connection_dirty = false;
+        context->connected_width = surface->width;
+        context->connected_height = surface->height;
+        context->connected_fourcc = surface->fourcc;
         vtrva_log(driver, false,
                   "connected context %#x to %s (%s %ux%u %s)", context->id,
                   client_config.endpoint, client_config.codec, surface->width,
@@ -1433,8 +1469,6 @@ static int ensure_remote_connection(VTRVADriver *driver, VTRVAContext *context,
     }
     return rc;
 }
-
-#include "va_pipeline.h"
 
 static VAStatus vtrva_end_picture(VADriverContextP ctx, VAContextID context_id) {
     VTRVADriver *driver = driver_data(ctx);
@@ -1447,9 +1481,10 @@ static VAStatus vtrva_end_picture(VADriverContextP ctx, VAContextID context_id) 
     int rc = 0;
     VAStatus result = VA_STATUS_SUCCESS;
     if (!driver) return VA_STATUS_ERROR_INVALID_DISPLAY;
+    context = lock_context_io(driver, context_id);
+    if (!context)
+        return VA_STATUS_ERROR_INVALID_CONTEXT;
     pthread_mutex_lock(&driver->lock);
-    context = lookup_context_locked(driver, context_id);
-    if (!context) { pthread_mutex_unlock(&driver->lock); return VA_STATUS_ERROR_INVALID_CONTEXT; }
     VTRVAConfig *config = lookup_config_locked(driver, context->config_id);
     surface = lookup_surface_locked(driver, context->current_surface);
     coded = lookup_buffer_locked(driver, context->pending_coded_buffer);
@@ -1460,17 +1495,20 @@ static VAStatus vtrva_end_picture(VADriverContextP ctx, VAContextID context_id) 
         context->pending_coded_buffer = VA_INVALID_ID;
         context->force_keyframe = false;
         pthread_mutex_unlock(&driver->lock);
+        release_io_user(driver, context);
         return VA_STATUS_ERROR_INVALID_BUFFER;
     }
     config_copy = *config;
-    ++context->io_users;
     surface->status = VASurfaceRendering;
     surface->pending_context = context_id;
     coded->pending = true;
     coded->last_error = VA_STATUS_SUCCESS;
     pthread_mutex_unlock(&driver->lock);
 
-    pthread_mutex_lock(&context->io_lock);
+    if (context->connected_width != surface->width ||
+        context->connected_height != surface->height ||
+        context->connected_fourcc != surface->fourcc)
+        context->connection_dirty = true;
     /* Parameter changes start a new wire session after all old coded buffers
      * have completed. Reconnection must not discard in-flight output. */
     if (context->connection_dirty && context->client.connected) {
@@ -1481,7 +1519,7 @@ static VAStatus vtrva_end_picture(VADriverContextP ctx, VAContextID context_id) 
         else
             rc = vtr_client_flush(&context->client, error, sizeof(error));
     }
-    if (context->pending_count == ARRAY_SIZE(context->pending)) {
+    if (!rc && context->pending_count == ARRAY_SIZE(context->pending)) {
         result = complete_pending(driver, context, context->timeout_ms);
         if (result != VA_STATUS_SUCCESS) rc = -EIO;
     }
@@ -1547,6 +1585,7 @@ static VAStatus vtrva_query_surface_status(VADriverContextP ctx,
     VTRVADriver *driver = driver_data(ctx);
     VTRVASurface *surface;
     if (!driver || !status) return VA_STATUS_ERROR_INVALID_PARAMETER;
+    (void)sync_object(driver, surface_id, VA_INVALID_ID, 0);
     pthread_mutex_lock(&driver->lock);
     surface = lookup_surface_locked(driver, surface_id);
     if (!surface) {

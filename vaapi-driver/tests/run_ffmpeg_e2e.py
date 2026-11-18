@@ -65,7 +65,7 @@ def run_case(args: argparse.Namespace, codec: str, pixel_format: str,
             else:
                 env["LIBVA_DRIVER_NAME"] = "vtremote"
             rate_control = (["-qp", str(qp)] if qp is not None
-                            else ["-b:v", "3M"])
+                            else ["-rc_mode", "VBR", "-b:v", "3M", "-maxrate", "6M"])
             command = [
                 args.ffmpeg,
                 "-hide_banner",
@@ -78,6 +78,7 @@ def run_case(args: argparse.Namespace, codec: str, pixel_format: str,
                 "-frames:v", "3",
                 "-c:v", codec,
                 *rate_control,
+                "-g", "1",
                 "-bf", "0",
                 "-y",
                 "-f", muxer,

@@ -76,27 +76,33 @@ public struct SessionConfiguration: Sendable {
         maxFrameBytes: Int,
         field: String
     ) throws {
-        let rowBytes: Int
-        let totalRows: Int
+        let yRowBytes: Int
+        let chromaRowBytes: Int
+        let chromaRows: Int
         switch pixelFormat {
         case VTRPixelFormat.nv12:
-            rowBytes = width
-            totalRows = height + ((height + 1) / 2)
+            yRowBytes = width
+            chromaRowBytes = ((width + 1) / 2) * 2
+            chromaRows = (height + 1) / 2
         case VTRPixelFormat.p010:
-            rowBytes = try checkedProduct(width, 2, field: field)
-            totalRows = height + ((height + 1) / 2)
+            yRowBytes = width * 2
+            chromaRowBytes = ((width + 1) / 2) * 4
+            chromaRows = (height + 1) / 2
         case VTRPixelFormat.bgra, VTRPixelFormat.ayuv:
-            rowBytes = try checkedProduct(width, 4, field: field)
-            totalRows = height
+            yRowBytes = width * 4
+            chromaRowBytes = 0
+            chromaRows = 0
         case VTRPixelFormat.p210:
-            rowBytes = try checkedProduct(width, 2, field: field)
-            totalRows = try checkedProduct(height, 2, field: field)
+            yRowBytes = width * 2
+            chromaRowBytes = ((width + 1) / 2) * 4
+            chromaRows = height
         default:
             throw VTRemotedError.unsupported("pixel_format=\(pixelFormat)")
         }
 
-        let bytes = try checkedProduct(rowBytes, totalRows, field: field)
-        guard bytes <= maxFrameBytes else {
+        let yBytes = try checkedProduct(yRowBytes, height, field: field)
+        let chromaBytes = chromaRows > 0 ? try checkedProduct(chromaRowBytes, chromaRows, field: field) : 0
+        guard yBytes <= maxFrameBytes, chromaBytes <= maxFrameBytes - yBytes else {
             throw VTRemotedError.unsupported("\(field) exceeds max frame bytes")
         }
     }
@@ -188,6 +194,9 @@ public struct SessionConfiguration: Sendable {
             scaleMode = .stretch
         }
         pixelFormat = request.pixelFormat
+        if mode == .decode, pixelFormat == VTRPixelFormat.bgra || pixelFormat == VTRPixelFormat.ayuv {
+            throw VTRemotedError.unsupported("decode output requires bi-planar pixel format")
+        }
         timebase = request.timebase
         frameRate = request.frameRate
         options = SessionOptions(options: request.options)

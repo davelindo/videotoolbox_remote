@@ -43,10 +43,10 @@
                 let retained = Data(repeating: 0x7B, count: 32)
                 for pts in [Int64(3000), 4500] {
                     session.storePendingDecodeSideData(ptsTicks: pts,
-                        sideData: [.init(type: 1000, data: omitted)])
+                        sideData: [.init(type: 28, data: omitted)]) // AV_PKT_DATA_ICC_PROFILE
                 }
                 session.storePendingDecodeSideData(ptsTicks: 6000,
-                    sideData: [.init(type: 1000, data: retained)])
+                    sideData: [.init(type: 28, data: retained)])
                 session.handleDecoderOutput(status: kVTVideoDecoderReferenceMissingErr, flags: leadingDrop,
                     imageBuffer: nil, pts: CMTime(value: 1, timescale: 30), duration: .invalid)
                 session.handleDecoderOutput(status: noErr, flags: leadingDrop.union(.asynchronous),
@@ -60,7 +60,12 @@
                 XCTAssertEqual(sent.count, 1, mode)
                 XCTAssertEqual(sent.first?.0, mode == "decode" ? .frame : .packet, mode)
                 let body = try XCTUnwrap(sent.first?.1)
-                XCTAssertNotNil(body.range(of: retained), mode)
+                var expected = ByteWriter()
+                expected.write(UInt8(1))
+                expected.writeBE(UInt32(mode == "decode" ? 15 : 28))
+                expected.writeBE(UInt32(retained.count))
+                expected.write(retained)
+                XCTAssertEqual(Data(body.suffix(expected.data.count)), expected.data, mode)
                 XCTAssertNil(body.range(of: omitted), mode)
             }
         }

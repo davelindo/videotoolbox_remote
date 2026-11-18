@@ -217,8 +217,8 @@ static int vtremote_parse_bitrate(const char *val, int64_t *out)
     if (!val || !*val || !out)
         return AVERROR(EINVAL);
     char *end = NULL;
-    double d = av_strtod(val, &end);
-    if (end == val)
+    double d = strtod(val, &end);
+    if (end == val || !isfinite(d))
         return AVERROR(EINVAL);
 
     double mult = 1.0;
@@ -234,7 +234,7 @@ static int vtremote_parse_bitrate(const char *val, int64_t *out)
     }
 
     double res = d * mult;
-    if (res < 0.0 || res > (double)INT64_MAX)
+    if (res < 0.0 || res >= 0x1p63)
         return AVERROR(EINVAL);
     *out = (int64_t)res;
     return 0;
@@ -1890,6 +1890,7 @@ static int ost_add(Muxer *mux, const OptionsContext *o, enum AVMediaType type,
     enum VideoSyncMethod vsync_method = VSYNC_AUTO;
     const char *bsfs = NULL, *time_base = NULL, *codec_tag = NULL, *manual_disp = NULL;
     char *bsfs_buf = NULL;
+    char *vt_bsf = NULL;
     int vt_remote_transcode = 0;
     const AVCodec *vt_remote_out_enc = NULL;
     double qscale = -1;
@@ -2212,7 +2213,6 @@ static int ost_add(Muxer *mux, const OptionsContext *o, enum AVMediaType type,
             goto fail;
         }
         if (!bsfs || !strstr(bsfs, "vtremote_transcode")) {
-            char *vt_bsf = NULL;
             const char *vt_out_codec = NULL;
             const char *vt_pix_fmt = NULL;
             const char *vt_port = NULL;
@@ -2480,6 +2480,7 @@ static int ost_add(Muxer *mux, const OptionsContext *o, enum AVMediaType type,
 
 fail:
     av_freep(&bsfs_buf);
+    av_freep(&vt_bsf);
     av_dict_free(&encoder_opts);
 
     return ret;

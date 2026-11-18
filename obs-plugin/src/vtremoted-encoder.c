@@ -190,7 +190,9 @@ static bool connect_and_configure(struct vtremoted_encoder *enc) {
                                   voi->fps_den, voi->fps_num, voi->fps_num,
                                   voi->fps_den, enc->bitrate * 1000, gop_frames,
                                   enc->wire_compression)) {
-    warn("Failed to configure encoder");
+    char error[1024] = {0};
+    vtremoted_client_get_error(enc->client, error, sizeof(error));
+    warn("Failed to configure encoder%s%s", error[0] ? ": " : "", error);
     vtremoted_client_disconnect(enc->client);
     return false;
   }
@@ -269,7 +271,8 @@ static bool vtremoted_encode(void *data, struct encoder_frame *frame,
 
   /* Fill packet */
   da_resize(enc->packet_data, pkt_size);
-  memcpy(enc->packet_data.array, pkt_data, pkt_size);
+  if (pkt_size)
+    memcpy(enc->packet_data.array, pkt_data, pkt_size);
 
   packet->data = enc->packet_data.array;
   packet->size = pkt_size;

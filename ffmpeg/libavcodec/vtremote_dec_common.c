@@ -282,8 +282,10 @@ static int vtremote_add_opt(VTRemoteKV **opts, int *count, int *cap,
     if (*count >= *cap) {
         int new_cap = (*cap == 0) ? 16 : (*cap * 2);
         VTRemoteKV *tmp = av_realloc_array(*opts, new_cap, sizeof(**opts));
-        if (!tmp)
+        if (!tmp) {
+            av_free(value);
             return AVERROR(ENOMEM);
+        }
         *opts = tmp;
         *cap = new_cap;
     }
@@ -599,9 +601,10 @@ static int vtremote_handshake(AVCodecContext *avctx)
 
     VTRemoteWBuf payload;
     vtremote_wbuf_init(&payload);
-    vtremote_payload_hello(&payload, s->token, codec_name_for_id(s->codec_id),
-                          "ffmpeg-vtremote", FFMPEG_VERSION);
-    int ret = vtremote_send_msg(s, VTREMOTE_MSG_HELLO, &payload);
+    int ret = vtremote_payload_hello(&payload, s->token, codec_name_for_id(s->codec_id),
+                                    "ffmpeg-vtremote", FFMPEG_VERSION);
+    if (ret >= 0)
+        ret = vtremote_send_msg(s, VTREMOTE_MSG_HELLO, &payload);
     vtremote_wbuf_free(&payload);
     if (ret < 0) {
         VTR_CLOSE_SOCKET(fd);
@@ -639,6 +642,7 @@ static int vtremote_handshake(AVCodecContext *avctx)
     int opt_count = 0;
     int opt_cap = 0;
     char *tmp = NULL;
+    VTRemoteWBuf cfg = {0};
 
     tmp = av_strdup("decode");
     ret = vtremote_add_opt(&opts, &opt_count, &opt_cap, "mode", tmp);
@@ -718,16 +722,13 @@ static int vtremote_handshake(AVCodecContext *avctx)
         }
     }
 
-    VTRemoteWBuf cfg;
-    vtremote_wbuf_init(&cfg);
-    vtremote_payload_configure(&cfg,
-                              avctx->width, avctx->height,
-                              wire_pix_fmt,
-                              tb.num, tb.den,
-                              avctx->framerate.num, avctx->framerate.den,
-                              opt_count ? opts : NULL, opt_count,
-                              avctx->extradata, avctx->extradata_size);
-    ret = vtremote_send_msg(s, VTREMOTE_MSG_CONFIGURE, &cfg);
+    ret = vtremote_payload_configure(&cfg, avctx->width, avctx->height,
+                                    wire_pix_fmt, tb.num, tb.den,
+                                    avctx->framerate.num, avctx->framerate.den,
+                                    opts, opt_count,
+                                    avctx->extradata, avctx->extradata_size);
+    if (ret >= 0)
+        ret = vtremote_send_msg(s, VTREMOTE_MSG_CONFIGURE, &cfg);
 cfg_fail:
     for (int i = 0; i < opt_count; i++)
         av_freep(&opts[i].value);
@@ -890,12 +891,11 @@ int ff_vtremote_dec_init(AVCodecContext *avctx)
     ret = vtremote_net_init();
     if (ret < 0)
         return ret;
+    s->net_initialized = 1;
 
     ret = vtremote_handshake(avctx);
     if (ret >= 0)
         ret = vtremote_setup_hw_frames(avctx);
-    if (ret < 0)
-        vtremote_net_close();
     return ret;
 }
 
@@ -904,7 +904,7 @@ void ff_vtremote_dec_flush(AVCodecContext *avctx)
     VTRemoteDecContext *s = avctx->priv_data;
     /* Wire FLUSH is terminal. Discard both remote codec state and unread bytes
      * by reconnecting lazily when the caller resumes after an API reset. */
-    if (s->fd >= 0)
+    if (s->net_initialized && s->fd >= 0)
         VTR_CLOSE_SOCKET(s->fd);
     s->fd = -1;
     s->connected = 0;
@@ -929,11 +929,15 @@ int ff_vtremote_dec_close(AVCodecContext *avctx)
     VTRemoteDecContext *s = avctx->priv_data;
     if (vtremote_log_enabled(s, AV_LOG_VERBOSE))
         av_log(avctx, AV_LOG_VERBOSE, "VT remote decode close\n");
-    if (s->fd >= 0)
-        VTR_CLOSE_SOCKET(s->fd);
+    if (s->net_initialized) {
+        if (s->fd >= 0)
+            VTR_CLOSE_SOCKET(s->fd);
+        s->fd = -1;
+        s->net_initialized = 0;
+        vtremote_net_close();
+    }
     if (s->owns_hw_frames_ctx)
         av_buffer_unref(&avctx->hw_frames_ctx);
-    vtremote_net_close();
     vtremote_wbuf_free(&s->pkt_buf);
     av_freep(&s->comp_buf[0]);
     av_freep(&s->comp_buf[1]);
@@ -964,6 +968,8 @@ static void add_side_data_to_frame(AVFrame *frame, const VTRemoteFrameView *view
 
     for (int i = 0; i < view->side_data_count; i++) {
         enum AVFrameSideDataType type = (enum AVFrameSideDataType)view->side_data[i].type;
+        if (!av_frame_side_data_desc(type))
+            continue;
         AVFrameSideData *sd = av_frame_new_side_data(frame, type, view->side_data[i].size);
         if (!sd) {
             av_log(NULL, AV_LOG_WARNING, "vtremote: failed to allocate side data type=%d size=%d\n",
@@ -1128,6 +1134,9 @@ static int fill_hw_frame_from_view(AVCodecContext *avctx,
     ret = av_hwframe_get_buffer(avctx->hw_frames_ctx, frame, 0);
     if (ret < 0)
         return ret;
+    ret = ff_decode_frame_props(avctx, frame);
+    if (ret < 0)
+        goto fail;
 
     pixbuf = (CVPixelBufferRef)frame->data[3];
     if (!pixbuf) {
@@ -1200,7 +1209,6 @@ static int fill_hw_frame_from_view(AVCodecContext *avctx,
     frame->pts = view->pts;
     frame->duration = view->duration;
     frame->pkt_dts = frame->pts;
-    add_side_data_to_frame(frame, view);
     ret = 0;
 
 unlock:
@@ -1258,7 +1266,6 @@ static int fill_frame_from_view(AVCodecContext *avctx, AVFrame *frame, const VTR
                                  FFMIN(src_stride, dst_stride), rows);
     }
 
-    add_side_data_to_frame(frame, view);
     return 0;
 }
 
@@ -1329,7 +1336,6 @@ static int fill_frame_from_compressed_view(AVCodecContext *avctx, VTRemoteDecCon
         }
     }
 
-    add_side_data_to_frame(frame, view);
     return 0;
 }
 
@@ -1400,12 +1406,12 @@ static int queue_decode_input(AVCodecContext *avctx)
     VTRemoteSideData side_data[16];
     int count = 0;
     if (packet.side_data_elems) {
-        if (s->server_caps & VTREMOTE_CAP_SIDE_DATA_V2) {
+        if (s->server_caps & VTREMOTE_CAP_SIDE_DATA_TYPED_V1) {
             count = packet_side_data_from_avpacket(avctx, &packet, side_data,
                                                    FF_ARRAY_ELEMS(side_data));
         } else if (!s->warned_packet_side_data_no_cap) {
             av_log(avctx, AV_LOG_WARNING,
-                   "Remote server does not advertise side_data.v2; dropping packet side data\n");
+                   "Remote server does not advertise side_data.typed.v1; dropping packet side data\n");
             s->warned_packet_side_data_no_cap = 1;
         }
     }
@@ -1517,6 +1523,8 @@ int ff_vtremote_receive_frame(AVCodecContext *avctx, AVFrame *frame)
                                              : fill_frame_from_view(avctx, frame, &view);
                 if (ret < 0)
                     goto fail;
+                if (s->server_caps & VTREMOTE_CAP_SIDE_DATA_TYPED_V1)
+                    add_side_data_to_frame(frame, &view);
                 if (s->decode_async)
                     enforce_monotonic_pts(s, frame);
                 s->frames_recv++;

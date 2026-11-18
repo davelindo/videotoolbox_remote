@@ -131,7 +131,9 @@ public final class VTRServer {
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = port.bigEndian
-        addr.sin_addr = in_addr(s_addr: inet_addr(ipAddress))
+        guard inet_pton(AF_INET, ipAddress, &addr.sin_addr) == 1 else {
+            throw VTRemotedError.protocolViolation("invalid IPv4 listen address")
+        }
 
         var addrCopy = addr
         let bindResult = withUnsafePointer(to: &addrCopy) {
@@ -158,7 +160,7 @@ public final class VTRServer {
             }
             if clientFd < 0 {
                 let code = errno
-                if code == EINTR { continue }
+                if code == EINTR || code == ECONNABORTED { continue }
                 if code == EMFILE || code == ENFILE || code == ENOBUFS || code == ENOMEM {
                     logger.error("accept temporarily unavailable: \(String(cString: strerror(code)))")
                     Thread.sleep(forTimeInterval: 0.1)

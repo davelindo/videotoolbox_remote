@@ -3,6 +3,7 @@
 
 #include <dlfcn.h>
 #include <errno.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -33,6 +34,10 @@ typedef struct RemoteEncoderOptions {
     char entropy[8];
     char gop[32];
     char global_quality[16];
+    char bitrate[16];
+    char maxrate[16];
+    char bufsize[16];
+    char bframes[8];
     bool constant_bit_rate;
     bool a53_cc;
     bool closed_gop;
@@ -688,7 +693,7 @@ static bool parse_rate_value(const char *text, unsigned *value)
     }
     errno = 0;
     parsed = strtod(text, &end);
-    if (errno != 0 || end == text || parsed < 0.0) {
+    if (errno != 0 || end == text || !isfinite(parsed) || parsed < 0.0) {
         return false;
     }
     if (*end != '\0') {
@@ -892,17 +897,26 @@ static bool translate_encoder_options(int argc, char *const argv[],
     unsigned parsed;
     unsigned parsed_bitrate = 0;
     unsigned parsed_maxrate = 0;
-    unsigned ignored_rate;
+    unsigned parsed_bufsize = 0;
+    unsigned parsed_bframes = 0;
     size_t index;
 
     memset(translated, 0, sizeof(*translated));
     if ((bitrate != NULL && !parse_rate_value(bitrate, &parsed_bitrate)) ||
         (maxrate != NULL && !parse_rate_value(maxrate, &parsed_maxrate)) ||
-        (bufsize != NULL && !parse_rate_value(bufsize, &ignored_rate)) ||
+        (bufsize != NULL && !parse_rate_value(bufsize, &parsed_bufsize)) ||
         (bframes != NULL &&
-         (!parse_unsigned_value(bframes, 16, &parsed)))) {
+         (!parse_unsigned_value(bframes, 16, &parsed_bframes)))) {
         return false;
     }
+    if (bitrate)
+        snprintf(translated->bitrate, sizeof(translated->bitrate), "%u", parsed_bitrate);
+    if (maxrate)
+        snprintf(translated->maxrate, sizeof(translated->maxrate), "%u", parsed_maxrate);
+    if (bufsize)
+        snprintf(translated->bufsize, sizeof(translated->bufsize), "%u", parsed_bufsize);
+    if (bframes)
+        snprintf(translated->bframes, sizeof(translated->bframes), "%u", parsed_bframes);
     if (!translate_profile(encoder,
                            last_stream_option(argc, argv, "-profile",
                                               codec_option),
@@ -941,7 +955,7 @@ static bool translate_encoder_options(int argc, char *const argv[],
         if (!parse_unsigned_value(qp, 51, &parsed)) {
             return false;
         }
-        parsed = 1U + (51U - parsed) * 99U / 50U;
+        parsed = parsed ? 1U + (51U - parsed) * 99U / 50U : 100U;
         (void)snprintf(translated->global_quality,
                        sizeof(translated->global_quality), "%u", parsed);
     } else {
@@ -997,10 +1011,8 @@ static int append_filter_option(char *buffer, size_t size, size_t *used,
     return 0;
 }
 
-static char *make_filter_argument(int argc, char *const argv[],
-                                  const RemoteGraph *graph,
+static char *make_filter_argument(const RemoteGraph *graph,
                                   const char *encoder,
-                                  const char *codec_option,
                                   const RemoteEncoderOptions *options)
 {
     char *argument = malloc(1024);
@@ -1026,19 +1038,15 @@ static char *make_filter_argument(int argc, char *const argv[],
     }
     used = (size_t)written;
     if (append_filter_option(argument, 1024, &used, "vt_remote_bitrate",
-                             last_stream_option(argc, argv, "-b",
-                                                codec_option)) < 0 ||
+                             options->bitrate) < 0 ||
         append_filter_option(argument, 1024, &used, "vt_remote_maxrate",
-                             last_stream_option(argc, argv, "-maxrate",
-                                                codec_option)) < 0 ||
+                             options->maxrate) < 0 ||
         append_filter_option(argument, 1024, &used, "vt_remote_bufsize",
-                             last_stream_option(argc, argv, "-bufsize",
-                                                codec_option)) < 0 ||
+                             options->bufsize) < 0 ||
         append_filter_option(argument, 1024, &used, "vt_remote_gop",
                              options->gop) < 0 ||
         append_filter_option(argument, 1024, &used, "vt_remote_max_b_frames",
-                             last_stream_option(argc, argv, "-bf",
-                                                codec_option)) < 0 ||
+                             options->bframes) < 0 ||
         append_filter_option(argument, 1024, &used, "vt_remote_profile",
                              options->profile) < 0 ||
         append_filter_option(argument, 1024, &used, "vt_remote_level",
@@ -1146,6 +1154,13 @@ int main(int argc, char *argv[])
         runtime_supported &&
         encoder_index > 0 && input_codec_index > 0) {
         for (input_index = 1; input_index + 1 < argc; ++input_index) {
+            if (is_option(argv[input_index], "-bsf") ||
+                is_option(argv[input_index], "-vbsf") ||
+                is_option(argv[input_index], "-vf") ||
+                is_option(argv[input_index], "-filter")) {
+                unsupported_graph = true;
+                break;
+            }
             if (strcmp(argv[input_index], "-filter_complex") != 0) {
                 continue;
             }
@@ -1183,9 +1198,8 @@ int main(int argc, char *argv[])
         }
         if (!unsupported_graph && graph.option_index >= 0 &&
             mapped_outputs == 1 && options_supported) {
-            filter_argument = make_filter_argument(argc, argv, &graph,
+            filter_argument = make_filter_argument(&graph,
                                                    argv[encoder_index],
-                                                   argv[encoder_index - 1],
                                                    &encoder_options);
             bsf_option = make_bsf_option(argv[encoder_index - 1]);
             if (filter_argument != NULL && bsf_option != NULL) {

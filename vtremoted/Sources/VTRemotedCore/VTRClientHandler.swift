@@ -94,6 +94,7 @@ public final class VTRClientHandler: @unchecked Sendable {
 
     private func sendTranscodePacketAckIfNeeded(for configuration: SessionConfiguration) throws {
         guard shouldSendPacketAck(for: configuration) else { return }
+        try failure.check()
         try messageIO.send(type: .packetAck, body: Data())
         stats.update { $0.bytesOut += Int64(VTRProtocol.headerSize) }
     }
@@ -150,9 +151,7 @@ public final class VTRClientHandler: @unchecked Sendable {
             do {
                 try mainLoop()
             } catch {
-                if failure.record(error) {
-                    sendError(code: 2, message: "processing failed: \(error)")
-                }
+                sendError(code: 5, message: "processing failed: \(error)")
                 throw error
             }
         } catch {
@@ -161,7 +160,7 @@ public final class VTRClientHandler: @unchecked Sendable {
     }
 
     private func sendError(code: UInt32, message: String) {
-        failure.record(VTRemotedError.protocolViolation(message))
+        guard failure.record(VTRemotedError.protocolViolation(message)) else { return }
         let body = ErrorResponse(code: code, message: message).encode()
         // Best-effort: if the socket is already dead, we'll just log on our side.
         do {
@@ -250,7 +249,11 @@ public final class VTRClientHandler: @unchecked Sendable {
         }
         let hello = try HelloRequest.decode(payload)
         clientName = hello.clientName
-        codec = VideoCodec(rawValue: hello.codec) ?? .h264
+        guard let requestedCodec = VideoCodec(rawValue: hello.codec) else {
+            sendError(code: 4, message: "unsupported HELLO codec")
+            throw VTRemotedError.unsupported("HELLO codec")
+        }
+        codec = requestedCodec
 
         let requireToken = !expectedToken.isEmpty
         let authed = !requireToken || (hello.token == expectedToken)
@@ -281,7 +284,7 @@ public final class VTRClientHandler: @unchecked Sendable {
             try performConfigure()
         } catch {
             logger.error("CONFIGURE failed error=\(error)")
-            if !failure.hasFailed { sendError(code: 1, message: "configure failed: \(error)") }
+            if !failure.hasFailed { sendError(code: 3, message: "configure failed: \(error)") }
             throw error
         }
     }
@@ -323,7 +326,7 @@ public final class VTRClientHandler: @unchecked Sendable {
         let session = sessionFactory { [weak self] type, bodyParts in
             guard let self else { return }
             if type == .error {
-                failure.record(VTRemotedError.protocolViolation("asynchronous codec failure"))
+                guard failure.record(VTRemotedError.protocolViolation("asynchronous codec failure")) else { return }
             } else {
                 try failure.check()
             }
@@ -450,6 +453,7 @@ public final class VTRClientHandler: @unchecked Sendable {
                     return
                 case .ping:
                     try streamIO.skip(length: messageLength)
+                    try failure.check()
                     try messageIO.send(type: .pong, body: Data())
                     stats.update { $0.bytesOut += Int64(VTRProtocol.headerSize) }
                 default:
@@ -484,6 +488,7 @@ public final class VTRClientHandler: @unchecked Sendable {
                 try sendDoneAndLog()
                 return
             case .ping:
+                try failure.check()
                 try messageIO.send(type: .pong, body: Data())
                 stats.update { $0.bytesOut += Int64(VTRProtocol.headerSize) }
             default:

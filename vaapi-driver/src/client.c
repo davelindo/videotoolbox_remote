@@ -248,6 +248,8 @@ static int parse_endpoint(const char *endpoint, char *host, size_t host_size,
     return 0;
 }
 
+static int64_t now_ms(void);
+
 static int socket_connect_timeout(const char *endpoint, int timeout_ms,
                                   char *error, size_t error_size) {
     char host[384];
@@ -273,6 +275,7 @@ static int socket_connect_timeout(const char *endpoint, int timeout_ms,
         return -EHOSTUNREACH;
     }
 
+    const int64_t deadline = now_ms() + timeout_ms;
     for (it = addresses; it; it = it->ai_next) {
         int flags;
         int rc;
@@ -280,6 +283,10 @@ static int socket_connect_timeout(const char *endpoint, int timeout_ms,
         socklen_t optlen;
         int so_error = 0;
 
+        if (now_ms() >= deadline) {
+            last_error = ETIMEDOUT;
+            break;
+        }
         fd = socket(it->ai_family, it->ai_socktype, it->ai_protocol);
         if (fd < 0) {
             last_error = errno;
@@ -293,7 +300,7 @@ static int socket_connect_timeout(const char *endpoint, int timeout_ms,
             continue;
         }
         rc = connect(fd, it->ai_addr, it->ai_addrlen);
-        if (rc < 0 && errno != EINPROGRESS) {
+        if (rc < 0 && errno != EINPROGRESS && errno != EINTR) {
             last_error = errno;
             close(fd);
             fd = -1;
@@ -303,7 +310,10 @@ static int socket_connect_timeout(const char *endpoint, int timeout_ms,
             pfd.fd = fd;
             pfd.events = POLLOUT;
             pfd.revents = 0;
-            rc = poll(&pfd, 1, timeout_ms);
+            do {
+                int64_t remaining = deadline - now_ms();
+                rc = remaining > 0 ? poll(&pfd, 1, (int)remaining) : 0;
+            } while (rc < 0 && errno == EINTR);
             if (rc == 0) {
                 last_error = ETIMEDOUT;
                 close(fd);
@@ -732,7 +742,7 @@ int vtr_client_connect(VTRClient *client, const VTRClientConfig *config,
     snprintf(max_rate, sizeof(max_rate), "%u", config->max_rate ? config->max_rate : config->bit_rate);
     snprintf(gop, sizeof(gop), "%u", config->gop_size ? config->gop_size : 60);
     snprintf(bframes, sizeof(bframes), "%u", config->max_b_frames);
-    snprintf(profile, sizeof(profile), "%d", config->profile);
+    snprintf(profile, sizeof(profile), "%d", config->profile == -1 ? -99 : config->profile);
     snprintf(global_quality, sizeof(global_quality), "%u", config->global_quality);
     snprintf(realtime, sizeof(realtime), "%d", config->realtime ? 1 : 0);
     snprintf(wire_compression, sizeof(wire_compression), "%d",

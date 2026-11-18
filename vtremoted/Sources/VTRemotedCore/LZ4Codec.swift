@@ -152,9 +152,11 @@ public enum LZ4Codec {
 
     public static func compress(_ data: Data) -> Data? {
         guard !data.isEmpty else { return Data() }
+        guard data.count <= Int(Int32.max) else { return nil }
         let api = requireAPI("compress")
 
         let bound = Int(api.compressBound(Int32(data.count)))
+        guard bound > 0 else { return nil }
         var out = Data(count: bound)
         var written: Int32 = 0
         out.withUnsafeMutableBytes { outPtr in
@@ -187,9 +189,11 @@ public enum LZ4Codec {
     }
 
     public static func compress(_ src: UnsafeRawPointer, count: Int) -> Data? {
+        guard count >= 0, count <= Int(Int32.max) else { return nil }
         guard count > 0 else { return Data() }
         let api = requireAPI("compress")
         let bound = Int(api.compressBound(Int32(count)))
+        guard bound > 0 else { return nil }
         var out = Data(count: bound)
         var written: Int32 = 0
         out.withUnsafeMutableBytes { outPtr in
@@ -231,6 +235,7 @@ public enum LZ4Codec {
     }
 
     public static func decompress(_ data: Data, into dst: UnsafeMutableRawPointer, expectedSize: Int) -> Bool {
+        guard expectedSize >= 0, expectedSize <= Int(Int32.max), data.count <= Int(Int32.max) else { return false }
         guard expectedSize > 0 else { return true }
         let api = requireAPI("decompress")
         var decoded: Int32 = 0
@@ -253,6 +258,7 @@ public enum LZ4Codec {
         into dst: UnsafeMutableRawPointer,
         expectedSize: Int
     ) -> Bool {
+        guard expectedSize >= 0, expectedSize <= Int(Int32.max), src.count <= Int(Int32.max) else { return false }
         guard expectedSize > 0 else { return true }
         let api = requireAPI("decompressRaw")
         guard let srcBase = src.baseAddress else { return false }

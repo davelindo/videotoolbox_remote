@@ -168,9 +168,9 @@ if(APPLE)
         DESTINATION "${OBS_PLUGIN_DIR}/obs-vtremoted.plugin/Contents/Resources"
     )
 elseif(WIN32)
-    set(OBS_PLUGIN_DIR "$ENV{APPDATA}/obs-studio/plugins")
+    set(OBS_PLUGIN_DIR "$ENV{ProgramData}/obs-studio/plugins")
     install(TARGETS obs-vtremoted
-        LIBRARY DESTINATION "${OBS_PLUGIN_DIR}/obs-vtremoted/bin"
+        LIBRARY DESTINATION "${OBS_PLUGIN_DIR}/obs-vtremoted/bin/64bit"
     )
     install(DIRECTORY data/
         DESTINATION "${OBS_PLUGIN_DIR}/obs-vtremoted/data"
@@ -178,7 +178,7 @@ elseif(WIN32)
 else()
     set(OBS_PLUGIN_DIR "$ENV{HOME}/.config/obs-studio/plugins")
     install(TARGETS obs-vtremoted
-        LIBRARY DESTINATION "${OBS_PLUGIN_DIR}/obs-vtremoted/bin"
+        LIBRARY DESTINATION "${OBS_PLUGIN_DIR}/obs-vtremoted/bin/64bit"
     )
     install(DIRECTORY data/
         DESTINATION "${OBS_PLUGIN_DIR}/obs-vtremoted/data"

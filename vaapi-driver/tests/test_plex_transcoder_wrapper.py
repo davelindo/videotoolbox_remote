@@ -146,6 +146,14 @@ def main():
         in cqp_output[cqp_output.index("-bsf:0") + 1]
     ), cqp_output
 
+    cqp_arguments[cqp_arguments.index("-qp:0") + 1] = "0"
+    code, cqp_output, error = run(args.wrapper, cqp_arguments)
+    assert code == 0, (code, cqp_output, error)
+    assert (
+        ":vt_remote_global_quality=100:vt_remote_a53_cc=1"
+        in cqp_output[cqp_output.index("-bsf:0") + 1]
+    ), cqp_output
+
     code, output, error = run(args.wrapper, plex_arguments, enabled=False)
     assert code == 2, (code, output, error)
     assert output == ["/real/Plex Transcoder", *plex_arguments], output

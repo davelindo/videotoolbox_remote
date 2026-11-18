@@ -7,6 +7,15 @@ The non-version `nightly` tag is intentionally excluded.
 
 ## [Unreleased]
 
+## [v0.10.20] - 2026-11-18
+
+### Fixed
+- Fix FFmpeg build dependencies, remote handshake cleanup, and EOF draining with older servers.
+- Translate side-data types between remote encode and decode messages, and preserve stream metadata on hardware decode output.
+- Correct VideoToolbox NAL framing, frame ordering, color range, and session teardown.
+- Fix VA-API VBR on subsequent IDRs, synchronize driver operations, and preserve the native Plex transcoder during wrapper upgrades.
+- Fix Plex QP 0 and bitrate translation, and support hostnames and bounded connects in the OBS client.
+
 ## [v0.10.19] - 2026-11-18
 
 ### Changed

@@ -16,7 +16,7 @@
         private func fail(_ error: Error) {
             guard failure.record(error) else { return }
             logger.error("fatal codec error: \(error)")
-            let body = ErrorResponse(code: 2, message: "codec failed: \(error)").encode()
+            let body = ErrorResponse(code: 5, message: "codec failed: \(error)").encode()
             do { try send(.error, [body]) }
             catch { logger.error("terminal error send failed: \(error)") }
         }
@@ -32,7 +32,9 @@
         private var compressionSession: VTCompressionSession?
         private var decompressionSession: VTDecompressionSession?
         private var formatDescription: CMFormatDescription?
-        private var nalLengthField: Int = 4
+        private let decodeOutputLock = NSLock()
+        private var decoderNalLengthField = 4
+        private var encoderNalLengthField = 4
         private var cvPixelFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         private var encoderExtradata: Data?
         private var encoderCodec: VideoCodec = .h264
@@ -88,6 +90,31 @@
         struct WireSideData {
             let type: UInt32
             let data: Data
+        }
+
+        // FFmpeg's AVFrameSideDataType and AVPacketSideDataType use distinct IDs.
+        // Map only types with the same payload representation in both enums.
+        private static let frameToPacketSideData: [UInt32: UInt32] = [
+            1: 23, // A53 CC
+            2: 6,  // Stereo3D
+            6: 5,  // Display matrix
+            7: 26, // AFD
+            11: 20, // Mastering display metadata
+            14: 22, // Content light level
+            15: 28, // ICC profile
+            16: 30, // S12M timecode
+            17: 31, // HDR10+
+            26: 35  // Ambient viewing environment
+        ]
+        private static let packetToFrameSideData = Dictionary(
+            uniqueKeysWithValues: frameToPacketSideData.map { ($0.value, $0.key) }
+        )
+
+        private static func translateSideData(_ records: [WireSideData], using types: [UInt32: UInt32])
+            -> [WireSideData] {
+            records.compactMap { record in
+                types[record.type].map { WireSideData(type: $0, data: record.data) }
+            }
         }
 
         private class FrameContext {
@@ -220,8 +247,9 @@
         private static func writeWireSideData(_ sideData: [WireSideData]) -> Data {
             guard !sideData.isEmpty else { return Data() }
             var writer = ByteWriter()
-            writer.write(UInt8(clamping: sideData.count))
-            for record in sideData.prefix(16) {
+            let records = sideData.prefix(16)
+            writer.write(UInt8(records.count))
+            for record in records {
                 writer.writeBE(record.type)
                 writer.writeBE(UInt32(clamping: record.data.count))
                 writer.write(record.data)
@@ -317,7 +345,7 @@
             }
             let bytesPerSample = (pixelFormat == VTRPixelFormat.p010 || pixelFormat == VTRPixelFormat.p210) ? 2 : 1
             let rowBytes = width * bytesPerSample
-            return (rowBytes, rowBytes)
+            return (rowBytes, ((width + 1) / 2) * 2 * bytesPerSample)
         }
 
         private static func expectedPlaneCount(pixelFormat: UInt8) -> UInt8 {
@@ -369,6 +397,8 @@
         func configure(_ configuration: SessionConfiguration) throws -> Data {
             config = configuration
             encoderExtradata = nil
+            decoderNalLengthField = 4
+            encoderNalLengthField = 4
             callbackLock.lock()
             forceKeyframeNext = false
             callbackLock.unlock()
@@ -589,7 +619,10 @@
             let planeIterations = Int(planes)
             let errorSlots = UnsafeMutableBufferPointer<Error?>.allocate(capacity: planeIterations)
             errorSlots.initialize(repeating: nil)
-            defer { errorSlots.deallocate() }
+            defer {
+                errorSlots.baseAddress?.deinitialize(count: planeIterations)
+                errorSlots.deallocate()
+            }
             DispatchQueue.concurrentPerform(iterations: planeIterations) { plane in
                 do {
                     if plane == 0 {
@@ -929,7 +962,10 @@
                 if config.codec == .h264 {
                     try updateH264DecoderFormat(annexB, config: config)
                 }
-                return AnnexB.toLengthPrefixed(annexB, lengthSize: nalLengthField, pool: inputBuffers)
+                return AnnexB.toLengthPrefixed(annexB, lengthSize: decoderNalLengthField, pool: inputBuffers)
+            }
+            guard !lengthPrefixed.isEmpty else {
+                throw VTRemotedError.protocolViolation("empty packet or NAL length exceeds decoder format")
             }
             guard let session = decompressionSession, let fmt = formatDescription else {
                 throw VTRemotedError.videoToolboxUnavailable
@@ -1021,18 +1057,24 @@
         }
 
         func shutdown() {
+            if let session = decompressionSession {
+                _ = VTDecompressionSessionWaitForAsynchronousFrames(session)
+                VTDecompressionSessionInvalidate(session)
+                decompressionSession = nil
+            }
             if let session = compressionSession {
                 VTCompressionSessionInvalidate(session)
-            }
-            if let session = decompressionSession {
-                VTDecompressionSessionInvalidate(session)
+                compressionSession = nil
             }
             if config?.mode == .decode {
                 logger.info(decodeStages.summary())
                 let buffers = decodeBuffers.snapshot
                 logger.info("DECODE_BUFFERS allocations=\(buffers.allocations) retained_bytes=\(buffers.retainedBytes)")
             }
-            transcodeTransferSession = nil
+            if let transfer = transcodeTransferSession {
+                VTPixelTransferSessionInvalidate(transfer)
+                transcodeTransferSession = nil
+            }
             transcodePixelTransfer.reset()
             hdrToneMapper = nil
             transcodeOutputPool = nil
@@ -1055,7 +1097,7 @@
                 throw VTRemotedError.unsupported("h264 requires nv12")
             }
 
-            cvPixelFormat = try pickCVPixelFormat(pixelFormat: config.pixelFormat)
+            cvPixelFormat = try pickCVPixelFormat(config)
 
             func makeSession() throws -> VTCompressionSession {
                 // Setup session properties
@@ -1127,6 +1169,10 @@
                 guard status == noErr, let session = created else {
                     throw VTRemotedError.ioError(code: Int32(status), message: "VTCompressionSessionCreate failed")
                 }
+                var prepared = false
+                defer {
+                    if !prepared { VTCompressionSessionInvalidate(session) }
+                }
 
                 try configureProperties(session: session, config: config, codec: codec)
 
@@ -1135,11 +1181,12 @@
                     throw VTRemotedError.ioError(code: Int32(preparation), message: "PrepareToEncodeFrames failed")
                 }
 
-                configureEncodeOutputOrdering(session: session, config: config)
+                configureEncodeOutputOrdering(session: session, config: config, codec: codec)
 
                 if logger.level.rawValue >= LogLevel.debug.rawValue {
                     dumpSessionProperties(session: session)
                 }
+                prepared = true
                 return session
             }
 
@@ -1182,7 +1229,7 @@
             }
 
             try configureBitrate(session: session, config: config, codec: codec)
-            try configureFrameProperties(session: session, config: config)
+            try configureFrameProperties(session: session, config: config, hasBFrames: hasBFrames)
             try configureColors(session: session, config: config)
             try configureProfileLevel(
                 session: session,
@@ -1363,15 +1410,15 @@
             }
         }
 
-        private func configureFrameProperties(session: VTCompressionSession, config: SessionConfiguration) throws {
+        private func configureFrameProperties(session: VTCompressionSession, config: SessionConfiguration,
+                                              hasBFrames: Bool) throws {
             // Respect max_b_frames by explicitly toggling frame reordering and delay.
             if config.options.maxBFrames >= 0 {
-                let allowReorder = config.options.maxBFrames > 0
                 try setProp(session,
                             kVTCompressionPropertyKey_AllowFrameReordering,
-                            allowReorder ? kCFBooleanTrue! : kCFBooleanFalse!,
+                            hasBFrames ? kCFBooleanTrue! : kCFBooleanFalse!,
                             "allow_frame_reordering")
-                var delay = Int32(clamping: max(0, config.options.maxBFrames))
+                var delay = hasBFrames ? Int32(clamping: config.options.maxBFrames) : 0
                 let num = CFNumberCreate(kCFAllocatorDefault, .intType, &delay)
                 try setProp(session,
                             kVTCompressionPropertyKey_MaxFrameDelayCount,
@@ -1509,12 +1556,15 @@
             return nil
         }
 
-        private func configureEncodeOutputOrdering(session: VTCompressionSession, config: SessionConfiguration) {
+        private func configureEncodeOutputOrdering(session: VTCompressionSession, config: SessionConfiguration,
+                                                   codec: VideoCodec) {
             // Prefer the encoder's reported properties when available, falling back to requested values.
             let reportedAllowReorder = boolCompressionProp(session, key: kVTCompressionPropertyKey_AllowFrameReordering)
             let reportedDelay = intCompressionProp(session, key: kVTCompressionPropertyKey_MaxFrameDelayCount)
 
-            let requestedDelay = max(0, config.options.maxBFrames)
+            let baseline = codec == .h264 &&
+                (config.options.profile & 0xFF) == VideoToolboxConstants.AV_PROFILE_H264_BASELINE
+            let requestedDelay = baseline ? 0 : max(0, config.options.maxBFrames)
             let allowReorder = reportedAllowReorder ?? (requestedDelay > 0)
             let frameDelay = max(0, reportedDelay ?? requestedDelay)
 
@@ -1537,7 +1587,9 @@
             // If we already observed a nominal duration, (re)compute the DTS shift now.
             if useDtsReorder, nominalFrameDurTicks > 0 {
                 // Add a small cushion to cover mixed 41/42ms timecode patterns (e.g. 24000/1001 into 1/1000).
-                encodeDtsOffsetTicks = Int64(encodeDtsReorderDepth + 1) * nominalFrameDurTicks
+                let (offset, overflow) = Int64(encodeDtsReorderDepth + 1)
+                    .multipliedReportingOverflow(by: nominalFrameDurTicks)
+                encodeDtsOffsetTicks = overflow ? 0 : offset
                 logger.info(
                     "ENCODE dts_offset_ticks=\(encodeDtsOffsetTicks) " +
                         "(depth=\(encodeDtsReorderDepth) dur_ticks=\(nominalFrameDurTicks))"
@@ -1688,7 +1740,10 @@
 
             do {
                 // Avoid copying potentially large Annex-B payload into the meta buffer.
-                let sideDataBlob = Self.writeWireSideData(pkt.sideData)
+                let sideData = config?.mode == .encode
+                    ? Self.translateSideData(pkt.sideData, using: Self.frameToPacketSideData)
+                    : pkt.sideData
+                let sideDataBlob = Self.writeWireSideData(sideData)
                 if sideDataBlob.isEmpty {
                     try send(.packet, [meta.data, pkt.annex])
                 } else {
@@ -1725,13 +1780,9 @@
                     let stripped = AnnexB.stripAtomHeaderIfPresent(data, fourCC: atom)
                     encoderExtradata = stripped
                     if encoderCodec == .h264, stripped.count > 4 {
-                        nalLengthField = Int((stripped[4] & 0x3) + 1)
+                        encoderNalLengthField = Int((stripped[4] & 0x3) + 1)
                     } else if encoderCodec == .hevc, stripped.count > 21 {
-                        nalLengthField = Int((stripped[21] & 0x3) + 1)
-                    }
-                    if !(1 ... 4).contains(nalLengthField) {
-                        logger.info("WARN invalid nalLengthField=\(nalLengthField); defaulting to 4")
-                        nalLengthField = 4
+                        encoderNalLengthField = Int((stripped[21] & 0x3) + 1)
                     }
                 }
             }
@@ -1767,7 +1818,7 @@
             // Important: use the sample's total size, not the underlying CMBlockBuffer length.
             // CMBlockBufferGetDataLength() can include trailing bytes beyond the sample payload.
             let sampleLen = CMSampleBufferGetTotalSampleSize(sbuf)
-            let annex = convertToAnnexB(block: block, sampleLen: sampleLen, nalLengthField: nalLengthField)
+            let annex = convertToAnnexB(block: block, sampleLen: sampleLen, nalLengthField: encoderNalLengthField)
             if annex.isEmpty {
                 fail(VTRemotedError.protocolViolation("encode produced empty Annex-B payload (sampleLen=\(sampleLen))"))
                 if encodeReorderBySeq, let context {
@@ -1799,7 +1850,13 @@
                 nominalFrameDurTicks = durTicks
                 if !encodeReorderBySeq && encodeDtsReorderDepth > 0 {
                     // Add a small cushion to cover mixed timecode patterns.
-                    encodeDtsOffsetTicks = Int64(encodeDtsReorderDepth + 1) * nominalFrameDurTicks
+                    let (offset, overflow) = Int64(encodeDtsReorderDepth + 1)
+                        .multipliedReportingOverflow(by: nominalFrameDurTicks)
+                    guard !overflow else {
+                        fail(VTRemotedError.protocolViolation("encoded frame duration exceeds DTS range"))
+                        return
+                    }
+                    encodeDtsOffsetTicks = offset
                     logger.info(
                         "ENCODE observed dur_ticks=\(nominalFrameDurTicks); " +
                             "dts_offset_ticks=\(encodeDtsOffsetTicks) (depth=\(encodeDtsReorderDepth))"
@@ -1808,7 +1865,9 @@
             }
 
             let attachments = CMSampleBufferGetSampleAttachmentsArray(sbuf, createIfNecessary: false)
-            let isKey = (attachments as? [[NSObject: Any]])?.first?[kCMSampleAttachmentKey_NotSync as NSObject] == nil
+            let notSync = (attachments as? [[NSObject: Any]])?.first?[kCMSampleAttachmentKey_NotSync as NSObject]
+                as? Bool
+            let isKey = notSync != true
 
             let pkt = PendingEncodedPacket(
                 ptsTicks: ptsTicks,
@@ -2129,6 +2188,8 @@
         }
 
         private func enqueueDecodedFrame(ptsTicks: Int64, durTicks: Int64, chunks: [Data]) {
+            decodeOutputLock.lock()
+            defer { decodeOutputLock.unlock() }
             callbackLock.lock()
             let frames: [ReorderedDecodedFrame<[Data]>]
             if !decodeAsyncEnabled {
@@ -2182,6 +2243,8 @@
         }
 
         private func enqueueTranscodeFrame(pixelBuffer: CVPixelBuffer, pts: CMTime, duration: CMTime) {
+            decodeOutputLock.lock()
+            defer { decodeOutputLock.unlock() }
             guard let config else { return }
             let ptsTicks = ticksOrNoPts(from: pts, timebase: config.timebase)
             let durTicks: Int64 = if duration.isNumeric {
@@ -2204,6 +2267,8 @@
         }
 
         private func flushDecodedFrames() {
+            decodeOutputLock.lock()
+            defer { decodeOutputLock.unlock() }
             if config?.mode == .transcode {
                 callbackLock.lock()
                 let frames = transcodeReorderBuffer?.flush() ?? []
@@ -2244,8 +2309,6 @@
                 logger.error("VTPixelTransferSessionCreate failed: \(status)")
                 return nil
             }
-            transcodeTransferSession = session
-
             let mode: CFString
             switch config.scaleMode {
             case .stretch:
@@ -2266,10 +2329,11 @@
                 ]
                 for (key, value) in properties where VTSessionSetProperty(session, key: key, value: value) != noErr {
                     logger.error("HDR-to-SDR output conversion is unsupported (\(key))")
-                    transcodeTransferSession = nil
+                    VTPixelTransferSessionInvalidate(session)
                     return nil
                 }
             }
+            transcodeTransferSession = session
             return session
         }
 
@@ -2357,7 +2421,7 @@
             case .hevc: kCMVideoCodecType_HEVC
             }
 
-            cvPixelFormat = try pickCVPixelFormat(pixelFormat: config.pixelFormat)
+            cvPixelFormat = try pickCVPixelFormat(config)
 
             guard let rawExtra = config.configExtradata, !rawExtra.isEmpty else {
                 throw VTRemotedError.protocolViolation("decoder requires extradata")
@@ -2368,14 +2432,14 @@
 
             // Try to interpret as avcC/hvcC.
             if config.codec == .h264, extra.count > 6, extra[0] == 1 {
-                nalLengthField = Int((extra[4] & 0x03) + 1)
+                decoderNalLengthField = Int((extra[4] & 0x03) + 1)
                 formatDescription = try makeFormatDescriptionFromAtom(codecType: codecType,
                                                                       width: config.width,
                                                                       height: config.height,
                                                                       atomName: atom,
                                                                       atomData: extra)
             } else if config.codec == .hevc, extra.count > 21, extra[0] == 1 {
-                nalLengthField = Int((extra[21] & 0x03) + 1)
+                decoderNalLengthField = Int((extra[21] & 0x03) + 1)
                 formatDescription = try makeFormatDescriptionFromAtom(codecType: codecType,
                                                                       width: config.width,
                                                                       height: config.height,
@@ -2383,7 +2447,7 @@
                                                                       atomData: extra)
             } else {
                 // Fall back to parsing Annex-B parameter sets.
-                nalLengthField = 4
+                decoderNalLengthField = 4
                 formatDescription = try formatDescriptionFromAnnexB(extra,
                                                                     codec: config.codec,
                                                                     codecType: codecType,
@@ -2433,10 +2497,9 @@
             let currentSets = try h264ParameterSets(currentFormat)
             guard !parameterSets.allSatisfy({ currentSets.contains($0) }) else { return }
 
-            // Put updated sets first; unchanged SPS/PPS supply the missing half
-            // when a packet updates only one kind of parameter set.
-            let nextFormat = try formatDescriptionH264(units: parameterSets + currentSets,
-                                                       nalLength: nalLengthField)
+            // Replace only the parameter-set IDs supplied by this packet.
+            let nextFormat = try formatDescriptionH264(units: currentSets + parameterSets,
+                                                       nalLength: decoderNalLengthField)
             let changedSPS = parameterSets.contains {
                 $0.first.map { $0 & 0x1F == 7 } == true && !currentSets.contains($0)
             }
@@ -2665,7 +2728,9 @@
             chunks.append(res0.data)
             chunks.append(res1.meta)
             chunks.append(res1.data)
-            let sideDataBlob = Self.writeWireSideData(sideData)
+            let sideDataBlob = Self.writeWireSideData(
+                Self.translateSideData(sideData, using: Self.packetToFrameSideData)
+            )
             if !sideDataBlob.isEmpty {
                 chunks.append(sideDataBlob)
             }
@@ -2675,20 +2740,24 @@
 
         // MARK: - Helpers
 
-        private func pickCVPixelFormat(pixelFormat: UInt8) throws -> OSType {
-            switch pixelFormat {
+        private func pickCVPixelFormat(_ config: SessionConfiguration) throws -> OSType {
+            let fullRange = config.options.colorRange == 2
+            switch config.pixelFormat {
             case VTRPixelFormat.nv12:
-                return kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+                return fullRange ? kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+                                 : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
             case VTRPixelFormat.p010:
-                return kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+                return fullRange ? kCVPixelFormatType_420YpCbCr10BiPlanarFullRange
+                                 : kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
             case VTRPixelFormat.bgra:
                 return kCVPixelFormatType_32BGRA
             case VTRPixelFormat.ayuv:
                 return kCVPixelFormatType_4444AYpCbCr8
             case VTRPixelFormat.p210:
-                return kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange
+                return fullRange ? kCVPixelFormatType_422YpCbCr10BiPlanarFullRange
+                                 : kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange
             default:
-                throw VTRemotedError.unsupported("pix_fmt=\(pixelFormat)(\(VTRPixelFormat.name(pixelFormat)))")
+                throw VTRemotedError.unsupported("pix_fmt=\(config.pixelFormat)(\(VTRPixelFormat.name(config.pixelFormat)))")
             }
         }
 
@@ -2829,36 +2898,27 @@
         }
 
         private func formatDescriptionH264(units: [Data], nalLength: Int) throws -> CMFormatDescription {
-            var sps: Data?
-            var pps: Data?
+            var sets: [Int: Data] = [:]
             for unit in units {
-                guard let first = unit.first else { continue }
-                let nalType = Int(first & 0x1F)
-                if nalType == 7, sps == nil { sps = unit }
-                if nalType == 8, pps == nil { pps = unit }
+                if let id = AnnexB.h264ParameterSetID(unit) { sets[id] = unit }
             }
-            guard let spsData = sps, let ppsData = pps else {
+            let ids = sets.keys.sorted()
+            guard ids.first.map({ $0 / 256 }) == 7, ids.last.map({ $0 / 256 }) == 8 else {
                 throw VTRemotedError.protocolViolation("missing SPS/PPS")
             }
+            let buffers = ids.compactMap { sets[$0].map { $0 as NSData } }
+            var pointers = buffers.map { $0.bytes.assumingMemoryBound(to: UInt8.self) }
+            var sizes = buffers.map(\.length)
             var fmt: CMFormatDescription?
-            let spsBytes = [UInt8](spsData)
-            let ppsBytes = [UInt8](ppsData)
-            let status = spsBytes.withUnsafeBytes { spsPtr in
-                ppsBytes.withUnsafeBytes { ppsPtr in
-                    var ptrs: [UnsafePointer<UInt8>] = [
-                        spsPtr.bindMemory(to: UInt8.self).baseAddress!,
-                        ppsPtr.bindMemory(to: UInt8.self).baseAddress!
-                    ]
-                    var sizes: [Int] = [spsBytes.count, ppsBytes.count]
-                    return CMVideoFormatDescriptionCreateFromH264ParameterSets(
-                        allocator: kCFAllocatorDefault,
-                        parameterSetCount: 2,
-                        parameterSetPointers: &ptrs,
-                        parameterSetSizes: &sizes,
-                        nalUnitHeaderLength: Int32(nalLength),
-                        formatDescriptionOut: &fmt
-                    )
-                }
+            let status = withExtendedLifetime(buffers) {
+                CMVideoFormatDescriptionCreateFromH264ParameterSets(
+                    allocator: kCFAllocatorDefault,
+                    parameterSetCount: buffers.count,
+                    parameterSetPointers: &pointers,
+                    parameterSetSizes: &sizes,
+                    nalUnitHeaderLength: Int32(nalLength),
+                    formatDescriptionOut: &fmt
+                )
             }
             guard status == noErr, let format = fmt else {
                 throw VTRemotedError.ioError(code: Int32(status), message: "CreateFromH264ParameterSets failed")
@@ -2867,43 +2927,29 @@
         }
 
         private func formatDescriptionHEVC(units: [Data], nalLength: Int) throws -> CMFormatDescription {
-            var vps: Data?
-            var sps: Data?
-            var pps: Data?
+            var sets: [UInt8: [Data]] = [:]
             for unit in units {
                 guard let first = unit.first else { continue }
-                let nalType = Int((first >> 1) & 0x3F)
-                if nalType == 32, vps == nil { vps = unit }
-                if nalType == 33, sps == nil { sps = unit }
-                if nalType == 34, pps == nil { pps = unit }
+                let nalType = (first >> 1) & 0x3F
+                if (32 ... 34).contains(nalType) { sets[nalType, default: []].append(unit) }
             }
-            guard let vpsData = vps, let spsData = sps, let ppsData = pps else {
+            guard let vps = sets[32], let sps = sets[33], let pps = sets[34] else {
                 throw VTRemotedError.protocolViolation("missing VPS/SPS/PPS")
             }
+            let buffers = (vps + sps + pps).map { $0 as NSData }
+            var pointers = buffers.map { $0.bytes.assumingMemoryBound(to: UInt8.self) }
+            var sizes = buffers.map(\.length)
             var fmt: CMFormatDescription?
-            let vpsBytes = [UInt8](vpsData)
-            let spsBytes = [UInt8](spsData)
-            let ppsBytes = [UInt8](ppsData)
-            let status = vpsBytes.withUnsafeBytes { vpsPtr in
-                spsBytes.withUnsafeBytes { spsPtr in
-                    ppsBytes.withUnsafeBytes { ppsPtr in
-                        var ptrs: [UnsafePointer<UInt8>] = [
-                            vpsPtr.bindMemory(to: UInt8.self).baseAddress!,
-                            spsPtr.bindMemory(to: UInt8.self).baseAddress!,
-                            ppsPtr.bindMemory(to: UInt8.self).baseAddress!
-                        ]
-                        var sizes: [Int] = [vpsBytes.count, spsBytes.count, ppsBytes.count]
-                        return CMVideoFormatDescriptionCreateFromHEVCParameterSets(
-                            allocator: kCFAllocatorDefault,
-                            parameterSetCount: 3,
-                            parameterSetPointers: &ptrs,
-                            parameterSetSizes: &sizes,
-                            nalUnitHeaderLength: Int32(nalLength),
-                            extensions: nil,
-                            formatDescriptionOut: &fmt
-                        )
-                    }
-                }
+            let status = withExtendedLifetime(buffers) {
+                CMVideoFormatDescriptionCreateFromHEVCParameterSets(
+                    allocator: kCFAllocatorDefault,
+                    parameterSetCount: buffers.count,
+                    parameterSetPointers: &pointers,
+                    parameterSetSizes: &sizes,
+                    nalUnitHeaderLength: Int32(nalLength),
+                    extensions: nil,
+                    formatDescriptionOut: &fmt
+                )
             }
             guard status == noErr, let format = fmt else {
                 throw VTRemotedError.ioError(code: Int32(status), message: "CreateFromHEVCParameterSets failed")

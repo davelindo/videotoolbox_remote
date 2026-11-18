@@ -129,6 +129,7 @@ typedef struct VTRemoteTranscodeContext {
     uint64_t server_caps;
     int warned_packet_side_data_no_cap;
     int fd;
+    int net_initialized;
     int connected;
     int flushing;
     int done;
@@ -678,6 +679,7 @@ static int vtremote_hevc_extradata_to_annexb(const uint8_t *in, int in_size,
 
     if (!buf)
         return AVERROR_INVALIDDATA;
+    memset(buf + size, 0, AV_INPUT_BUFFER_PADDING_SIZE);
     *out = buf;
     *out_size = size;
     return 0;
@@ -818,8 +820,16 @@ static int vtremote_recv_some(VTRemoteTranscodeContext *s, uint8_t *dst, int siz
             int ready = check_readable(s->fd, 0);
             if (ready == 0)
                 return AVERROR(EAGAIN);
-            if (ready < 0)
-                return AVERROR(vtremote_sock_errno());
+            if (ready < 0) {
+                int err = vtremote_sock_errno();
+#if defined(HAVE_WINSOCK2_H) && HAVE_WINSOCK2_H
+                if (err == WSAEINTR)
+                    continue;
+#endif
+                if (err == EINTR)
+                    continue;
+                return AVERROR(err);
+            }
         }
 
         int r = (int)recv(s->fd, dst, size, 0);
@@ -1099,9 +1109,10 @@ static int vtremote_send_hello(AVBSFContext *ctx)
     int ret;
 
     vtremote_wbuf_init(&payload);
-    vtremote_payload_hello(&payload, s->token, codec_name_for_id(s->codec_id_in),
-                           "ffmpeg-vtremote", FFMPEG_VERSION);
-    ret = vtremote_send_msg(s, VTREMOTE_MSG_HELLO, &payload);
+    ret = vtremote_payload_hello(&payload, s->token, codec_name_for_id(s->codec_id_in),
+                                "ffmpeg-vtremote", FFMPEG_VERSION);
+    if (ret >= 0)
+        ret = vtremote_send_msg(s, VTREMOTE_MSG_HELLO, &payload);
     vtremote_wbuf_free(&payload);
     if (ret < 0)
         return ret;
@@ -1377,6 +1388,8 @@ static int enqueue_packet(AVBSFContext *ctx, const uint8_t *payload, int payload
         return ret;
     if (!s->pkt_queue)
         return AVERROR_BUG;
+    if (s->pkt_q_count >= s->pkt_q_size)
+        return AVERROR_BUFFER_TOO_SMALL;
     int idx = s->pkt_q_head + s->pkt_q_count;
     if (idx >= s->pkt_q_size)
         idx -= s->pkt_q_size;
@@ -1407,16 +1420,19 @@ static int enqueue_packet(AVBSFContext *ctx, const uint8_t *payload, int payload
     if (dst->dts == AV_NOPTS_VALUE)
         dst->dts = dst->pts;
     if (dst->dts != AV_NOPTS_VALUE) {
-        if (s->last_dts != AV_NOPTS_VALUE && dst->dts <= s->last_dts)
+        if (s->last_dts != AV_NOPTS_VALUE && dst->dts <= s->last_dts) {
+            if (s->last_dts == INT64_MAX) {
+                av_packet_unref(dst);
+                return AVERROR_INVALIDDATA;
+            }
             dst->dts = s->last_dts + 1;
+            dst->pts = FFMAX(dst->pts, dst->dts);
+        }
         s->last_dts = dst->dts;
     }
     if (dst->pts == AV_NOPTS_VALUE)
         dst->pts = dst->dts;
-    if (s->pkt_q_count < s->pkt_q_size)
-        s->pkt_q_count++;
-    else
-        return AVERROR_BUFFER_TOO_SMALL;
+    s->pkt_q_count++;
     s->packets_recv++;
     return 0;
 }
@@ -1906,14 +1922,8 @@ static int vtremote_transcode_init(AVBSFContext *ctx) {
     ret = vtremote_net_init();
     if (ret < 0)
         return ret;
-
-    ret = vtremote_handshake(ctx);
-    if (ret < 0) {
-        vtremote_net_close();
-        return ret;
-    }
-
-    return 0;
+    s->net_initialized = 1;
+    return vtremote_handshake(ctx);
 }
 
 static int vtremote_transcode_filter(AVBSFContext *ctx, AVPacket *pkt) {
@@ -1934,14 +1944,6 @@ static int vtremote_transcode_filter(AVBSFContext *ctx, AVPacket *pkt) {
 
     ret = vtremote_drain_available_packets(ctx);
     if (ret < 0 && ret != AVERROR(EAGAIN))
-        return ret;
-    if (s->pkt_q_count > 0)
-        return pop_packet(s, pkt);
-    if (s->done)
-        return AVERROR_EOF;
-
-    ret = vtremote_wait_for_inflight_slot(ctx);
-    if (ret < 0)
         return ret;
     if (s->pkt_q_count > 0)
         return pop_packet(s, pkt);
@@ -1973,7 +1975,9 @@ static int vtremote_transcode_filter(AVBSFContext *ctx, AVPacket *pkt) {
         return ret;
     }
 
-    ret = maybe_convert_to_annexb(s, &in_pkt);
+    ret = vtremote_wait_for_inflight_slot(ctx);
+    if (ret >= 0)
+        ret = maybe_convert_to_annexb(s, &in_pkt);
     if (ret < 0) {
         av_packet_unref(&in_pkt);
         return ret;
@@ -1995,7 +1999,7 @@ static int vtremote_transcode_filter(AVBSFContext *ctx, AVPacket *pkt) {
 
 static void vtremote_transcode_flush(AVBSFContext *ctx) {
     VTRemoteTranscodeContext *s = ctx->priv_data;
-    if (s->fd >= 0)
+    if (s->net_initialized && s->fd >= 0)
         VTR_CLOSE_SOCKET(s->fd);
     s->fd = -1;
     s->connected = 0;
@@ -2025,9 +2029,13 @@ static void vtremote_transcode_flush(AVBSFContext *ctx) {
 
 static void vtremote_transcode_close(AVBSFContext *ctx) {
     VTRemoteTranscodeContext *s = ctx->priv_data;
-    if (s->fd >= 0)
-        VTR_CLOSE_SOCKET(s->fd);
-    vtremote_net_close();
+    if (s->net_initialized) {
+        if (s->fd >= 0)
+            VTR_CLOSE_SOCKET(s->fd);
+        s->fd = -1;
+        s->net_initialized = 0;
+        vtremote_net_close();
+    }
     vtremote_wbuf_free(&s->pkt_buf);
     vtremote_reset_rx_state(s);
     av_freep(&s->rx_buf);

@@ -119,7 +119,8 @@ sequenceDiagram
 
 **CONFIGURE (Type 3)**
 - `width`, `height` (uint32): Video dimensions.
-- `pix_fmt` (uint8): `1=NV12`, `2=P010`, `3=BGRA`, `4=AYUV`, `5=P210`, `6=VideoToolbox`.
+- `pix_fmt` (uint8): `1=NV12`, `2=P010`, `3=BGRA`, `4=AYUV`, `5=P210`.
+- `time_base_num`, `time_base_den`, `frame_rate_num`, `frame_rate_den` (uint32 each).
 - `options` (map): Key-value pairs (bitrate, GOP, etc.).
 - `extradata` (bytes): Header data (decoding only).
 
@@ -162,6 +163,11 @@ Raw frame planes.
 - `planes` (struct[]): Stride, height, byte length, data.
 - Optional side data: `side_data_count` followed by `(type, size, data)` records.
   Frame side-data `type` values match FFmpeg `AVFrameSideDataType` values.
+  Servers advertising `side_data.typed.v1` translate side-data IDs when crossing
+  between FRAME and PACKET messages in encode or decode sessions. Only types
+  with a matching payload representation are forwarded across that boundary.
+  FFmpeg clients omit cross-mode side data with older servers. Packet-to-packet
+  transcode continues to use `side_data.v2`.
   The frame allowlist forwards A53 captions, Stereo3D, display matrix, AFD,
   mastering display metadata, content light level, ICC profile, S12M timecode,
   HDR10+, unregistered SEI, Dolby Vision RPU/metadata, HDR Vivid, and ambient
@@ -182,8 +188,8 @@ Encoded Annex B NAL units.
   Older peers may omit this section; receivers must treat missing side data as
   an empty list.
   Packet side-data `type` values match FFmpeg `AVPacketSideDataType` values and
-  are treated as typed opaque bytes. The decode and `vtremote_transcode` paths
-  preserve packet records so mux-facing metadata such as HDR signaling, display
+  are treated as typed opaque bytes. The `vtremote_transcode` path preserves
+  packet records so mux-facing metadata such as HDR signaling, display
   behavior, dependency metadata, and caption payloads can survive packet-in /
   packet-out workflows when the destination codec/container can represent them.
 

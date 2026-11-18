@@ -237,6 +237,7 @@ public enum ZstdCodec {
     }
 
     public static func decompress(_ data: Data, into dst: UnsafeMutableRawPointer, expectedSize: Int) -> Bool {
+        guard expectedSize >= 0 else { return false }
         guard expectedSize > 0 else { return true }
         let api = requireAPI("decompress")
         var decoded = 0
@@ -259,6 +260,7 @@ public enum ZstdCodec {
         into dst: UnsafeMutableRawPointer,
         expectedSize: Int
     ) -> Bool {
+        guard expectedSize >= 0 else { return false }
         guard expectedSize > 0 else { return true }
         let api = requireAPI("decompressRaw")
         guard let srcBase = src.baseAddress else { return false }

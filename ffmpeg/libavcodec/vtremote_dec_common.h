@@ -35,6 +35,7 @@ typedef struct VTRemoteDecContext {
     int warned_packet_side_data_no_cap;
     int codec_id;
     int fd;
+    int net_initialized;
     int connected;
     int flushing;
     int done;

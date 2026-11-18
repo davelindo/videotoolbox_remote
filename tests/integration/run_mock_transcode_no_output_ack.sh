@@ -4,7 +4,8 @@ set -euo pipefail
 # Regression coverage for vtremote_transcode input-credit ACKs. The mock accepts
 # transcode PACKET input, sends PACKET_ACK, but deliberately emits no output
 # PACKETs before FLUSH/DONE. With vt_remote_inflight=1 this would wedge if input
-# credit still depended on output packet cardinality.
+# credit still depended on output packet cardinality. A second run verifies
+# that EOF can flush a full legacy in-flight window without ACKs.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FFMPEG_BIN="${FFMPEG_BIN:-${ROOT}/ffmpeg/ffmpeg}"
@@ -50,23 +51,26 @@ else
 fi
 
 RUN_DIR="$(mktemp -d /tmp/mock_vtremoted_transcode_no_output_ack.XXXXXX)"
-SERVER_LOG="${RUN_DIR}/server.log"
-FFMPEG_LOG="${RUN_DIR}/ffmpeg.log"
-READY_FILE="${RUN_DIR}/server.ready"
+run_case() {
+  local name="$1" frames="$2"
+  shift 2
+  local server_log="${RUN_DIR}/${name}-server.log"
+  local ffmpeg_log="${RUN_DIR}/${name}-ffmpeg.log"
+  local ready_file="${RUN_DIR}/${name}.ready"
 
-python3 "${ROOT}/tests/integration/mock_vtremoted/mock_vtremoted.py" \
-  --listen "127.0.0.1:0" --ready-file "$READY_FILE" \
-  --packet-reply none \
-  --once >"$SERVER_LOG" 2>&1 &
-SERVER_PID=$!
-trap 'vtremote_stop_mock "$SERVER_PID"' EXIT
-SERVER_ADDR="$(vtremote_wait_mock_ready "$SERVER_PID" "$READY_FILE" "$SERVER_LOG")"
+  python3 "${ROOT}/tests/integration/mock_vtremoted/mock_vtremoted.py" \
+    --listen "127.0.0.1:0" --ready-file "$ready_file" \
+    --packet-reply none --once "$@" >"$server_log" 2>&1 &
+  SERVER_PID=$!
+  trap 'vtremote_stop_mock "$SERVER_PID"' EXIT
+  local server_addr
+  server_addr="$(vtremote_wait_mock_ready "$SERVER_PID" "$ready_file" "$server_log")"
 
-python3 - "$FFMPEG_BIN" "$SERVER_ADDR" "$ENCODER" "$PIX_FMT" "$FFMPEG_LOG" "${ENC_ARGS[@]}" <<'PYRUN'
+  python3 - "$FFMPEG_BIN" "$server_addr" "$ENCODER" "$PIX_FMT" "$ffmpeg_log" "$frames" "${ENC_ARGS[@]}" <<'PYRUN'
 import subprocess
 import sys
 
-ffmpeg_bin, server_addr, encoder, pix_fmt, log_path, *enc_args = sys.argv[1:]
+ffmpeg_bin, server_addr, encoder, pix_fmt, log_path, frames, *enc_args = sys.argv[1:]
 host, port = server_addr.rsplit(":", 1)
 bsf = (
     "vtremote_transcode="
@@ -78,7 +82,7 @@ cmd = [
     "-hide_banner",
     "-loglevel", "verbose",
     "-f", "lavfi", "-i", "testsrc2=size=64x64:rate=5",
-    "-t", "1",
+    "-frames:v", frames,
     "-pix_fmt", pix_fmt,
     "-c:v", encoder,
     *enc_args,
@@ -95,13 +99,17 @@ with open(log_path, "w", encoding="utf-8", errors="replace") as log:
         raise SystemExit(f"ffmpeg timed out; vtremote_transcode input credit may be wedged: {exc}") from exc
 PYRUN
 
-wait "$SERVER_PID"
-trap - EXIT
+  wait "$SERVER_PID"
+  trap - EXIT
 
-if grep -E "Timed out waiting for vtremote_transcode input credit|Connection timed out" "$FFMPEG_LOG" >/dev/null; then
-  echo "ERROR: vtremote_transcode reported an input-credit timeout" >&2
-  tail -n 80 "$FFMPEG_LOG" >&2
-  exit 1
-fi
+  if grep -E "Timed out waiting for vtremote_transcode input credit|Connection timed out|Operation timed out" "$ffmpeg_log" >/dev/null; then
+    echo "ERROR: vtremote_transcode reported an input-credit timeout ($name)" >&2
+    tail -n 80 "$ffmpeg_log" >&2
+    exit 1
+  fi
+  echo "OK: vtremote_transcode $name completed"
+}
 
-echo "OK: vtremote_transcode no-output PACKET_ACK credit passed; logs at ${SERVER_LOG} and ${FFMPEG_LOG}"
+run_case packet-ack 5
+run_case legacy-eof 1 --capabilities h264,hevc,pixfmt.nv12,pixfmt.p010
+echo "Logs at $RUN_DIR"
