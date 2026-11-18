@@ -120,8 +120,9 @@ def write_config_option(key: str, value: str) -> bytes:
     return write_str(key) + write_str(value)
 
 
-side_payload = b"vtremote-real-frame-side-data"
-side_blob = struct.pack(">BII", 1, 11, len(side_payload)) + side_payload
+side_payload = struct.pack("=II", 1000, 400)
+side_blob = struct.pack(">BII", 1, 14, len(side_payload)) + side_payload  # AV_FRAME_DATA_CONTENT_LIGHT_LEVEL
+packet_side_blob = struct.pack(">BII", 1, 22, len(side_payload)) + side_payload  # AV_PKT_DATA_CONTENT_LIGHT_LEVEL
 
 with socket.create_connection(("127.0.0.1", port), timeout=10) as sock:
     hello = write_str(token) + write_str("h264") + write_str("hdr-side-data-test") + write_str("test")
@@ -169,8 +170,8 @@ with socket.create_connection(("127.0.0.1", port), timeout=10) as sock:
             data_len = struct.unpack_from(">I", payload, off)[0]
             off += 4 + data_len
             got_side = payload[off:]
-            if got_side != side_blob:
-                raise RuntimeError(f"side-data mismatch: {got_side!r} != {side_blob!r}")
+            if got_side != packet_side_blob:
+                raise RuntimeError(f"side-data mismatch: {got_side!r} != {packet_side_blob!r}")
         elif typ == MSG_DONE:
             break
     if not saw_packet:

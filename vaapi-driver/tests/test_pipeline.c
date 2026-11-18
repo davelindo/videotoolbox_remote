@@ -88,6 +88,8 @@ int main(void) {
     context->io_idle_initialized = true;
     vtr_client_init(&context->client);
     context->client.connected = true;
+    context->connected_width = context->connected_height = 4;
+    context->connected_fourcc = VA_FOURCC_NV12;
     context->client_initialized = true;
     vtr_buffer_init(&context->packet);
     context->packet_initialized = true;
@@ -134,16 +136,17 @@ int main(void) {
     setenv("VTREMOTE_HOST", "127.0.0.1:1", 1); /* connect is stubbed */
     for (int i = 0; i < 4; ++i) {
         driver.surfaces[i].data[0] = (uint8_t)(20 + i);
+        if (i == 3)
+            driver.surfaces[i].width = 2;
         assert(vtrva_begin_picture(&va, context->id, driver.surfaces[i].id) == VA_STATUS_SUCCESS);
         context->pending_coded_buffer = driver.buffers[i].id;
-        if (i == 3)
-            context->connection_dirty = true;
         assert(vtrva_end_picture(&va, context->id) == VA_STATUS_SUCCESS);
     }
     assert(reconfigured == 1 && completed == 23 && context->pending_count == 1);
     assert(vtrva_sync_surface(&va, driver.surfaces[3].id) == VA_STATUS_SUCCESS);
     for (int i = 0; i < 4; ++i) {
         driver.surfaces[i].data[0] = (uint8_t)(24 + i);
+        driver.surfaces[i].width = 2;
         assert(vtrva_begin_picture(&va, context->id, driver.surfaces[i].id) == VA_STATUS_SUCCESS);
         context->pending_coded_buffer = driver.buffers[i].id;
         assert(vtrva_end_picture(&va, context->id) == VA_STATUS_SUCCESS);
