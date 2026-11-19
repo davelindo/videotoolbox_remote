@@ -824,7 +824,7 @@ static int mov_write_esds_tag(AVIOContext *pb, MOVTrack *track) // Basic
 
     // ES descriptor
     put_descr(pb, 0x03, 3 + 5+13 + decoder_specific_info_len + 5+1);
-    avio_wb16(pb, track->track_id);
+    avio_wb16(pb, 0); // ES_ID as stored in the file
     avio_w8(pb, 0x00); // flags (= no flags)
 
     // DecoderConfig descriptor
@@ -4158,7 +4158,7 @@ static int mov_write_tkhd_tag(AVIOContext *pb, MOVMuxContext *mov,
         const AVPacketSideData *sd;
         if (mov->per_stream_grouping)
             group = st->index;
-        else
+        else if (mov->mode != MODE_MP4 || mov->nb_streams > 1)
             group = st->codecpar->codec_type;
 
         sd = av_packet_side_data_get(st->codecpar->coded_side_data,
@@ -6931,6 +6931,7 @@ static int mov_flush_fragment(AVFormatContext *s, int force)
             mov_write_identification(s->pb, s);
         if ((ret = mov_write_moov_tag(s->pb, mov, s)) < 0)
             return ret;
+        mov->moov_end = avio_tell(s->pb);
 
         if (mov->flags & FF_MOV_FLAG_DELAY_MOOV) {
             if (mov->flags & FF_MOV_FLAG_GLOBAL_SIDX)
@@ -9148,6 +9149,7 @@ static int mov_write_header(AVFormatContext *s)
         if ((ret = mov_write_moov_tag(pb, mov, s)) < 0)
             return ret;
         mov->moov_written = 1;
+        mov->moov_end = avio_tell(pb);
         if (mov->flags & FF_MOV_FLAG_GLOBAL_SIDX)
             mov->reserved_header_pos = avio_tell(pb);
     }
