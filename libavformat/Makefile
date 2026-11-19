@@ -648,7 +648,7 @@ OBJS-$(CONFIG_WEBP_ANIM_DEMUXER)         += webp_anim_dec.o
 OBJS-$(CONFIG_WEBP_MUXER)                += webpenc.o
 OBJS-$(CONFIG_WEBVTT_DEMUXER)            += webvttdec.o subtitles.o
 OBJS-$(CONFIG_WEBVTT_MUXER)              += webvttenc.o
-OBJS-$(CONFIG_WHIP_MUXER)                += whip.o avc.o http.o srtp.o
+OBJS-$(CONFIG_WHIP_MUXER)                += whip.o avc.o http.o httpcookie.o srtp.o
 OBJS-$(CONFIG_WSAUD_DEMUXER)             += westwood_aud.o
 OBJS-$(CONFIG_WSAUD_MUXER)               += westwood_audenc.o
 OBJS-$(CONFIG_WSD_DEMUXER)               += wsddec.o rawdec.o
@@ -694,9 +694,9 @@ OBJS-$(CONFIG_FD_PROTOCOL)               += file.o
 OBJS-$(CONFIG_FTP_PROTOCOL)              += ftp.o
 OBJS-$(CONFIG_GOPHER_PROTOCOL)           += gopher.o
 OBJS-$(CONFIG_GOPHERS_PROTOCOL)          += gopher.o
-OBJS-$(CONFIG_HTTP_PROTOCOL)             += http.o httpauth.o
-OBJS-$(CONFIG_HTTPPROXY_PROTOCOL)        += http.o httpauth.o
-OBJS-$(CONFIG_HTTPS_PROTOCOL)            += http.o httpauth.o
+OBJS-$(CONFIG_HTTP_PROTOCOL)             += http.o httpauth.o httpcookie.o
+OBJS-$(CONFIG_HTTPPROXY_PROTOCOL)        += http.o httpauth.o httpcookie.o
+OBJS-$(CONFIG_HTTPS_PROTOCOL)            += http.o httpauth.o httpcookie.o
 OBJS-$(CONFIG_ICECAST_PROTOCOL)          += icecast.o
 OBJS-$(CONFIG_MD5_PROTOCOL)              += md5proto.o
 OBJS-$(CONFIG_MMSH_PROTOCOL)             += mmsh.o mms.o asf_tags.o
@@ -733,7 +733,7 @@ OBJS-$(CONFIG_WINDOWS_HANDLE_PROTOCOL)   += file.o
 
 # external library protocols
 OBJS-$(CONFIG_LIBAMQP_PROTOCOL)          += libamqp.o
-OBJS-$(CONFIG_LIBCURL_PROTOCOL)          += libcurl.o
+OBJS-$(CONFIG_LIBCURL_PROTOCOL)          += libcurl.o httpcookie.o
 OBJS-$(CONFIG_LIBRIST_PROTOCOL)          += librist.o
 OBJS-$(CONFIG_LIBRTMP_PROTOCOL)          += librtmp.o
 OBJS-$(CONFIG_LIBRTMPE_PROTOCOL)         += librtmp.o
@@ -791,10 +791,11 @@ TESTPROGS-$(CONFIG_RTPDEC)               += rtpdec
 FIFO-MUXER-TESTPROGS-$(CONFIG_NETWORK)   += fifo_muxer
 TESTPROGS-$(CONFIG_FIFO_MUXER)           += $(FIFO-MUXER-TESTPROGS-yes)
 TESTPROGS-$(CONFIG_FFRTMPCRYPT_PROTOCOL) += rtmpdh
-TESTPROGS-$(CONFIG_HTTP_PROTOCOL)        += http
-# http_nobody covers both the http and httpproxy read paths.
+TESTPROGS-$(CONFIG_HTTP_PROTOCOL)        += http httpcookie
+# http_nobody covers the http, httpproxy and libcurl read paths.
 HTTP_NOBODY_TESTPROG-$(CONFIG_HTTP_PROTOCOL)      = http_nobody
 HTTP_NOBODY_TESTPROG-$(CONFIG_HTTPPROXY_PROTOCOL) = http_nobody
+HTTP_NOBODY_TESTPROG-$(CONFIG_LIBCURL_PROTOCOL)   = http_nobody
 TESTPROGS                                       += $(HTTP_NOBODY_TESTPROG-yes)
 TESTPROGS-$(CONFIG_NETWORK)              += noproxy
 TESTPROGS-$(CONFIG_SRTP)                 += srtp
