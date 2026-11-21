@@ -86,6 +86,7 @@ jobs:
           bash tests/test_classify_ci_ref.sh
           bash tests/test_ccache_usage.sh
           python3 tests/test_launchd_plist.py
+          python3 tests/test_recover_ci_runner.py
           bash tests/test_macos_deployment_target.sh
           bash tests/test_vtremoted_package_shape.sh
           bash tests/test_ffmpeg_linux_arm64_ci.sh

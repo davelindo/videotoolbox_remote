@@ -1,0 +1,44 @@
+name: Recover CI runner allocation
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Failed CI run to inspect and recover"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: write
+  checks: read
+
+concurrency:
+  group: recover-ci-runner-${{ github.event.workflow_run.id || inputs.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # Inspect API metadata with trusted code; never check out the failed run.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Recover unallocated hosted jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+          SOURCE_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: |
+          args=("$SOURCE_RUN_ID" --retry)
+          if [[ -n "$SOURCE_ATTEMPT" ]]; then
+            args+=(--attempt "$SOURCE_ATTEMPT")
+          fi
+          python3 scripts/recover_ci_runner.py "${args[@]}"
