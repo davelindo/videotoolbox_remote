@@ -745,7 +745,7 @@ static void mxf_write_essence_container_refs(AVFormatContext *s)
     for (i = 0; i < s->nb_streams; i++) {
         MXFStreamContext *sc = s->streams[i]->priv_data;
         // check first track of essence container type and only write it once
-        if (sc->track_essence_element_key[15] != 0)
+        if (sc->track_essence_element_key[15] != (sc->index == INDEX_S436M))
             continue;
         avio_write(pb, *sc->container_ul, 16);
         if (c->essence_container_count == 1)
@@ -754,6 +754,20 @@ static void mxf_write_essence_container_refs(AVFormatContext *s)
 
     if (c->essence_container_count > 1)
         avio_write(pb, multiple_desc_ul, 16);
+}
+
+static void mxf_write_operational_pattern(AVFormatContext *s)
+{
+    AVIOContext *pb = s->pb;
+
+    if (IS_OPATOM(s)) {
+        avio_write(pb, opatom_ul, 16);
+    } else {
+        avio_write(pb, op1a_ul, 14);
+        // qualifiers, ST 378 6.4: multi-track if more than one essence track
+        avio_w8(pb, s->nb_streams > 1 ? 0x09 : 0x01);
+        avio_w8(pb, op1a_ul[15]);
+    }
 }
 
 static void mxf_write_preface(AVFormatContext *s)
@@ -793,10 +807,7 @@ static void mxf_write_preface(AVFormatContext *s)
 
     // operational pattern
     mxf_write_local_tag(s, 16, 0x3B09);
-    if (IS_OPATOM(s))
-        avio_write(pb, opatom_ul, 16);
-    else
-        avio_write(pb, op1a_ul, 16);
+    mxf_write_operational_pattern(s);
 
     // write essence_container_refs
     mxf_write_local_tag(s, 8 + 16LL * DESCRIPTOR_COUNT(mxf->essence_container_count), 0x3B0A);
@@ -2301,10 +2312,7 @@ static int mxf_write_partition(AVFormatContext *s, int bodysid,
     avio_wb32(pb, bodysid); // bodySID
 
     // operational pattern
-    if (IS_OPATOM(s))
-        avio_write(pb, opatom_ul, 16);
-    else
-        avio_write(pb, op1a_ul, 16);
+    mxf_write_operational_pattern(s);
 
     // essence container
     mxf_write_essence_container_refs(s);
@@ -3216,6 +3224,9 @@ static int mxf_init(AVFormatContext *s)
             // and produce mxf files with the most relevant flavour for opatom
             sc->track_essence_element_key[14] = 0x06;
         }
+        // ANC element numbers start at 1, ST 436-1
+        if (sc->index == INDEX_S436M)
+            sc->track_essence_element_key[15]++;
         PRINT_KEY(s, "track essence element key", sc->track_essence_element_key);
 
         if (!present[sc->index])
@@ -3470,6 +3481,13 @@ static int mxf_write_packet(AVFormatContext *s, AVPacket *pkt)
             return -1;
         }
     }
+
+    // codecs without sequence headers: every key frame is a random access point
+    if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
+        st->codecpar->codec_id != AV_CODEC_ID_MPEG2VIDEO &&
+        st->codecpar->codec_id != AV_CODEC_ID_H264 &&
+        pkt->flags & AV_PKT_FLAG_KEY)
+        ie.flags |= 0x80;
 
     if (mxf->cbr_index) {
         if (pkt->size != sc->frame_size && st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
