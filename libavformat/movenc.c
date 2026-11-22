@@ -1151,6 +1151,12 @@ static int mov_write_wave_tag(AVFormatContext *s, AVIOContext *pb, MOVTrack *tra
     avio_wb32(pb, 0);     /* size */
     ffio_wfourcc(pb, "wave");
 
+    if (track->par->codec_id == AV_CODEC_ID_QDMC) {
+        /* Extradata already contains the complete wave atom payload. */
+        mov_write_extradata_tag(pb, track);
+        return update_size(pb, pos);
+    }
+
     if (track->par->codec_id != AV_CODEC_ID_QDM2) {
         avio_wb32(pb, 12);    /* size */
         ffio_wfourcc(pb, "frma");
@@ -1582,6 +1588,7 @@ static int mov_write_audio_tag(AVFormatContext *s, AVIOContext *pb, MOVMuxContex
          track->par->codec_id == AV_CODEC_ID_ADPCM_MS      ||
          track->par->codec_id == AV_CODEC_ID_ADPCM_IMA_WAV ||
          track->par->codec_id == AV_CODEC_ID_QDM2          ||
+         track->par->codec_id == AV_CODEC_ID_QDMC          ||
          (mov_pcm_le_gt16(track->par->codec_id) && version==1) ||
          (mov_pcm_be_gt16(track->par->codec_id) && version==1)))
         ret = mov_write_wave_tag(s, pb, track);
@@ -4110,12 +4117,15 @@ static void get_pts_range(MOVMuxContext *mov, MOVTrack *track,
     if (!mdhd && track->end_pts != AV_NOPTS_VALUE &&
         track->start_dts != AV_NOPTS_VALUE &&
         track->start_cts != AV_NOPTS_VALUE) {
-        *start = track->start_dts + track->start_cts;
+        *start = track->start_dts + track->start_cts - track->start_delay;
         *end   = elst ? track->elst_end_pts : track->end_pts;
         return;
     }
     *start = 0;
     *end   = track->track_duration;
+    /* The composition offsets delay the samples by start_delay. */
+    if (*end)
+        *end += track->start_delay;
 }
 
 static int64_t calc_samples_pts_duration(MOVMuxContext *mov, MOVTrack *track)
@@ -4232,7 +4242,7 @@ static int mov_write_tkhd_tag(AVIOContext *pb, MOVMuxContext *mov,
                                       mov->movie_timescale, track->timescale,
                                       AV_ROUND_UP);
     int version;
-    int flags   = MOV_TKHD_FLAG_IN_MOVIE;
+    int flags   = MOV_TKHD_FLAG_IN_MOVIE | MOV_TKHD_FLAG_IN_PREVIEW;
     int group   = 0;
 
     uint32_t *display_matrix = NULL;
@@ -4260,6 +4270,14 @@ static int mov_write_tkhd_tag(AVIOContext *pb, MOVMuxContext *mov,
             display_matrix = (uint32_t *)sd->data;
     }
 
+    if (mov->mode == MODE_MOV)
+        flags |= MOV_TKHD_FLAG_IN_POSTER;
+    /* QuickTime hint tracks are not part of the movie, preview or poster */
+    if (mov->mode == MODE_MOV && track->tag == MKTAG('r','t','p',' '))
+        flags = 0;
+    /* auxiliary image sequences are not displayed as such */
+    if (mov->mode == MODE_AVIF && track != &mov->tracks[0])
+        flags &= ~(MOV_TKHD_FLAG_IN_MOVIE | MOV_TKHD_FLAG_IN_PREVIEW);
     if (track->flags & MOV_TRACK_ENABLED)
         flags |= MOV_TKHD_FLAG_ENABLED;
 
@@ -7164,7 +7182,8 @@ static int mov_auto_flush_fragment(AVFormatContext *s, int force)
     return ret;
 }
 
-static int check_pkt(AVFormatContext *s, MOVTrack *trk, AVPacket *pkt)
+static int check_pkt(AVFormatContext *s, MOVTrack *trk, AVPacket *pkt,
+                     int dts_shifted)
 {
     int64_t ref;
     uint64_t duration;
@@ -7174,10 +7193,12 @@ static int check_pkt(AVFormatContext *s, MOVTrack *trk, AVPacket *pkt)
     } else if (   trk->start_dts != AV_NOPTS_VALUE
                && !trk->frag_discont) {
         ref = trk->start_dts + trk->track_duration;
-    } else
+    } else {
         ref = pkt->dts; // Skip tests for the first packet
+        dts_shifted = 1;
+    }
 
-    if (trk->dts_shift != AV_NOPTS_VALUE) {
+    if (trk->dts_shift != AV_NOPTS_VALUE && !dts_shifted) {
         /* With negative CTS offsets we have set an offset to the DTS,
          * reverse this for the check. */
         ref -= trk->dts_shift;
@@ -7241,6 +7262,48 @@ int ff_mov_set_fragment_end_hint(AVFormatContext *s, int stream_index,
     return 1;
 }
 
+/**
+ * Take the start delay back out of the composition offsets of a track. Only
+ * set without fragmentation, so none of its samples has been written yet.
+ */
+static int mov_drop_start_delay(AVFormatContext *s, MOVTrack *trk, AVPacket *pkt)
+{
+    int64_t delay = trk->start_delay;
+
+    if (!delay)
+        return 0;
+    for (int i = 0; i < trk->entry; i++) {
+        trk->cluster[i].dts += delay;
+        trk->cluster[i].cts -= delay;
+    }
+    if (trk->start_dts != AV_NOPTS_VALUE)
+        trk->start_dts += delay;
+    if (trk->start_cts != AV_NOPTS_VALUE)
+        trk->start_cts -= delay;
+    trk->dts_shift  += delay;
+    trk->start_delay = 0;
+    pkt->dts        += delay;
+    return 1;
+}
+
+/**
+ * Whether the composition offset of pkt does not fit the ctts entry: signed
+ * for version 1, as written with negative_cts_offsets, keeping the existing
+ * version 0 range otherwise.
+ */
+static int mov_cts_out_of_range(const MOVMuxContext *mov, const AVPacket *pkt)
+{
+    uint64_t delta;
+
+    if (pkt->pts == AV_NOPTS_VALUE)
+        return 0;
+    if (mov->flags & FF_MOV_FLAG_NEGATIVE_CTS_OFFSETS)
+        delta = (uint64_t)pkt->pts - pkt->dts;
+    else
+        delta = (uint64_t)pkt->dts - pkt->pts;
+    return delta != (int32_t)delta;
+}
+
 int ff_mov_write_packet(AVFormatContext *s, AVPacket *pkt)
 {
     MOVMuxContext *mov = s->priv_data;
@@ -7260,12 +7323,15 @@ int ff_mov_write_packet(AVFormatContext *s, AVPacket *pkt)
         trk = &mov->tracks[pkt->stream_index];
     par = trk->par;
 
-    ret = check_pkt(s, trk, pkt);
+    ret = check_pkt(s, trk, pkt, 1);
     if (ret < 0)
         return ret;
 
-    if (pkt->pts != AV_NOPTS_VALUE &&
-        (uint64_t)pkt->dts - pkt->pts != (int32_t)((uint64_t)pkt->dts - pkt->pts)) {
+    if (mov_cts_out_of_range(mov, pkt) && mov_drop_start_delay(s, trk, pkt))
+        av_log(s, AV_LOG_WARNING, "Composition offsets too large, dropping "
+               "the start delay of stream %d\n", pkt->stream_index);
+
+    if (mov_cts_out_of_range(mov, pkt)) {
         av_log(s, AV_LOG_WARNING, "pts/dts pair unsupported\n");
         return AVERROR_PATCHWELCOME;
     }
@@ -7703,6 +7769,61 @@ err:
     return ret;
 }
 
+/**
+ * Presentation time at which a stream starts, given the pts of its first
+ * packet: the priming samples of an audio stream come before it.
+ */
+static int64_t mov_start_time(const AVStream *st, int64_t pts)
+{
+    const AVCodecParameters *par = st->codecpar;
+
+    if (par->codec_type == AVMEDIA_TYPE_AUDIO && par->initial_padding > 0 &&
+        par->sample_rate > 0)
+        pts += av_rescale_q(par->initial_padding,
+                            (AVRational){ 1, par->sample_rate },
+                            st->time_base);
+    return FFMAX(pts, 0);
+}
+
+/**
+ * How much later the stream of pkt, its first packet, starts than the
+ * earliest audio or video stream, going by the streams already started and
+ * by the packets queued for the other ones. Audio priming is left out:
+ * without an edit list, whether it is played is up to the player.
+ */
+static int64_t mov_get_start_delay(AVFormatContext *s, const AVPacket *pkt)
+{
+    const AVStream *st = s->streams[pkt->stream_index];
+    int64_t start = mov_start_time(st, pkt->pts), ref = start;
+
+    for (int i = 0; i < s->nb_streams; i++) {
+        const AVStream *st2 = s->streams[i];
+        const MOVTrack *trk2 = st2->priv_data;
+        int64_t pts;
+
+        if (i == pkt->stream_index || !trk2 || trk2->st != st2 ||
+            !rtp_hinting_needed(st2))
+            continue;
+        if (trk2->start_dts != AV_NOPTS_VALUE) {
+            if (trk2->start_cts == AV_NOPTS_VALUE)
+                continue;
+            pts = trk2->start_dts + trk2->start_cts;
+        } else {
+            const AVPacket *pkt2 = ff_interleaved_peek(s, i);
+            int64_t offset;
+            if (!pkt2 || pkt2->pts == AV_NOPTS_VALUE)
+                continue;
+            ff_get_muxer_ts_offset(s, i, &offset);
+            pts = pkt2->pts + offset;
+        }
+        pts = mov_start_time(st2, pts);
+        pts = av_rescale_q(pts, st2->time_base, st->time_base);
+        ref = FFMIN(ref, pts);
+    }
+
+    return start - ref;
+}
+
 static int mov_write_single_packet(AVFormatContext *s, AVPacket *pkt)
 {
     MOVMuxContext *mov = s->priv_data;
@@ -7711,7 +7832,7 @@ static int mov_write_single_packet(AVFormatContext *s, AVPacket *pkt)
     int64_t frag_duration = 0;
     int size = pkt->size;
 
-    int ret = check_pkt(s, trk, pkt);
+    int ret = check_pkt(s, trk, pkt, 0);
     if (ret < 0)
         return ret;
 
@@ -7722,8 +7843,24 @@ static int mov_write_single_packet(AVFormatContext *s, AVPacket *pkt)
     }
 
     if (mov->flags & FF_MOV_FLAG_NEGATIVE_CTS_OFFSETS) {
-        if (trk->dts_shift == AV_NOPTS_VALUE)
+        if (trk->dts_shift == AV_NOPTS_VALUE) {
             trk->dts_shift = pkt->pts - pkt->dts;
+            /* Not using edit lists: if this track starts later than the
+             * earliest one, keep the difference in its composition offsets,
+             * which delays its presentation without altering any sample
+             * duration. Leave room in the 32-bit offsets for reordering.
+             * Not when fragmenting: the delay could not be dropped from
+             * fragments already written if the offsets overflow. */
+            if (!mov->use_editlist && !(mov->flags & FF_MOV_FLAG_FRAGMENT) &&
+                s->avoid_negative_ts != AVFMT_AVOID_NEG_TS_MAKE_ZERO &&
+                trk->par->codec_type == AVMEDIA_TYPE_VIDEO) {
+                int64_t delay = mov_get_start_delay(s, pkt);
+                if (delay < INT32_MAX / 2) {
+                    trk->start_delay = delay;
+                    trk->dts_shift  -= delay;
+                }
+            }
+        }
         pkt->dts += trk->dts_shift;
     }
 
