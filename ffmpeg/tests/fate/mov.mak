@@ -185,6 +185,10 @@ fate-mov-aac-he-core-rate-mid-packet: CMD = run ffprobe$(PROGSSUF)$(EXESUF) -rea
 FATE_MOV-$(call FRAMECRC, MOV, AAC, PCM_S16LE_ENCODER ARESAMPLE_FILTER VOLUME_FILTER) += fate-mov-aac-2048-priming-seek
 fate-mov-aac-2048-priming-seek: CMD = framecrc -ss 2.3 -t 0.15 -i $(TARGET_SAMPLES)/mov/aac-2048-priming.mov -af volume=0,aresample -c:a pcm_s16le
 
+# Dual-rate low-delay SBR ELD: check the output rate independently of edit-list trimming.
+FATE_MOV-$(call DEMMUX, MOV, FRAMECRC, PIPE_PROTOCOL) += fate-mov-aac-eld-dual-rate
+fate-mov-aac-eld-dual-rate: CMD = framecrc -nofind_stream_info -ignore_editlist 1 -i $(TARGET_SAMPLES)/mov/aac-eld-dual-rate.mp4 -c:a copy
+
 fate-mov-zombie: CMD = run ffprobe$(PROGSSUF)$(EXESUF) -show_streams -show_packets -show_frames -bitexact -print_format compact $(TARGET_SAMPLES)/mov/white_zombie_scrunch-part.mov
 
 fate-mov-init-nonkeyframe: CMD = run ffprobe$(PROGSSUF)$(EXESUF) -show_packets -print_format compact -select_streams v $(TARGET_SAMPLES)/mov/mp4-init-nonkeyframe.mp4
@@ -276,6 +280,18 @@ $(eval $(call FATE_MOV_CENC_TEST,h264,H264,h264,H264,h264-conformance/CAMACI3_So
 $(eval $(call FATE_MOV_CENC_TEST,h264_iso,H264,matroska,MATROSKA,h264/dts_5frames.mkv))
 $(eval $(call FATE_MOV_CENC_TEST,hevc,HEVC,hevc,HEVC,hevc-conformance/ipcm_A_NEC_3.bit))
 $(eval $(call FATE_MOV_CENC_TEST,hevc_iso,HEVC,mov,MOV,hevc/extradata-reload-multi-stsd.mov))
+
+# Two encrypted tracks sharing each moof.
+FATE_MOV_FFMPEG_SAMPLES-$(call REMUX, MP4 MOV, AAC_DECODER) += fate-mov-aac-cenc-frag-2tracks
+fate-mov-aac-cenc-frag-2tracks: CMD = transcode mp4 $(TARGET_SAMPLES)/aac/al04_44.mp4 mp4 \
+  "-map 0:a -map 0:a -t 0.2 -c:a copy -movflags +empty_moov -frag_duration 50000 -encryption_scheme cenc-aes-ctr -encryption_key 00112233445566778899aabbccddeeff -encryption_kid 00112233445566778899aabbccddeeff" \
+  "-map 0:a -c copy" "" "" "-decryption_key 00112233445566778899aabbccddeeff"
+
+# The empty moov written by delay_moov must not count the buffered audio.
+FATE_MOV_FFMPEG_FFPROBE-$(call ALLYES, PCM_S16LE_DECODER PCM_S16LE_ENCODER WAV_DEMUXER MOV_MUXER MOV_DEMUXER FRAMECRC_MUXER FILE_PROTOCOL PIPE_PROTOCOL) += fate-mov-pcm-delay-moov
+fate-mov-pcm-delay-moov: tests/data/asynth-44100-2.wav
+fate-mov-pcm-delay-moov: CMD = transcode wav $(TARGET_PATH)/tests/data/asynth-44100-2.wav mov \
+  "-t 0.05 -c:a pcm_s16le -movflags +delay_moov -frag_duration 25000" "-c:a copy" "-show_entries stream=duration_ts,nb_frames"
 
 # avif muxing - still image with 1 item.
 FATE_MOV_FFMPEG_SAMPLES-$(call REMUX, AVIF OBU, AV1_DECODER AV1_PARSER) \
@@ -520,6 +536,29 @@ fate-mov-yuv2-color-colr: CMD = run_with_temp \
     "$(call MOV_YUV2_GEN,$(MOV_YUV2_COLR_SRC))" "$(MOV_YUV2_PROBE)" mov
 fate-mov-yuv2-color-range: CMD = run_with_temp \
     "$(call MOV_YUV2_GEN,$(MOV_YUV2_SRC))" "$(MOV_YUV2_PROBE) -color_range tv" mov
+
+# The numeric QuickTime keys keep their type through a remux, a non-number
+# stays a string.
+FATE_MOV_FFMPEG_FFPROBE-$(call ALLYES, COLOR_FILTER MPEG4_ENCODER MOV_MUXER \
+                                      MOV_DEMUXER FRAMECRC_MUXER         \
+                                      FILE_PROTOCOL PIPE_PROTOCOL)       \
+                                      += fate-mov-mdta-numeric
+tests/data/mov-mdta-numeric.mov: TAG = GEN
+tests/data/mov-mdta-numeric.mov: ffmpeg$(PROGSSUF)$(EXESUF) | tests/data
+	$(M)$(TARGET_EXEC) $(TARGET_PATH)/$< -nostdin -v error \
+	    -filter_complex color=c=black:s=2x2:r=1 -frames:v 1 -c:v mpeg4 -threads 1 \
+	    -flags +bitexact -fflags +bitexact -movflags use_metadata_tags \
+	    -metadata com.apple.quicktime.full-frame-rate-playback-intent=1 \
+	    -metadata com.apple.quicktime.live-photo.auto=1 \
+	    -metadata com.apple.quicktime.live-photo.vitality-score=0.918638 \
+	    -metadata com.apple.quicktime.live-photo.vitality-scoring-version=4294967296 \
+	    -metadata com.apple.quicktime.location.role=north \
+	    -metadata com.apple.quicktime.rating.user=-0 \
+	    -f mov $(TARGET_PATH)/$@ -y
+
+fate-mov-mdta-numeric: tests/data/mov-mdta-numeric.mov
+fate-mov-mdta-numeric: CMD = stream_remux mov tests/data/mov-mdta-numeric.mov "" \
+    mov "-map 0 -movflags use_metadata_tags" "" "-c copy" "-show_entries format_tags"
 
 FATE_MOV_FFMPEG_FFPROBE-$(call ALLYES, COLOR_FILTER SETPTS_FILTER MPEG4_ENCODER \
                                       MOV_MUXER MOV_DEMUXER FILE_PROTOCOL)      \
