@@ -50,6 +50,10 @@ FATE_MXF_PROBE-$(call DEMDEC, MXF, PRORES PCM_S24LE) += fate-mxf-probe-applehdr1
 fate-mxf-probe-applehdr10: SRC = $(TARGET_SAMPLES)/mxf/Meridian-Apple_ProResProxy-HDR10.mxf
 fate-mxf-probe-applehdr10: CMD = run $(PROBE_FORMAT_STREAMS_COMMAND) -i "$(SRC)"
 
+# JPEG 2000 sub descriptor Rsiz, Xsiz and Ysiz from a codestream with a nonzero image origin
+FATE_MXF-$(call DEMMUX, IMAGE_J2K_PIPE, MXF, JPEG2000_DECODER) += fate-mxf-jpeg2000-siz
+fate-mxf-jpeg2000-siz: CMD = md5 -y -i $(TARGET_SAMPLES)/jpeg2000/itu-iso/codestreams_profile1/p1_01.j2k -c:v copy -fflags +bitexact -f mxf
+
 # Tests remuxing ProRes as well as writing mastering display metadata.
 FATE_MXF_FFMPEG_FFPROBE-$(call REMUX, MXF, PRORES_DECODER) += fate-mxf-remux-applehdr10
 fate-mxf-remux-applehdr10: CMD = transcode mxf $(TARGET_SAMPLES)/mxf/Meridian-Apple_ProResProxy-HDR10.mxf mxf "-map 0 -c copy" "-c copy -t 0.3" "-show_entries format_tags:stream_side_data_list:stream=index,codec_name,codec_tag:stream_tags"
@@ -88,14 +92,11 @@ FATE_SAMPLES_FFMPEG += $(FATE_MXF-yes)
 FATE_SAMPLES_FFMPEG_FFPROBE += $(FATE_MXF_FFMPEG_FFPROBE-yes)
 FATE_SAMPLES_FFPROBE += $(FATE_MXF_PROBE-yes)
 
-fate-mxf: $(FATE_MXF-yes) $(FATE_MXF_PROBE-yes) $(FATE_MXF_FFMPEG_FFPROBE-yes)
-
 # Cross the 64 KiB IndexEntryArray limit, so that the index table is split.
 FATE_MXF_INDEX-$(call ENCMUX, MPEG2VIDEO, MXF_OPATOM, COLOR_FILTER FILE_PROTOCOL) += fate-mxf-opatom-index-segments
 fate-mxf-opatom-index-segments: CMD = md5 -filter_complex color=s=64x64:r=25 -frames:v 6000 -c:v mpeg2video -g 12 -bf 2 -threads 1 -dct fastint -flags +bitexact -fflags +bitexact -f mxf_opatom
 
 FATE_FFMPEG += $(FATE_MXF_INDEX-yes)
-fate-mxf: $(FATE_MXF_INDEX-yes)
 
 # DV CBE with PCM alternating 1602 and 1601 samples at 30000/1001 and
 # 136, 492 and 2 byte ANC packets keeps a constant edit unit byte count.
@@ -118,4 +119,7 @@ FATE_MXF_INDEX_FFPROBE-$(call REMUX, MXF, LAVFI_INDEV TESTSRC2_FILTER ANULLSRC_F
 fate-mxf-vbe-fill-audio: CMD = transcode lavfi "testsrc2=s=128x96:r=30000/1001[out0];anullsrc=r=48000:cl=27C,aformat=sample_fmts=u8[out1];anullsrc=r=48000:cl=mono,aformat=sample_fmts=u8[out2]" mxf "-map 0 -c:v mpeg2video -g 0 -q:v 29 -af aresample=osf=s16 -c:a pcm_s16le -t 0.1001" "-map 0 -c copy" "-show_entries packet=stream_index,pos,size -print_format compact"
 
 FATE_FFMPEG_FFPROBE += $(FATE_MXF_INDEX_FFPROBE-yes)
-fate-mxf: $(FATE_MXF_INDEX_FFPROBE-yes)
+
+fate-mxf: $(if $(CONFIG_FFMPEG),$(FATE_MXF-yes) $(FATE_MXF_INDEX-yes))
+fate-mxf: $(if $(CONFIG_FFPROBE),$(FATE_MXF_PROBE-yes))
+fate-mxf: $(if $(call ALLYES, FFMPEG FFPROBE),$(FATE_MXF_FFMPEG_FFPROBE-yes) $(FATE_MXF_INDEX_FFPROBE-yes))
