@@ -48,6 +48,23 @@ extern const AVCodecTag ff_codec_movdata_tags[];
 int ff_mov_iso639_to_lang(const char lang[4], int mp4);
 int ff_mov_lang_to_iso639(unsigned code, char to[4]);
 
+#define FF_AMR_CONFIG_ATOM_SIZE 17
+
+int ff_amr_write_config_atom(AVIOContext *pb,
+                             enum AVCodecID codec_id,
+                             int quicktime);
+
+/**
+ * Check that an AMR packet holds one RFC 4867 frame per channel.
+ * The MOV muxer historically allows a short final AMR-NB frame.
+ *
+ * @return 0 on success, AVERROR_INVALIDDATA for a missing or invalid frame,
+ *         or AVERROR_PATCHWELCOME if more data follows the frame block.
+ */
+int ff_amr_check_frame_block(enum AVCodecID codec_id,
+                             const uint8_t *buf, int size,
+                             int channels);
+
 struct AVAESCTR;
 
 /* the QuickTime file format is quite convoluted...
@@ -291,7 +308,14 @@ typedef struct MOVStreamContext {
 
     struct IAMFDemuxContext *iamf;
     int iamf_stream_offset;
+    struct HEIFItemExtent *heif_extents;
+    int nb_heif_extents;
 } MOVStreamContext;
+
+typedef struct HEIFItemExtent {
+    int64_t offset;
+    int64_t length;
+} HEIFItemExtent;
 
 typedef struct HEIFItemRef {
     uint32_t type;
@@ -308,8 +332,8 @@ typedef struct HEIFItem {
     int flags;
     char *name;
     int item_id;
-    int64_t extent_length;
-    int64_t extent_offset;
+    HEIFItemExtent *extents;
+    int nb_extents;
     int width;
     int height;
     int rotation;
@@ -319,6 +343,7 @@ typedef struct HEIFItem {
     int is_gainmap;
     int is_alpha;
     int is_idat_relative;
+    int has_implied_length;  // last extent runs to the end of its container (ISO/IEC 14496-12 8.11.3.1)
     AVExifMetadata ifd;
     uint8_t *icc_profile;
     size_t icc_profile_size;
@@ -400,6 +425,7 @@ typedef struct MOVContext {
     HEIFGroup *heif_group;
     int nb_heif_group;
     int64_t idat_offset;
+    int64_t idat_size;
     int interleaved_read;
     AVDictionary* decryption_keys;
     unsigned heif_icc_profile_items;

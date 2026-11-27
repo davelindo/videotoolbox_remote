@@ -19,8 +19,8 @@ fate-ffmpeg-lavfi: CMD = framecrc -lavfi color=d=1:r=5 -fflags +bitexact
 FATE_FFMPEG-$(call FILTERFRAMECRC, TESTSRC2 FORMAT SETPARAMS SCALE, LAVFI_INDEV WRAPPED_AVFRAME_DECODER MPEG2VIDEO_ENCODER) += fate-ffmpeg-chroma-location
 fate-ffmpeg-chroma-location: CMD = framecrc -auto_conversion_filters -f lavfi -i testsrc2=s=64x64:r=25:d=1,format=yuv420p,setparams=chroma_location=topleft -sws_flags +accurate_rnd+bitexact -flags +bitexact -idct simple -dct fastint -threads 1 -c:v mpeg2video -qscale:v 2 -frames:v 1
 
-FATE_FFMPEG-$(call FILTERFRAMECRC, TESTSRC2 FORMAT, LAVFI_INDEV WRAPPED_AVFRAME_DECODER SPEEDHQ_ENCODER) += fate-ffmpeg-speedhq-444-psnr
-fate-ffmpeg-speedhq-444-psnr: CMD = framecrc -f lavfi -i testsrc2=s=128x64:r=25:d=1,format=yuv444p -flags +bitexact+psnr -idct simple -dct fastint -threads 1 -c:v speedhq -qscale:v 3 -frames:v 1
+FATE_FFMPEG-$(call ALLYES, TESTSRC2_FILTER FORMAT_FILTER LAVFI_INDEV WRAPPED_AVFRAME_DECODER SPEEDHQ_ENCODER FRAMECRC_MUXER PIPE_PROTOCOL) += fate-ffmpeg-speedhq-444-psnr
+fate-ffmpeg-speedhq-444-psnr: CMD = framecrc -cpuflags 0 -f lavfi -i testsrc2=s=128x64:r=25:d=1,format=yuv444p -flags +bitexact+psnr -idct simple -dct fastint -threads 1 -c:v speedhq -qscale:v 3 -frames:v 1
 
 # Explicit -color_primaries and -color_trc override the frame defaults in the encoder context.
 FATE_FFMPEG_FFPROBE-$(call REMUX, MPEG2VIDEO MPEGVIDEO, \
@@ -573,3 +573,18 @@ fate-ffmpeg-mjpeg-444-qns: CMD = framecrc -cpuflags 0 -f lavfi -i "testsrc2=s=32
 # alpha merging
 fate-ffmpeg-heif-merge-alpha: CMD = framecrc -auto_conversion_filters -i $(TARGET_SAMPLES)/heif/alpha.heic
 FATE_SAMPLES_FFMPEG-$(call FRAMECRC, MOV, HEVC, HEVC_PARSER SCALE_FILTER) += fate-ffmpeg-heif-merge-alpha
+
+# Quality Stats side data includes the encoder's reconstruction error.
+# Use scalar reconstruction to keep rounding consistent across architectures.
+FATE_FFMPEG-$(call ALLYES, TESTSRC2_FILTER FORMAT_FILTER NOISE_FILTER LAVFI_INDEV WRAPPED_AVFRAME_DECODER MJPEG_ENCODER FRAMECRC_MUXER PIPE_PROTOCOL) += fate-ffmpeg-mjpeg-444-psnr
+fate-ffmpeg-mjpeg-444-psnr: CMD = framecrc -cpuflags 0 -f lavfi -i "testsrc2=s=128x120,format=yuvj444p,noise=alls=100:allf=t+u" -flags +bitexact+psnr -dct fastint -idct simple -threads 1 -c:v mjpeg -huffman default -q:v 3 -frames:v 1
+
+# Cover restart intervals and partial MCU rows/columns with two slices.
+FATE_FFMPEG-$(call ALLYES, TESTSRC2_FILTER FORMAT_FILTER NOISE_FILTER LAVFI_INDEV WRAPPED_AVFRAME_DECODER MJPEG_ENCODER FRAMECRC_MUXER PIPE_PROTOCOL) += fate-ffmpeg-mjpeg-422-slice fate-ffmpeg-mjpeg-444-slice
+fate-ffmpeg-mjpeg-422-slice: PIXFMT = yuvj422p
+fate-ffmpeg-mjpeg-444-slice: PIXFMT = yuvj444p
+fate-ffmpeg-mjpeg-422-slice fate-ffmpeg-mjpeg-444-slice: CMD = framecrc -cpuflags 0 -f lavfi -i "testsrc2=s=34x50,format=$(PIXFMT),noise=alls=100:allf=t+u" -flags +bitexact -dct fastint -idct simple -threads 2 -thread_type slice -slices 2 -c:v mjpeg -huffman default -q:v 3 -frames:v 2
+
+# Padding in an empty bottom pass must not affect denoising of the next frame.
+FATE_FFMPEG-$(call ALLYES, TESTSRC2_FILTER FORMAT_FILTER NOISE_FILTER LAVFI_INDEV WRAPPED_AVFRAME_DECODER MJPEG_ENCODER FRAMECRC_MUXER PIPE_PROTOCOL) += fate-ffmpeg-mjpeg-empty-pass
+fate-ffmpeg-mjpeg-empty-pass: CMD = framecrc -cpuflags 0 -f lavfi -i "testsrc2=s=352x120,format=yuvj422p,noise=alls=100:allf=t+u" -flags +bitexact -dct fastint -idct simple -threads 1 -c:v mjpeg -huffman default -q:v 6 -mbd rd -noise_reduction 2000 -frames:v 2

@@ -315,11 +315,21 @@ FATE_MOV_FFMPEG_SAMPLES-$(call FRAMECRC, MOV, AV1, AV1_PARSER) \
                            += fate-mov-avif-demux-still-image-multiple-items
 fate-mov-avif-demux-still-image-multiple-items: CMD = framecrc -c:v av1 -i $(TARGET_SAMPLES)/avif/still_image_exif.avif -c:v copy
 
+# avif demuxing - still image with a single item described by multiple extents.
+FATE_MOV_FFMPEG_SAMPLES-$(call FRAMECRC, MOV, AV1, AV1_PARSER) \
+                           += fate-mov-avif-demux-still-image-multiple-extents
+fate-mov-avif-demux-still-image-multiple-extents: CMD = framecrc -c:v av1 -i $(TARGET_SAMPLES)/avif/still_image_multiple_extents.avif -c:v copy
+
 # avif demuxing - still image with multiple items forming two grids (color + alpha), which themselves are handled as an Alpha derived image
 FATE_MOV_FFMPEG_FFPROBE_SAMPLES-$(call FRAMECRC, MOV, AV1, AV1_PARSER) \
                            += fate-mov-avif-demux-still-image-alpha-grid
 fate-mov-avif-demux-still-image-alpha-grid: CMD = stream_demux mov $(TARGET_SAMPLES)/avif/gain_map_alpha_grid.avif "-c:v av1" "-c:v copy -map 0:g:0 -map 0:g:1" \
   "-of compact -show_entries stream_group=index,id,nb_streams,type:stream_group_components:stream_group_disposition:stream_group_tags:stream_group_side_data:stream_group_stream=index,id:stream_group_stream_disposition:stream_group_stream_side_data_list"
+
+# avif item with extents across two mdat boxes, read through the root-parsing path.
+FATE_MOV_FFMPEG_SAMPLES-$(call FRAMECRC, MOV, AV1, AV1_PARSER) \
+                           += fate-mov-avif-demux-item-two-mdats
+fate-mov-avif-demux-item-two-mdats: CMD = framecrc -fflags +ignidx -c:v av1 -i $(TARGET_SAMPLES)/mov/mixed_two_mdats.mp4 -map 0:1 -c:v copy
 
 # heic demuxing - still image with 1 item.
 FATE_MOV_FFMPEG_SAMPLES-$(call FRAMECRC, MOV, HEVC, HEVC_PARSER) \
@@ -444,6 +454,21 @@ fate-mov-mp4-mpegh-5_1_4: CMD = stream_demux mp4 $(TARGET_SAMPLES)/mov/mpegh_lay
 
 FATE_MOV_FFMPEG_FFPROBE_SAMPLES-$(call REMUX, MP4 MOV) += fate-mov-mp4-mpegh-5_1_4-copy
 fate-mov-mp4-mpegh-5_1_4-copy: CMD = stream_remux mp4 $(TARGET_SAMPLES)/mov/mpegh_layout16.mp4 "" mp4 "" "" "-c:a copy" "-show_entries stream=profile,level,codec_tag_string"
+
+# The 1080-line DV bitstream does not signal progressive frames: keep dvh2.
+FATE_MOV_FFMPEG_FFPROBE_SAMPLES-$(call ALLYES, FFMPEG FFPROBE MOV_MUXER MOV_DEMUXER FILE_PROTOCOL) += fate-mov-dv-tag-copy-1080p25
+fate-mov-dv-tag-copy-1080p25: CMD = run_with_temp \
+    "$(FFMPEG) -nostdin -v error -i $(TARGET_SAMPLES)/dv/dvcprohd_1080p25.mov -map 0:v -write_tmcd 0 -c copy -f mov -y" \
+    "ffprobe$(PROGSSUF)$(EXESUF) -v error -bitexact -show_data_hash CRC32 \
+    -show_entries packet=size,data_hash:stream=codec_tag_string -of compact=p=0" mov
+
+# The first packet must correct the provisional 60 Hz tag before the moov.
+FATE_MOV_FFMPEG_FFPROBE_SAMPLES-$(call ALLYES, FFMPEG FFPROBE MOV_MUXER MOV_DEMUXER FILE_PROTOCOL) += fate-mov-dv-tag-delay-720p50
+fate-mov-dv-tag-delay-720p50: CMD = run_with_temp \
+    "$(FFMPEG) -nostdin -v error -nofind_stream_info -i $(TARGET_SAMPLES)/dv/dvcprohd_720p50.mov \
+    -map 0:v -write_tmcd 0 -c copy -tag:v dvhp -movflags +delay_moov -f mov -y" \
+    "ffprobe$(PROGSSUF)$(EXESUF) -v error -bitexact -show_data_hash CRC32 \
+    -show_entries packet=size,data_hash:stream=codec_tag_string -of compact=p=0" mov
 
 FATE_SAMPLES_FFMPEG_FFPROBE += $(FATE_MOV_FFMPEG_FFPROBE_SAMPLES-yes)
 FATE_SAMPLES_FFMPEG += $(FATE_MOV_FFMPEG_SAMPLES-yes)
